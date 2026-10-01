@@ -77,3 +77,11 @@ Task 5: ruling(归属): `core/database.py:106,108` 两处无主 print 划归 **T
 Task 5: complete (commits `6a64e1e`..`0f2e2e0`，impl `d0f24df` + fix round 1/5 `0f2e2e0`；复核：All findings addressed, no new breakage，复核者并独立验证子守卫变异也红)
 Task 5: minor (deferred): 路由测试只断 deleted 未断 calls==1（已被守卫结构蕴含）
 Task 5: minor (deferred): `delete_by_ids` 无失败信号（delete 返回 None 不校验命中数）——**派 T7/T8 回滚编排时携带**：别把它当成"已验证删除"
+
+Task 6: complete (commits `e884cef`..`dec7c10`，review: Approved / Spec ✅ 零 Critical/Important；Step 7 探针偏离被评审加码确认——brief 探针依赖尚未存在的 POST /api/documents，且会破坏 migration 基线)
+Task 6: minor (deferred): rag 历史窗口 [-5:]/[-3:] 与消息顺序无断言（ok_llm 丢输入）——**派 T8 时携带**：端点依赖该顺序
+Task 6: minor (deferred): get_filenames_by_ids 无调用次数锁（N+1 靠自觉）
+Task 6: minor (deferred): 两个新 DB 方法真实 SQL 零自动覆盖，delete_chat_history 至今无调用方——**T9 建议补 live 测试或提交探针脚本**
+Task 6: minor (deferred, plan-mandated): _build_references 用 d.metadata["document_id"] 直接取键，坏数据会在成功生成后 KeyError→500 且丢历史
+Task 6: minor (deferred, plan-mandated): snippet 实为 SNIPPET_LIMIT+3（"..." 在切片后追加）——**派 T8/前端时携带**，前端按 83 或自适应省略号处理
+Task 6: minor (deferred): 领域异常把原始 exc 文本透进 detail（泄露内部信息）——归 T9 注入面回归范围，派 T9 时携带
