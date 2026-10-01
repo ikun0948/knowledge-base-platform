@@ -5,7 +5,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.chat import router as chat_router
 from api.documents import router as documents_router
+from api.history import router as history_router
 from config.config import Config
 from core.database import DatabaseManager
 from core.document_processor import DocumentProcessor
@@ -83,6 +85,8 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(documents_router)
+    app.include_router(chat_router)
+    app.include_router(history_router)
 
     return app
 
