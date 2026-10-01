@@ -126,3 +126,13 @@ Task 9: ruling: 8 条 Minor 不进修复轮（均测试加固/既有健壮性）
 Task 10: complete (commit `ded3d73`，docs-only 交付由控制者内联评审代替独立评审轮：README 指路碑全文+开发文档尾注逐行读过；其两条事实修正被控制者独立复核成立——`D:/AI-python/core/chroma_db` 确不存在（真实旧库在 langchain框架/core/chroma_db，正是坑 2 的现场），两份 .env 确连同一 MySQL localhost/mydb）。
 Task 10: 完成标准口径备案（终审必携带）：计划"legacy_streamlit/ 有冻结副本"一项，经预裁定改为"指路碑"形态并在 README 内自证理由（第三份真相违 spec 7.2 精神）；终审应按此口径判定，不是未达标。
 Task 10: 待办继承：坑 6 的"前端侧转义"目前只是承诺（frontend/ 仍是占位），终审判定后端范围即可，前端由第二份计划兑现。
+
+终审（whole-branch, 30 commits 9224c69..5e7db21）：**READY WITH FIXES**。关键翻案与新发现：
+- parked(a) 前提被证伪并翻案：add_documents 写入前就给双集合每个向量盖 metadata["document_id"]（vector_store.py:67-68），chromadb delete(where=...) 可用 → 不需要渐进式 id API，一次 sweep 即可闭环孤儿向量窗口 → 进修复 D2。
+- parked(b) fix-now：零块（图片 PDF/纯空白 txt）此前走 500「已回滚」误信号，且这正是 T4 交给 T7 从未闭环的空块决定 → 422 前置守卫（D1，连 >88 字符文件名撑爆 parent_id String(100) 的隐性悬崖一并收）。
+- parked(c)(d) accept、(e) phase-2（但发现其确定性形态：ChatRequest.document_ids 无界 vs chat_history.document_ids String(500)，勾 ~60 个文档必 500 丢答案——记档，随 e 一起阶段二处理）。
+- 新 Important：**空检索那轮 200 却不写历史**，刷新即蒸发——与 spec 五节"后端是真相"和前端"200 保留/502 移除"的调和逻辑相矛盾。Ruling D4: 落历史（used_chunks 空、与 rag 路径同 document_ids），翻 test_rag_system.py:135 的钉。理由：spec 是终审权威，plan line 1043 的原文只规定 return 未裁定持久性。
+- Gap A/B：中央映射 4 类中 3 类的状态码从未被钉（都被本地拦截）、兜底 500 零测试 → D3 全钉。
+- D5：前端计划 4 处 file:line 锚点漂移 + limit 单位（行≠消息）补一句。
+- 终审确认 ledger 三条结转已被后续任务实际关闭（T3 fakes 签名、T7 顺序钉、T6 live SQL 覆盖）——终审者补的"closed tick"义务归我们：见本行。
+修复 dispatch：单一实施者一次提交 D1-D5，BASE `5e7db21`；完成后 scoped 复核，复核通过即后端阶段收口。
