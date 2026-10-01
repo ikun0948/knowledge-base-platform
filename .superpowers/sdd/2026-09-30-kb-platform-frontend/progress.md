@@ -53,3 +53,4 @@ Task 4: 修正案改挂 (T2 ruling I-1 之 T5 部分作废): T5 brief 通篇**�
 Task 4: minor (deferred, 记档): M-4 FileUploader.vue:10,15 `inputEl` 死代码（brief 逐字规格自带）——终评引用本条认定非实施者责任。
 Task 4: minor (deferred→T7): M-5 构建冒烟前先 `rm -rf frontend/dist`（T4 实施者留下的 dist/ 已被 gitignore，但旧 bundle 哈希会干扰判读）。
 Task 4: 报告表述纠正（评审 M-1/M-2/M-3，代码零牵连）: layout.css 追加实测 前缀 3177 + 分隔空行 + 块 1712 字符（总 4890，报告引文"1711"漂移）；App.vue 解构 10 个返回值（非 11，docLabel 未解构且 brief 块本就如此）；"17 类"计数出自派单摘要非 brief 原文。
+Task 5: 现场记录——首个实施代理执行错误崩溃（902k tokens/12 tool uses，无提交无报告），残件（useChat/MessageList/MessageBubble/ReferenceList/ChatInput/typewriter + layout.css 改动）已挪 task-5-crash-leftovers/，工作树复原 44bf3ba；重派携带：报告增量写盘 + 上下文节俭两条抗崩溃纪律。
