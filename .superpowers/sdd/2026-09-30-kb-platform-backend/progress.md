@@ -73,3 +73,7 @@ Task 5 预检（派 T6 时携带）：T5 implementer 实测 brief "print 全转�
 
 Task 5: review Approved 但 1 条 Important [plan-mandated]：`test_delete_with_empty_lists_touches_nothing` 的 StubCollection 只记 ids 不记调用，删掉 `if parent_ids:` 守卫测试仍绿。Ruling: 修测试不修生产码（守卫本身正确在位）——StubCollection 加 `self.calls` 计数并断言空列表时 0 次调用；这是对 brief 逐字测试块的一处授权偏离，不改生产签名，T7/T8 断言面不受影响 → 修复轮 1/5。
 Task 5: ruling(归属): `core/database.py:106,108` 两处无主 print 划归 **Task 9** 转 module logger（spec 八节"6 处 print"含它们在；不转则 §8 清零验收在 T9/T10 静默失败）。派 T9 时携带。
+
+Task 5: complete (commits `6a64e1e`..`0f2e2e0`，impl `d0f24df` + fix round 1/5 `0f2e2e0`；复核：All findings addressed, no new breakage，复核者并独立验证子守卫变异也红)
+Task 5: minor (deferred): 路由测试只断 deleted 未断 calls==1（已被守卫结构蕴含）
+Task 5: minor (deferred): `delete_by_ids` 无失败信号（delete 返回 None 不校验命中数）——**派 T7/T8 回滚编排时携带**：别把它当成"已验证删除"
