@@ -100,3 +100,12 @@ Task 7: parked (deferred, real): 图片型 PDF（零块非空）以 500 出场�
 Task 7: complete (commits `bb71106`..`cdc0b70`，impl `67cc454` + fix round 1/5 `cdc0b70`；复核：All findings addressed, no new Critical/Important；brief 断言与 fakes 不兼容的 plan bug 修法获独立确认)
 Task 7: minor (deferred): 双补偿同败时 detail 仍说「已回滚」（裁定保持原消息，真相在日志）；候选改法：rollback_ok 旗标或改文案——交最终评审定夺
 Task 7: minor (deferred): 缺"两步同时失败"合并用例（逻辑已被两个分立用例蕴含）
+
+Task 8: review 结论 Approved / Spec ✅，但 1 条 Important [plan-mandated]：`api/chat.py` 两处 `except KnowledgeBaseError` 过宽——StorageError 也在其下，未来聊天链抛 StorageError 会被就地改写成 502，劫持 main.py STATUS_BY_ERROR 的中央映射（该映射注释明示"别在函数里临场决定"）。且变异测试显示整个 try/except 删掉仍绿（中央 handler 同样产出 502+str(exc)），即冗余+未被钉死。
+Task 8: ruling: 采评审给的修法一——两处 except 收窄为 `(RetrievalError, LLMError)`，保留 logger.warning 与"失败不写历史"注释（零 wire 变化，不删日志）；补一个端点级注入测试：FakeRAG 抛 StorageError → 响应 500（经中央映射），钉死"聊天端点不吞其他领域错误"。brief 逐字代码与此冲突，以 spec 六节错误语义单一真相为准 → **进修复轮 1/5**。
+
+Task 8: review 通过项备案：response_model 走 ChatResponse 的裁定 1 成立（wire 形状被 test_reference_serializes_to_exactly_the_spec_fields + live 钉死）；main.py 严格 append-only（+2 import +2 include_router）；migration 基线未污染（TestClient 非上下文管理器）。
+Task 8: minor (deferred): `schemas/chat.py` 的 `mode: str` 未用 `Literal["rag","normal"]`——schema 边界不拒脏值，仅靠两条断言兜底。
+Task 8: minor (deferred, **前端计划必携带**): history 的 user 消息 wire 上是 `references: null`（brief DTO 与测试都钉了 null，spec 6.1 未言明）——前端 MessageList 必须 `msg.references ?? []`，直接 `.length` 会在 user 行抛错。
+Task 8: minor (deferred): 422 detail 双形态（chat=FastAPI 数组、documents=字符串）——归 T9/T10 统一裁定，非本任务引入。
+Task 8: minor (deferred): "502 失败不写历史"靠构造保证（端点无 get_db、rag_system 在 save 前 raise）+ live 证据，无自动测试钉——T9 注入面回归可顺带在 rag_system 层补一条。
