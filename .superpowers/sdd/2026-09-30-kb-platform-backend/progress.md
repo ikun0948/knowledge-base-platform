@@ -50,3 +50,5 @@ Ruling: 工程整体迁移到独立目录 `D:\知识库平台-前后端分离`�
 Task 2: complete (原仓库 commits `d72a054`..`e80f758`，含 fix round 1；迁移后于新位置复跑 pytest 8/8 复验)
 
 Ruling (2026-10-01 修订): 新会话 Agent 工具虽有 `model` 参数，但本机无法枚举合法模型档位，盲传 ID 有派单失败风险 — 继续全部子代理继承会话模型 — 代价：机械转写型任务无法降档省钱。
+
+Task 3 implementer 预检（派 T9 时必须携带）：计划约 1710 行让 Task 9 "Create" 只含 `live` marker 的 pytest.ini，会丢掉现有 `migration` marker — 裁定：T9 改为**合并**（保留 migration + live 两个 marker），不得整文件重建。
