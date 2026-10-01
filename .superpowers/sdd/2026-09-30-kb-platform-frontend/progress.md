@@ -42,3 +42,14 @@ Task 3: minor (归因纠正，评审 M-3): button 的 inline-flex→flex 是 CSS
 Task 3: minor (deferred→**T7 派单携带**): M-4 报告用「工作树 vs HEAD」空 diff 证明保护文件未动是弱证据，T7 一律用范围 diff（BASE..HEAD）；M-7 顺手补 `http://127.0.0.1:5173` 观测一条。
 Task 3: minor (deferred→**T5/T6 派单携带**): M-6 `useSession()` 每次调用返回**独立** ref，无共享状态——子组件绝不再调一次 useSession()，必须继续由 App.vue 传入 sessionId（resetSession 同理只此一家）。
 Task 3: 过程知识 (deferred→**T7 派单携带**): headless/小窗默认 innerWidth 754px 已落入 max-width:768 断点，宽屏四项会被正确 CSS 判为失败（T3 首轮即误判）——宽屏项必须显式视口 ≥769（本次 1280×900），报告保留 viewport 原始值。
+
+Task 4: complete (commits `f4d04d6`..`73f728b`，review: Approved / Spec 零偏离——5 文件 HEAD blob 与 brief 围栏块逐字节全等、layout.css 纯末尾追加(+46/−0)、App.vue 改动面严格等于 brief 指定、13 保护文件 blob 哈希全同、19 类全落位全引用、docLabel 全仓唯一出处；Step 8 七项 5✅2⚠️，两条 ⚠️ 均为 brief 预期 vs 真实环境冲突而非实现问题；评审者给出代码级铁证并做了跨轨时间线核算)
+Task 4: 基线更新: documents 4 行（#1 legacy、#69 comp.txt、#71 rag.txt、#72 third.txt，autoincr 吃掉 70/73）、Chroma parent 5 / child 10。此为 **T7 手测基线**，后续任务上传物继续保留。
+Task 4: ruling (评审 I-P1, T7 判据 2 与基线唯一键冲突): T7「依次上传 comp.txt、rag.txt 两条都 ✅」在现基线下必 500——判据 2 改写为上传**新文件名**（如 comp2.txt/rag2.txt，内容同 brief）；判据 5（自然撞 500 显示 detail 原文）改由「重传同名 comp.txt」提供场景。T7 派单带此改后判据。
+Task 4: ruling (评审 I-P2, 断后端中文文案不可达——机制由评审者钉死): vite 8.3.2 代理上游连不上时 **dev server 自己发 502 空体**（node_modules/vite .../node.js:19740 `proxy.on("error") → writeHead(502)`），于是 xhr.onload/fetch 都拿到响应，`detailFromText("",502)`→`HTTP 502`；`xhr.onerror` 与 client.js 的中文 catch 分支在「代理活、后端死」拓扑**永不触发**。裁定：文案预期改写为「断后端 → dev 拓扑下 `HTTP 502` + 队列红底失败行/错误条；中文文案仅在直连 :8000（不经代理）时可达」——**适用于 T5 验证第 7 项与 T7 判据**，随派单携带；api/ 与 vite.config 维持冻结，不得为凑文案改码。
+Task 4: ruling (顾虑②, 同名重传 500): 后端事实核实为真（document_processor.py:72 parent_id=f"{filename}_parent_{i}" + database.py:34 unique，键不含 document_id → 同名二次上传必 1062 → 补偿链回滚干净 → StorageError→500）。裁定：**后端已知限制，前端按现状显示 500 detail 原文即正确行为**，T4 不该有作为；前端侧防护归阶段二议题（ledger 记档，T7 判据 5 覆盖展示面）。
+Task 4: ruling (顾虑③, 串行证据): 评审者跨轨核算通过（DOM 至多一行上传中 + POST/响应严格串行 + 每个 201 后紧跟 GET refresh；313ms 服务耗时与 125ms 采样窗吻合）——串行判据 PASS，"三行变 ok"未达成为②环境原因。
+Task 4: 修正案改挂 (T2 ruling I-1 之 T5 部分作废): T5 brief 通篇**不使用 signal/AbortError**（停止生成按钮不存在，pending 只覆盖网络往返）——AbortError 一行修正案**不随 T5 落地**，client.js 在本分支保持全冻结；挂点改为「第一个 signal 使用者（SSE 阶段二）」，若终评前仍无 signal 使用则记阶段二项。— why: YAGNI，不为不可达路径开冻结面偏离 — cost if wrong: 无（该路径本分支不可触发）。
+Task 4: minor (deferred, 记档): M-4 FileUploader.vue:10,15 `inputEl` 死代码（brief 逐字规格自带）——终评引用本条认定非实施者责任。
+Task 4: minor (deferred→T7): M-5 构建冒烟前先 `rm -rf frontend/dist`（T4 实施者留下的 dist/ 已被 gitignore，但旧 bundle 哈希会干扰判读）。
+Task 4: 报告表述纠正（评审 M-1/M-2/M-3，代码零牵连）: layout.css 追加实测 前缀 3177 + 分隔空行 + 块 1712 字符（总 4890，报告引文"1711"漂移）；App.vue 解构 10 个返回值（非 11，docLabel 未解构且 brief 块本就如此）；"17 类"计数出自派单摘要非 brief 原文。
