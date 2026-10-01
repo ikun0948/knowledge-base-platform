@@ -186,6 +186,17 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def get_filenames_by_ids(self, doc_ids):
+        """一次 IN 查询，供引用片段补 filename（spec 6.3，不做 N+1）。"""
+        if not doc_ids:
+            return {}
+        session = self.get_session()
+        try:
+            rows = session.query(Document.id, Document.filename).filter(Document.id.in_(doc_ids)).all()
+            return {row.id: row.filename for row in rows}
+        finally:
+            session.close()
+
     # 获取历史聊天记录
     def get_chat_history(self, session_id, limit=10):
         # 获取数据库操作游标
@@ -214,6 +225,18 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             raise e
+        finally:
+            session.close()
+
+    def delete_chat_history(self, session_id):
+        session = self.get_session()
+        try:
+            deleted = session.query(ChatHistory).filter(ChatHistory.session_id == session_id).delete()
+            session.commit()
+            return deleted
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
