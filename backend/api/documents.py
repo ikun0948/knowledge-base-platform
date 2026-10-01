@@ -14,6 +14,12 @@ logger = logging.getLogger("kb.api.documents")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
+def _safe_filename(raw: str) -> str:
+    """去掉任何路径成分：客户端可以塞 "a/../../b.txt"，也可以塞反斜杠版本。"""
+    # os.path.basename 只认本平台那个分隔符，反斜杠先归一，Linux 部署面上才不会整串进库
+    return os.path.basename(raw.replace("\\", "/"))
+
+
 @router.post("", status_code=201, response_model=DocumentOut)
 async def upload_document(
     file: UploadFile = File(...),
@@ -28,7 +34,7 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="文件超过 20MB")
 
     # 去掉任何路径成分：客户端可以塞 "a/../../b.txt"
-    filename = os.path.basename(file.filename or "")
+    filename = _safe_filename(file.filename or "")
     try:
         documents = processor.load_document(filename, raw)
     except UnsupportedDocumentType as exc:

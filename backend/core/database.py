@@ -1,8 +1,11 @@
+import logging
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
+
+logger = logging.getLogger("kb.database")
 
 Base = declarative_base()
 
@@ -103,9 +106,9 @@ class DatabaseManager:
             # 创建所有的表
             Base.metadata.create_all(self.engine)
             self.SessionLocal = sessionmaker(bind=self.engine)
-            print("数据库连接成功")
-        except Exception as e:
-            print(f"数据库连接失败: {e}")
+            logger.info("数据库连接成功")
+        except Exception:
+            logger.exception("数据库连接失败")
             raise
 
     def get_session(self):

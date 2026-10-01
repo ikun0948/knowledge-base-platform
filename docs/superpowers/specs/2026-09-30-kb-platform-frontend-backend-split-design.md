@@ -251,9 +251,10 @@ backend/
 ## 十、运行方式与验收
 
 ```bash
-# 后端（沿用现有项目外 venv：D:/AI-python/.venv）
+# 后端（解释器用 PATH 上的 python，实测是 D:\python\python.exe 3.12.3；
+#  D:/AI-python/.venv 是个空的 3.14 venv，用不了）
 cd D:/知识库平台-前后端分离/backend
-D:/AI-python/.venv/Scripts/python.exe -m uvicorn main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 8000
 
 # 前端
 cd D:/知识库平台-前后端分离/frontend
@@ -287,7 +288,7 @@ npm install && npm run dev      # http://localhost:5173
 7. 全链路手测清单 1-6 通过 → 把根目录的 `app.py`、`streamlit页面.py`、`.streamlit/` 以及**原始的** `config/`、`core/` 一起挪进 `legacy_streamlit/`，让它自包含（`streamlit run` 从该目录内启动即可，`sys.path[0]` 就是它自己），副本冻结。第 1～6 步期间这些原文件一直留在根目录不动，所以任何时刻最多只有"原始 + backend 副本"两份，不会出现三份真相。是否最终删除 `legacy_streamlit/` 由用户另行决定。
 8. 阶段二：SSE 端点 + 前端流式读取，并**删除 `utils/typewriter.js`**（不能两套逐字逻辑并存：前端自己逐字、后端又推 token，会让"显示的字数"和"真实的字数"脱节）。
 
-**依赖安装注意**：Python 环境是跨项目共用的 `D:/AI-python/.venv`，装 FastAPI 相关包时只新增（`fastapi`、`uvicorn`、`python-multipart`、`pytest`、`httpx`），**不升级**已有的 langchain / chromadb / sqlalchemy 等，以免破坏同 venv 下的其它脚本；`requirements.txt` 用 `>=` 下界而非钉死上界，并在文件头注明这一约束。
+**依赖安装注意**（Task 9 实测修订）：实测**无需安装任何东西**——`fastapi`、`uvicorn`、`python-multipart`、`pytest`、`httpx` 均已在 `D:\python\python.exe`（3.12.3）这套全局环境里装好，既有的 langchain / chromadb / sqlalchemy 一律不升级；`requirements.txt` 仅作记录，不作为安装入口。
 
 **回退**：阶段一期间原 `app.py` 与 `config/`、`core/` 始终留在原位且未被修改（因为走的是复制），`streamlit run app.py` 全程可用，只需 `CHROMA_PERSIST_DIR` 仍指向旧目录即可对照；第 8 步失败可退回第 7 步末状态，普通接口路径完整保留。
 

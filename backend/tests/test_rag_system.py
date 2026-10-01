@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -154,3 +155,52 @@ def test_chat_llm_failure_raises_not_swallowed():
     with pytest.raises(LLMError):
         rag.chat_with_documents("q", [7], "s1")
     assert db.saved == []
+
+
+# --- 坑 6 注入面：detail 直接进前端提示，不能带内部原文（Task 6 评审结转）---
+
+INTERNAL_TEXT = "OperationalError(2003): 无法连接 127.0.0.1:3306 密码 hunter2 @ D:/secret/chroma.sqlite3"
+LLM_DETAIL = "大模型调用失败，请稍后重试"
+RETRIEVAL_DETAIL = "检索或上下文压缩失败，请稍后重试"
+
+
+def boom_with(message):
+    def _boom(_):
+        raise RuntimeError(message)
+
+    return _boom
+
+
+def assert_detail_is_curated(exc, error_cls, caplog):
+    """响应侧只剩固定文案，原文只在日志里。"""
+    assert isinstance(exc, error_cls)
+    assert INTERNAL_TEXT not in str(exc)
+    assert INTERNAL_TEXT in caplog.text
+
+
+def test_normal_chat_llm_failure_hides_internals_from_detail(caplog):
+    rag = build(StubDb(), StubVectorStore([]), RunnableLambda(boom_with(INTERNAL_TEXT)))
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(LLMError) as exc_info:
+            rag.normal_chat("你好", "s1")
+    assert str(exc_info.value) == LLM_DETAIL
+    assert_detail_is_curated(exc_info.value, LLMError, caplog)
+
+
+def test_chat_retrieval_failure_hides_internals_from_detail(caplog):
+    vs = StubVectorStore(parent_docs=[], retriever_error=RuntimeError(INTERNAL_TEXT))
+    rag = build(StubDb(), vs, ok_llm())
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RetrievalError) as exc_info:
+            rag.chat_with_documents("q", [7], "s1")
+    assert str(exc_info.value) == RETRIEVAL_DETAIL
+    assert_detail_is_curated(exc_info.value, RetrievalError, caplog)
+
+
+def test_chat_llm_failure_hides_internals_from_detail(caplog):
+    rag = build(StubDb(), StubVectorStore(parent_docs=[parent()]), RunnableLambda(boom_with(INTERNAL_TEXT)))
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(LLMError) as exc_info:
+            rag.chat_with_documents("q", [7], "s1")
+    assert str(exc_info.value) == LLM_DETAIL
+    assert_detail_is_curated(exc_info.value, LLMError, caplog)

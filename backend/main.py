@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
     )
 
     for error_cls, status_code in STATUS_BY_ERROR.items():
+        # 领域异常的 message 由 raise site 写成用户可读中文，原始异常文本只进日志（core/rag_system.py）
 
         @app.exception_handler(error_cls)
         async def handler(request: Request, exc: Exception, _status=status_code):

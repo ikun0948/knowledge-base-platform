@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +15,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     references: list[Reference]
-    mode: str
+    # spec 6.1 的两值枚举：脏 mode 在 schema 边界就被拒，不靠端点断言兜
+    mode: Literal["rag", "normal"]
 
 
 class HistoryMessage(BaseModel):

@@ -11,6 +11,10 @@ from schemas.common import SNIPPET_LIMIT, Reference
 
 logger = logging.getLogger("kb.rag")
 
+# detail 会被前端原样弹出来：固定文案，原始异常文本只进日志（spec 八节"不透堆栈给前端"）
+LLM_FAILED = "大模型调用失败，请稍后重试"
+RETRIEVAL_FAILED = "检索或上下文压缩失败，请稍后重试"
+
 
 class RAGSystem:
     def __init__(self, config, db_manager, vector_store):
@@ -51,7 +55,8 @@ class RAGSystem:
         try:
             answer = self.llm.invoke("\n".join(messages) + "\nAssistant:").content
         except Exception as exc:
-            raise LLMError(f"大模型调用失败: {exc}") from exc
+            logger.exception("normal 链 LLM 调用失败")
+            raise LLMError(LLM_FAILED) from exc
 
         self.db_manager.save_chat_history(
             session_id=session_id, user_message=question, assistant_message=answer
@@ -69,7 +74,8 @@ class RAGSystem:
                 return "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。", []
             compressed_docs = self.vector_store.compressor.compress_documents(parent_docs, question)
         except Exception as exc:
-            raise RetrievalError(f"检索或上下文压缩失败: {exc}") from exc
+            logger.exception("检索或上下文压缩失败")
+            raise RetrievalError(RETRIEVAL_FAILED) from exc
 
         context = "\n\n".join(d.page_content for d in compressed_docs)
         logger.debug("最终检索上下文长度: %d", len(context))
@@ -85,7 +91,8 @@ class RAGSystem:
                 {"context": context, "chat_history": history_msgs, "question": question}
             ).content
         except Exception as exc:
-            raise LLMError(f"大模型调用失败: {exc}") from exc
+            logger.exception("rag 链 LLM 调用失败")
+            raise LLMError(LLM_FAILED) from exc
 
         references = self._build_references(compressed_docs)
         self.db_manager.save_chat_history(

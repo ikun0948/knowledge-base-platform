@@ -136,3 +136,22 @@ def test_non_integer_document_ids_is_422():
     client = make_client(FakeRAG())
     res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": ["abc"]})
     assert res.status_code == 422
+
+
+HTML_SNIPPET = "<script>alert(1)</script> & \"quotes\" 'single'"
+
+
+def test_backend_hands_the_snippet_back_as_plain_text_and_escapes_nothing():
+    """坑 6 的后端侧：转义是渲染层职责，后端既不拼 HTML 也不提前转义（spec 七节）。"""
+    ref = Reference(document_id=1, parent_id="p", filename="a.txt", snippet=HTML_SNIPPET)
+    res = make_client(FakeRAG(answer=HTML_SNIPPET, refs=[ref])).post(
+        "/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]}
+    )
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("application/json")
+    body = res.json()
+    assert body["references"][0]["snippet"] == HTML_SNIPPET
+    assert body["answer"] == HTML_SNIPPET
+    # JSON 里的引号会被转义成 \"，原文匹配只用不带引号的那半截
+    assert "<script>alert(1)</script>" in res.text
+    assert "&lt;script&gt;" not in res.text and "&amp;" not in res.text

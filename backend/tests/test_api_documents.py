@@ -1,7 +1,11 @@
+import posixpath
 from datetime import datetime
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+from core.document_processor import DocumentProcessor
 from deps import get_db, get_doc_processor, get_vector_store
 from exceptions import UnsupportedDocumentType
 from fakes import FakeDocProcessor, FakeVectorStore
@@ -16,9 +20,12 @@ class RecordingDB:
         self.rows = []
         self.saved_doc_id = 42
         self.chunks_saved = False
+        # get_document 回显这一行，201 响应里的 filename 才是"库里的值"而不是请求字面量
+        self.saved_filename = "a.txt"
 
     def save_document(self, filename, file_path, content, chunk_count=0):
         self.saved_docs.append((filename, chunk_count))
+        self.saved_filename = filename
         return self.saved_doc_id
 
     def save_chunks(self, doc_id, parent_docs, child_docs, parent_ids, child_ids):
@@ -27,7 +34,7 @@ class RecordingDB:
         self.chunks_saved = True
 
     def get_document(self, doc_id):
-        return type("Doc", (), {"id": doc_id, "filename": "a.txt", "chunk_count": 1,
+        return type("Doc", (), {"id": doc_id, "filename": self.saved_filename, "chunk_count": 1,
                                 "created_at": datetime(2026, 9, 30, 12, 0)})()
 
     def delete_document(self, doc_id):
@@ -181,3 +188,88 @@ def test_list_documents_maps_rows_to_spec_shape():
     assert res.status_code == 200
     assert res.json() == [{"id": 3, "filename": "手册.pdf", "chunk_count": 2,
                            "created_at": "2026-09-30T12:00:00"}]
+
+
+class SpyProcessor(FakeDocProcessor):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def load_document(self, filename, raw_bytes):
+        self.seen.append(("load", filename))
+        return super().load_document(filename, raw_bytes)
+
+    def create_parent_child_chunks(self, documents, filename):
+        self.seen.append(("chunks", filename))
+        return super().create_parent_child_chunks(documents, filename)
+
+
+class RecordingVectorStore(FakeVectorStore):
+    def __init__(self):
+        super().__init__()
+        self.added = []
+
+    def add_documents(self, parent_docs, child_docs, document_id):
+        self.added.append((parent_docs, child_docs))
+        return super().add_documents(parent_docs, child_docs, document_id)
+
+
+# 客户端能自己决定 multipart 里的 filename，浏览器只会给 basename，curl/脚本不会
+MALICIOUS_FILENAMES = [
+    ("a..\\..\\b.txt", "b.txt"),
+    ("a/../b.txt", "b.txt"),
+    ("..\\escape.txt", "escape.txt"),
+    ("C:\\Windows\\System32\\a.txt", "a.txt"),
+    ("/etc/passwd.txt", "passwd.txt"),
+]
+
+
+@pytest.fixture(params=["host", "posix"], ids=lambda p: f"basename={p}")
+def posix_style_basename(request, monkeypatch):
+    """把 api.documents 看到的 os.path 换成 posixpath：Linux 部署面上 basename 不认反斜杠。
+
+    只在 host 平台跑的话，os.path 就是 ntpath，反斜杠那一半清洗永远测不到。
+    """
+    import api.documents as documents_api
+
+    if request.param == "posix":
+        monkeypatch.setattr(documents_api, "os", SimpleNamespace(path=posixpath))
+    return request.param
+
+
+@pytest.mark.parametrize("raw, expected", MALICIOUS_FILENAMES)
+def test_uploaded_filename_reaches_storage_without_path_components(raw, expected, posix_style_basename):
+    db, processor, store = RecordingDB(), SpyProcessor(), RecordingVectorStore()
+    client = make_client(db, processor=processor, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": (raw, "内容".encode("utf-8"), "text/plain")})
+
+    assert res.status_code == 201, res.json()
+    assert db.saved_docs == [(expected, 1)]
+    assert processor.seen == [("load", expected), ("chunks", expected)]
+    assert res.json()["filename"] == expected
+    parent_docs, child_docs = store.added[0]
+    ids = [d.metadata["parent_id"] for d in parent_docs + child_docs]
+    assert ids == [f"{expected}_parent_0"] * 2
+    assert all(("/" not in i and "\\" not in i) for i in ids)
+
+
+class ProcessorCfg:
+    CHUNK_SIZE = 30
+    CHUNK_OVERLAP = 5
+
+
+@pytest.mark.parametrize("raw", ["..", "a/..", "..\\..", "./"])
+def test_pure_traversal_name_is_refused_before_anything_is_written(raw):
+    """清洗后什么都不剩的名字只能是 415，不能变成一条 filename=".." 的库记录。
+
+    这里用真 DocumentProcessor：假处理器接受任何文件名，测不出这条拒绝路径。
+    """
+    db, store = RecordingDB(), RecordingVectorStore()
+    client = make_client(db, processor=DocumentProcessor(ProcessorCfg()), vector_store=store)
+
+    res = client.post("/api/documents", files={"file": (raw, "内容".encode("utf-8"), "text/plain")})
+
+    assert res.status_code == 415, res.text
+    assert db.saved_docs == []
+    assert store.added == []
