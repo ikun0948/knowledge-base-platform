@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 
 import ChatHeader from './components/ChatHeader.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -16,9 +16,10 @@ const {
   documents, selectedIds, queue, listError, docCount,
   refresh, toggleSelect, enqueue, retry, dismiss,
 } = useDocuments()
-const { messages, pending, error, restore, send } = useChat()
+const { messages, pending, error, restore, send, clear } = useChat()
 
 const question = ref('')
+const clearing = ref(false)
 // 宽屏侧栏常驻，panelOpen 只在 ≤768px 起作用
 const panelOpen = ref(false)
 
@@ -26,6 +27,23 @@ onMounted(async () => {
   await refresh()
   await restore(sessionId.value)
 })
+
+// session_id 一变就重拉历史：调试按钮和"清空对话"都会改它，
+// 不 watch 的话界面会继续挂着上一个 session 的消息，看起来像"换 id 没生效"。
+watch(sessionId, (next) => restore(next))
+
+async function handleClear() {
+  // 没有 UI 库可借，destructive 操作用原生 confirm：误点一次就再也找不回来
+  if (!window.confirm('确认清空当前会话的全部消息？会删除后端保存的历史，不可恢复。')) return
+  clearing.value = true
+  const ok = await clear(sessionId.value)
+  if (ok) {
+    // 与 app.py 的行为等价：清空后换一个新的 session_id（旧 id 已被 DELETE 清空）
+    resetSession()
+    question.value = ''
+  }
+  clearing.value = false
+}
 
 async function handleSend() {
   const text = question.value.trim()
@@ -50,10 +68,12 @@ function dismissError() {
         :queue="queue"
         :list-error="listError"
         :doc-count="docCount"
+        :clearing="clearing"
         @enqueue="enqueue"
         @retry="retry"
         @dismiss="dismiss"
         @toggle="toggleSelect"
+        @clear="handleClear"
       />
       <div class="side-panel-inner">
         <hr class="panel-hr" />

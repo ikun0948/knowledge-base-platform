@@ -8,8 +8,9 @@ const props = defineProps({
   queue: { type: Array, required: true },
   listError: { type: String, default: '' },
   docCount: { type: Number, required: true },
+  clearing: { type: Boolean, default: false },
 })
-const emit = defineEmits(['enqueue', 'retry', 'dismiss', 'toggle'])
+const emit = defineEmits(['enqueue', 'retry', 'dismiss', 'toggle', 'clear'])
 </script>
 
 <template>
@@ -40,5 +41,8 @@ const emit = defineEmits(['enqueue', 'retry', 'dismiss', 'toggle'])
     <p v-else-if="!props.listError" class="panel-hint">暂无文档，请先上传</p>
 
     <div class="metric">📊 文档数 {{ props.docCount }}</div>
+    <button class="btn" type="button" :disabled="props.clearing" @click="emit('clear')">
+      {{ props.clearing ? '清空中…' : '🗑️ 清空对话' }}
+    </button>
   </div>
 </template>
