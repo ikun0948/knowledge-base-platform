@@ -5,8 +5,10 @@ from core.vector_store import COLLECTION_CHILD, COLLECTION_PARENT, VectorStore
 class StubCollection:
     def __init__(self):
         self.deleted = []
+        self.calls = 0
 
     def delete(self, ids=None, **kwargs):
+        self.calls += 1
         self.deleted.extend(ids or [])
 
 
@@ -27,6 +29,10 @@ def test_delete_by_ids_targets_the_right_collection(store):
 
 def test_delete_with_empty_lists_touches_nothing(store):
     store.delete_by_ids([], [])
+    # deleted 只能证明"没删到东西"，无法区分"没调用"和"用空列表调用"；
+    # 真正有牙齿的是 calls：移除 if parent_ids:/if child_ids: 守卫会立刻红。
+    assert store.parent_vectorstore.calls == 0
+    assert store.child_vectorstore.calls == 0
     assert store.parent_vectorstore.deleted == []
     assert store.child_vectorstore.deleted == []
 
