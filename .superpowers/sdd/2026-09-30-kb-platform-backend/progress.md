@@ -60,3 +60,11 @@ Task 3: minor (deferred): conftest TESTS_DIR 插在 sys.path[0]（今天无遮�
 Task 3: minor (deferred): lifespan 无 teardown，--reload 每次泄漏连接池
 Task 3: minor (deferred): collection_counts 注解 `-> dict`（计划自身不一致，非实现缺陷）
 Task 3: minor (deferred): fakes 预支 T4/T5 签名（load_document(filename, raw_bytes) / delete_by_ids），**派 T4/T5 时携带**：参数名必须与 fakes.py 一致，否则测试绿而真接口断
+
+Task 4: complete (commits `c25f3c4`..`d850d72`，review: Approved / Spec ✅；`partial(TextLoader, encoding="utf-8")` 偏差经评审独立复现裁定成立——legacy 本就钉 UTF-8，spec 迁移等价性**要求**保留该钉法)
+Task 4: minor (deferred): Interfaces 行 `-> list[Document]` 未落实，`Document` 成死导入（plan-mandated 二选一，Follow Step 3）
+Task 4: minor (deferred): 写临时文件本身失败时不 unlink（delete=False 在 try 外）；Task 7 传真 bytes，可达面仅调用方 bug
+Task 4: minor (deferred): 空 .txt 静默切出 0 块无异常——**派 T7 时携带**：端点需决定是否 400
+Task 4: minor (deferred): 大写后缀 `.TXT` 现在能过（legacy 拒绝）——行为超集，记入等价清单
+Task 4: minor (deferred): `loader_cls` 对 txt 实为 partial 工厂，名不副实
+Task 4: minor (deferred): SUPPORTED_SUFFIXES 与 LOADER_BY_SUFFIX 键双真相（plan-mandated）——**派 T7 时携带**：import 复用而非再抄
