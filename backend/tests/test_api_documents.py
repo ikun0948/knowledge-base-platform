@@ -102,6 +102,57 @@ def test_chunk_save_failure_rolls_back_vectors_and_document():
     assert db.chunks_saved is False
 
 
+class RaisingDeleteVectorStore(FakeVectorStore):
+    """回滚时 Chroma 自己也挂了：delete_by_ids 抛异常，但调用确实发生过。"""
+
+    def __init__(self, error=None):
+        super().__init__()
+        self.error = error or RuntimeError("chroma 不可用")
+        self.delete_called = False
+
+    def delete_by_ids(self, parent_ids, child_ids):
+        self.delete_called = True
+        raise self.error
+
+
+class RaisingDeleteDocumentDB(RecordingDB):
+    """回滚时 MySQL 掉线：删行请求已发出，但提交失败。"""
+
+    def __init__(self, save_chunks_error=None, delete_document_error=None):
+        super().__init__(save_chunks_error=save_chunks_error)
+        self.delete_document_error = delete_document_error or RuntimeError("mysql 掉线")
+
+    def delete_document(self, doc_id):
+        self.deleted_docs.append(doc_id)
+        raise self.delete_document_error
+
+
+def test_vector_delete_failure_still_deletes_row_and_returns_500():
+    """复合故障：回滚第一步（删向量）自己炸了，第二步（删行）也必须执行，500 语义不能退化成兜底文案。"""
+    db = RecordingDB(save_chunks_error=RuntimeError("boom"))
+    store = RaisingDeleteVectorStore()
+    client = make_client(db, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": ("a.txt", "内容".encode("utf-8"), "text/plain")})
+    assert res.status_code == 500
+    assert res.json() == {"detail": "文档入库失败，已回滚"}
+    assert store.delete_called is True
+    assert db.deleted_docs == [42]
+
+
+def test_row_delete_failure_still_returns_500_with_storage_detail():
+    """复合故障镜像面：删行炸了也不能让裸异常逃逸到兜底 handler。"""
+    db = RaisingDeleteDocumentDB(save_chunks_error=RuntimeError("boom"))
+    store = FakeVectorStore()
+    client = make_client(db, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": ("a.txt", "内容".encode("utf-8"), "text/plain")})
+    assert res.status_code == 500
+    assert res.json() == {"detail": "文档入库失败，已回滚"}
+    assert store.deleted == [(["p0"], ["c0"])]
+    assert db.deleted_docs == [42]
+
+
 def test_oversized_upload_returns_413_before_anything_is_written(monkeypatch):
     import api.documents as documents_api
 

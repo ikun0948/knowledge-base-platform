@@ -46,8 +46,16 @@ async def upload_document(
         db.save_chunks(doc_id, parent_docs, child_docs, parent_ids, child_ids)
     except Exception as exc:
         logger.exception("文档入库失败，开始回滚: %s", filename)
-        vector_store.delete_by_ids(parent_ids, child_ids)
-        db.delete_document(doc_id)
+        # 每步补偿各自兜底：一步失败不能截断另一步，裸异常更不能逃逸到兜底 handler，
+        # 否则 500 就失去了"整件事没发生"的可信度（spec 六节 坑 3）。
+        try:
+            vector_store.delete_by_ids(parent_ids, child_ids)
+        except Exception:
+            logger.exception("回滚第一步失败：向量未确认删除，可能残留幽灵向量: %s", filename)
+        try:
+            db.delete_document(doc_id)
+        except Exception:
+            logger.exception("回滚第二步失败：documents 行未删除，幽灵状态残留: id=%s", doc_id)
         raise StorageError("文档入库失败，已回滚") from exc
 
     saved = db.get_document(doc_id)
