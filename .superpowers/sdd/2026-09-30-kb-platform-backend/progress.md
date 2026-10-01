@@ -70,3 +70,6 @@ Task 4: minor (deferred): `loader_cls` 对 txt 实为 partial 工厂，名不副
 Task 4: minor (deferred): SUPPORTED_SUFFIXES 与 LOADER_BY_SUFFIX 键双真相（plan-mandated）——**派 T7 时携带**：import 复用而非再抄
 
 Task 5 预检（派 T6 时携带）：T5 implementer 实测 brief "print 全转完" 说法与树不符——现存 5 处 live print：`core/database.py:106,108`（无主）与 `core/rag_system.py:67,87,114`（brief 划归 T6）。T6 派单需明确 rag_system 3 处的归属，并裁定 database 2 处（默认：保持原状，非本计划清单）。
+
+Task 5: review Approved 但 1 条 Important [plan-mandated]：`test_delete_with_empty_lists_touches_nothing` 的 StubCollection 只记 ids 不记调用，删掉 `if parent_ids:` 守卫测试仍绿。Ruling: 修测试不修生产码（守卫本身正确在位）——StubCollection 加 `self.calls` 计数并断言空列表时 0 次调用；这是对 brief 逐字测试块的一处授权偏离，不改生产签名，T7/T8 断言面不受影响 → 修复轮 1/5。
+Task 5: ruling(归属): `core/database.py:106,108` 两处无主 print 划归 **Task 9** 转 module logger（spec 八节"6 处 print"含它们在；不转则 §8 清零验收在 T9/T10 静默失败）。派 T9 时携带。
