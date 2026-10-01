@@ -122,3 +122,7 @@ Task 10 预裁定（派单时携带）：brief Step 2 的"从本仓根 cp app.py
 
 Task 9: complete (commits `2ccc952`..`becf535`，review: Approved / Spec ✅ 零 Critical/Important，一次过无修复轮。评审者独立复核：全异常面 str(exc)→detail 路径枚举、posix 非空转探针、live 组不触 Chroma、migration 基线不可漂移）
 Task 9: ruling: 8 条 Minor 不进修复轮（均测试加固/既有健壮性）；其中值得终评后一并处理的：#1 posix 模拟可静默空转（fixture 内补一句 assert documents_api.os.path is posixpath）、#4 >255 字符文件名在回滚 try 之外撞 String(255)→兜底 500（预存在，非泄露）、#6 live 测试红时探针行残留、#7 live skip 捕 Exception 过宽会掩真回归。归**最终评审后的单次修复 dispatch**候选清单。
+
+Task 10: complete (commit `ded3d73`，docs-only 交付由控制者内联评审代替独立评审轮：README 指路碑全文+开发文档尾注逐行读过；其两条事实修正被控制者独立复核成立——`D:/AI-python/core/chroma_db` 确不存在（真实旧库在 langchain框架/core/chroma_db，正是坑 2 的现场），两份 .env 确连同一 MySQL localhost/mydb）。
+Task 10: 完成标准口径备案（终审必携带）：计划"legacy_streamlit/ 有冻结副本"一项，经预裁定改为"指路碑"形态并在 README 内自证理由（第三份真相违 spec 7.2 精神）；终审应按此口径判定，不是未达标。
+Task 10: 待办继承：坑 6 的"前端侧转义"目前只是承诺（frontend/ 仍是占位），终审判定后端范围即可，前端由第二份计划兑现。
