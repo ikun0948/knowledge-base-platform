@@ -52,3 +52,11 @@ Task 2: complete (原仓库 commits `d72a054`..`e80f758`，含 fix round 1；迁
 Ruling (2026-10-01 修订): 新会话 Agent 工具虽有 `model` 参数，但本机无法枚举合法模型档位，盲传 ID 有派单失败风险 — 继续全部子代理继承会话模型 — 代价：机械转写型任务无法降档省钱。
 
 Task 3 implementer 预检（派 T9 时必须携带）：计划约 1710 行让 Task 9 "Create" 只含 `live` marker 的 pytest.ini，会丢掉现有 `migration` marker — 裁定：T9 改为**合并**（保留 migration + live 两个 marker），不得整文件重建。
+
+Task 3: complete (commits `50ba699`..`2f058ea`，review: Approved / Spec ✅，偏差 conftest.py +3 行经评审裁定成立)
+Task 3: minor (deferred): 异常映射与兜底 handler 无测试钉住（建议后续补一个 UnsupportedDocumentType→415 用例）
+Task 3: minor (deferred): 报告 §6.3 关于 TestClient 兜底 500 的说法不准确（raise_server_exceptions=True 会再抛），**派 T8 时携带**：断言兜底 500 需 `TestClient(app, raise_server_exceptions=False)`
+Task 3: minor (deferred): conftest TESTS_DIR 插在 sys.path[0]（今天无遮蔽，未来非 test_ 模块同名会顶掉真模块）
+Task 3: minor (deferred): lifespan 无 teardown，--reload 每次泄漏连接池
+Task 3: minor (deferred): collection_counts 注解 `-> dict`（计划自身不一致，非实现缺陷）
+Task 3: minor (deferred): fakes 预支 T4/T5 签名（load_document(filename, raw_bytes) / delete_by_ids），**派 T4/T5 时携带**：参数名必须与 fakes.py 一致，否则测试绿而真接口断
