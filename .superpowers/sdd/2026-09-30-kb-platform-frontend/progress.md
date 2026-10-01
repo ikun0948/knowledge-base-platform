@@ -61,4 +61,10 @@ Task 5: ruling (I-2, T7 滚动判据只写在 375px 分支): 采纳评审者量�
 Task 5: ruling (M-2, 刷新后来源标签消失——HistoryMessage 无 mode 字段): 裁定**接受为阶段一限制**，T7 判据 4 明写「来源标签不在刷新等价验收范围」；给 chat_history 加 mode 列归阶段二后端议题，记档。
 Task 5: minor (deferred→T7): M-4 snippet 末尾 `...` 截断分支从未被观测——T7 需上传一个含 ≥80 字符块的新文档（新文件名，防撞名 500；上传物按纪律保留）再用 curl /api/history 逐字对照。M-1 emoji 代理项对半切（join 无损、SSE 日删 typewriter.js，记档不改）。M-6 typewriter stop() 的卸载路径无人注册（App 单例常驻无泄漏，记档）。M-5 报告头部状态字未回收与 :248 笔误（文档卫生，代码零牵连）。
 Task 5: 流程裁定: 自报"提交提前于部分验证"与"辅助脚本误用 query-param 历史路径"经评审者独立证实不影响验收（范围单提交、blob 仍逐字）——追认，崩后抗崩溃纪律有效。
+
+Task 6: complete (commits `eaafb0b`..`02210c0`，review: Approved 无需返工 / Spec 全绿零代码偏离——5/5 围栏块 HEAD blob 级逐字独立复验、行为契约三则（DELETE 成功才 resetSession / false 不动消息与 sid / 取消零请求）毫秒级原始证据、clearing 无 finally 等价性由 useChat.clear 返回路径证成、29 文件全树比对仅 2 行哈希不同；Step 4 九项原始观测齐备)
+Task 6: ruling (评审 I-1, 报告把 NULL 引用边界挂错样本): 被验会话 66fa9c8f… 是今天的 normal/空检索轮（NULL 由**当前代码**仍在写，rag_system.py:62/:85-90），不是 2026-09-19 改造前行；结论仍成立且覆盖更牢。记档边界第 3 条改述为「NULL 由 normal/空检索路径与改造前行共同覆盖」；**T7 派单**：用真 2026-09-19 会话 `0a6e5ed2…`（UUID 形状）手工换 id 刷新，钉死改造前老行路径。
+Task 6: 平台事实 (随 T7 硬约束): 本机 commit limit 吃紧——第二个 uvicorn 实例因 embedding 模型再加载实测 os error 1455 startup failed（评审者核 traceback 与 vector_store.py:21 归因可信）。**T7 不得起双后端**；复用现存自起服务：uvicorn --reload PID 22432（:8000）、vite dev PID 6044（:5173），非死勿杀；「断后端」子项**引用 T6 报告判 PASS**，不重演杀进程。CDP `edge.kill()` 有 localStorage 不落盘怪癖：每程 reload 前显式 setItem 目标 sid（T6 顾虑②）。
+Task 6: minor (记档): M-1 逐字脚本"三个代码块"应为 4 围栏块+import 共 5 例（断言覆盖全，措辞错）；M-2 报告 PID 账 15740→17764→22432 链条未交代 + 一次 taskkill 被 Git Bash 展开吞参；M-3 brief/database.py:224 行号漂移（实际 :233）；M-4 竞态记档——DELETE 在飞时"换一个 session_id"调试按钮仍可点，代价属"界面永远等于后端真相"同族，brief 块冻结不改。
+Task 6: 基线更新: chat_history 13 行/8 会话（T6 真实问答按不清库纪律保留）。documents 5/parent 6/child 11 不变。
 Task 5: 现场记录——首个实施代理执行错误崩溃（902k tokens/12 tool uses，无提交无报告），残件（useChat/MessageList/MessageBubble/ReferenceList/ChatInput/typewriter + layout.css 改动）已挪 task-5-crash-leftovers/，工作树复原 44bf3ba；重派携带：报告增量写盘 + 上下文节俭两条抗崩溃纪律。
