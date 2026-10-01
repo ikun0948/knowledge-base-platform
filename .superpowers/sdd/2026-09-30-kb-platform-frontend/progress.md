@@ -53,4 +53,12 @@ Task 4: 修正案改挂 (T2 ruling I-1 之 T5 部分作废): T5 brief 通篇**�
 Task 4: minor (deferred, 记档): M-4 FileUploader.vue:10,15 `inputEl` 死代码（brief 逐字规格自带）——终评引用本条认定非实施者责任。
 Task 4: minor (deferred→T7): M-5 构建冒烟前先 `rm -rf frontend/dist`（T4 实施者留下的 dist/ 已被 gitignore，但旧 bundle 哈希会干扰判读）。
 Task 4: 报告表述纠正（评审 M-1/M-2/M-3，代码零牵连）: layout.css 追加实测 前缀 3177 + 分隔空行 + 块 1712 字符（总 4890，报告引文"1711"漂移）；App.vue 解构 10 个返回值（非 11，docLabel 未解构且 brief 块本就如此）；"17 类"计数出自派单摘要非 brief 原文。
+
+Task 5: complete (commits `5e699df`..`35bada3`，首派崩溃后 fresh 重派成功；review: Approved / Spec 逐条全绿代码级偏离 0——8/8 围栏块 blob 级逐字相等、layout.css 单 hunk +74/−0 append-only、14 冻结文件哈希相等、v-html 零命中、Step 10 八项按裁定 2/6/7 改写判据全过；打字机与 app.py:343-347 语义逐行核对一致)
+Task 5: 基线更新: documents 5 行（+#74 xss.txt，brief Step 10 明文要求）、Chroma parent 6 / child 11。T7 手测基线随之更新。
+Task 5: ruling (I-1 长答案滚动 no-op——**根因翻案**): 实施者归因（.chat-messages 缺 min-height:0）被评审者证伪为不充分——overflow-y:auto 使其自动最小尺寸本来就是 0，补 min-height:0 是 0→0 no-op；真根因在 `.app-shell` 隐式 auto 行 + `.chat-main` 未中和最小尺寸，内容超可用高度时 max-height:100% 解析在已撑高的行上。**授权 Task 7 末尾追加**（不破 append-only）：`@media (min-width:769px){ .app-shell{grid-template-rows:minmax(0,1fr);} .chat-main{min-height:0;} }`；兜底（仅当判据①仍不成立）：追加 `.chat-body{overflow:hidden}`。归属裁定：brief 自带缺陷，T5 零扣分，实施者"保留逐字+移交证据"是唯一合规处置。
+Task 5: ruling (I-2, T7 滚动判据只写在 375px 分支): 采纳评审者量化判据替换——≥1500 字真调 LLM 答案放完后，1440/1280/900 三档视口各验：① .chat-messages clientH<scrollH ② scrollTop 写后读回>0≈scrollH-clientH ③ .chat-input bottom≤innerHeight ④ elementFromPoint(输入框中心)命中 chat-textarea ⑤ 放字中途 cursors=1、Console 零 error/warning。随 T7 派单下发。
+Task 5: ruling (M-2, 刷新后来源标签消失——HistoryMessage 无 mode 字段): 裁定**接受为阶段一限制**，T7 判据 4 明写「来源标签不在刷新等价验收范围」；给 chat_history 加 mode 列归阶段二后端议题，记档。
+Task 5: minor (deferred→T7): M-4 snippet 末尾 `...` 截断分支从未被观测——T7 需上传一个含 ≥80 字符块的新文档（新文件名，防撞名 500；上传物按纪律保留）再用 curl /api/history 逐字对照。M-1 emoji 代理项对半切（join 无损、SSE 日删 typewriter.js，记档不改）。M-6 typewriter stop() 的卸载路径无人注册（App 单例常驻无泄漏，记档）。M-5 报告头部状态字未回收与 :248 笔误（文档卫生，代码零牵连）。
+Task 5: 流程裁定: 自报"提交提前于部分验证"与"辅助脚本误用 query-param 历史路径"经评审者独立证实不影响验收（范围单提交、blob 仍逐字）——追认，崩后抗崩溃纪律有效。
 Task 5: 现场记录——首个实施代理执行错误崩溃（902k tokens/12 tool uses，无提交无报告），残件（useChat/MessageList/MessageBubble/ReferenceList/ChatInput/typewriter + layout.css 改动）已挪 task-5-crash-leftovers/，工作树复原 44bf3ba；重派携带：报告增量写盘 + 上下文节俭两条抗崩溃纪律。
