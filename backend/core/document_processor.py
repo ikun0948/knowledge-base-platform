@@ -1,8 +1,19 @@
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_community.document_loaders import Docx2txtLoader
+import logging
 import os
 import tempfile
+from functools import partial
+
+from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader
+from langchain_core.documents import Document  # noqa: F401  (类型一致性检查用)
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from exceptions import UnsupportedDocumentType
+
+logger = logging.getLogger("kb.document_processor")
+
+SUPPORTED_SUFFIXES = (".pdf", ".docx", ".txt")
+# txt 必须钉死 utf-8：不传 encoding 时 TextLoader 用系统编码，中文 Windows 是 cp936，读 UTF-8 字节直接报错
+LOADER_BY_SUFFIX = {".pdf": PyPDFLoader, ".docx": Docx2txtLoader, ".txt": partial(TextLoader, encoding="utf-8")}
 
 # 文档分割（父子索引）
 class DocumentProcessor:
@@ -27,32 +38,27 @@ class DocumentProcessor:
             separators=["\n", "。", "！", "？", ".", "!", "?", " "]
         )
 
-    def load_document(self, uploaded_file):
-        """加载上传的文档"""
-        # 保存临时文件，suffix获取后缀（UploadedFile 是 BytesIO 子类，后缀只能从其 name 取）
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
-            # 获取当前数据
-            tmp_file.write(uploaded_file.getvalue())
-            # 获取当前临时文件地址
+    def load_document(self, filename: str, raw_bytes: bytes):
+        """加载上传的文档。
+
+        不再接收 Streamlit 的 UploadedFile：FastAPI 的 UploadFile、测试里的 bytes
+        都能直接调用（spec 四节）。
+        """
+        # 去掉任何路径成分：客户端可以塞 "a/../../b.txt"
+        safe_name = os.path.basename(filename)
+        suffix = os.path.splitext(safe_name)[1].lower()
+        if suffix not in SUPPORTED_SUFFIXES:
+            raise UnsupportedDocumentType(f"不支持的文件类型: {suffix or safe_name}")
+
+        loader_cls = LOADER_BY_SUFFIX[suffix]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(raw_bytes)
             tmp_path = tmp_file.name
-        print(tmp_path)
+        logger.debug("临时文件: %s", tmp_path)
 
         try:
-            # 根据当前文件的类型选择加载器
-            if uploaded_file.name.endswith('.pdf'):
-                loader = PyPDFLoader(tmp_path)
-            elif uploaded_file.name.endswith('.docx'):
-                loader = Docx2txtLoader(tmp_path)
-            elif uploaded_file.name.endswith('.txt'):
-                loader = TextLoader(tmp_path, encoding='utf-8')
-            else:
-                raise ValueError(f"不支持当前文件的类型: {uploaded_file.name}")
-
-            documents = loader.load()
-            return documents
-
+            return loader_cls(tmp_path).load()
         finally:
-            # 清理临时文件
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
