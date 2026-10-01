@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from core.vector_store import COLLECTION_CHILD, COLLECTION_PARENT, VectorStore
 
@@ -6,10 +8,13 @@ class StubCollection:
     def __init__(self):
         self.deleted = []
         self.calls = 0
+        self.wheres = []
 
     def delete(self, ids=None, **kwargs):
         self.calls += 1
         self.deleted.extend(ids or [])
+        if "where" in kwargs:
+            self.wheres.append(kwargs["where"])
 
 
 @pytest.fixture
@@ -35,6 +40,29 @@ def test_delete_with_empty_lists_touches_nothing(store):
     assert store.child_vectorstore.calls == 0
     assert store.parent_vectorstore.deleted == []
     assert store.child_vectorstore.deleted == []
+
+
+def test_delete_by_document_id_sweeps_both_collections_with_the_metadata_stamp(store):
+    """add_documents 在两次写入之前就打好了 document_id 戳，孤儿向量只能按它找回（终审 D2）。"""
+    store.delete_by_document_id(42)
+    assert store.parent_vectorstore.wheres == [{"document_id": "42"}]
+    assert store.child_vectorstore.wheres == [{"document_id": "42"}]
+    assert (store.parent_vectorstore.calls, store.child_vectorstore.calls) == (1, 1)
+
+
+def test_delete_by_document_id_is_best_effort_and_never_raises(store, caplog):
+    """清扫失败不外抛（否则补偿链自己变成 500），且第一步炸了也不截断第二步。"""
+
+    class DownCollection(StubCollection):
+        def delete(self, ids=None, **kwargs):
+            self.calls += 1
+            raise RuntimeError("chroma 不可用")
+
+    store.parent_vectorstore = DownCollection()
+    with caplog.at_level(logging.ERROR):
+        store.delete_by_document_id(7)
+    assert store.child_vectorstore.calls == 1
+    assert "按 document_id 清扫父集合失败" in caplog.text
 
 
 def test_collection_names_match_existing_chroma(store):

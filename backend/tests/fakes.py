@@ -14,12 +14,16 @@ class FakeVectorStore:
     def __init__(self, counts=None):
         self.counts = counts or {"parent": 2, "child": 7}
         self.deleted = []
+        self.deleted_by_doc = []
 
     def collection_counts(self):
         return dict(self.counts)
 
     def delete_by_ids(self, parent_ids, child_ids):
         self.deleted.append((list(parent_ids), list(child_ids)))
+
+    def delete_by_document_id(self, document_id):
+        self.deleted_by_doc.append(document_id)
 
     def add_documents(self, parent_docs, child_docs, document_id):
         return [f"p{i}" for i in range(len(parent_docs))], [f"c{i}" for i in range(len(child_docs))]

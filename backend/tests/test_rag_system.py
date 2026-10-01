@@ -132,13 +132,20 @@ def test_chat_snippet_collapses_whitespace_and_truncates_at_limit():
     assert len(refs2[0].snippet) == SNIPPET_LIMIT + 3
 
 
-def test_chat_empty_retrieval_is_business_result_not_history():
+def test_chat_empty_retrieval_persists_the_turn_exactly_once():
+    """空检索是业务结果，但这一轮照样得进历史：前端只留后端有的，不落库的轮次刷新后就消失了（终审 D4）。"""
     db = StubDb()
     rag = build(db, StubVectorStore(parent_docs=[]), ok_llm())
     answer, refs = rag.chat_with_documents("无关问题", [7], "s1")
     assert refs == []
     assert "未在选中的文档里找到" in answer
-    assert db.saved == []
+    assert db.saved == [{
+        "session_id": "s1",
+        "user_message": "无关问题",
+        "assistant_message": answer,
+        "document_ids": "7",
+        "used_chunks": None,
+    }]
 
 
 def test_chat_retrieval_failure_raises_not_swallowed():

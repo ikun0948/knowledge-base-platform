@@ -54,6 +54,17 @@ class VectorStore:
             "child": self.chroma_client.get_collection(COLLECTION_CHILD).count(),
         }
 
+    def delete_by_document_id(self, document_id):
+        """尽力清扫：按 add_documents 打上的 document_id 戳删两个集合（id 列表不全时唯一找得回孤儿向量的键）。"""
+        try:
+            self.parent_vectorstore.delete(where={"document_id": str(document_id)})
+        except Exception:
+            logger.exception("按 document_id 清扫父集合失败: %s", document_id)
+        try:
+            self.child_vectorstore.delete(where={"document_id": str(document_id)})
+        except Exception:
+            logger.exception("按 document_id 清扫子集合失败: %s", document_id)
+
     def delete_by_ids(self, parent_ids, child_ids):
         """回滚入口：按向量 id 删除刚写入的块（spec 第七节 坑 3 的补偿动作）。"""
         if parent_ids:

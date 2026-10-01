@@ -234,6 +234,8 @@ def posix_style_basename(request, monkeypatch):
 
     if request.param == "posix":
         monkeypatch.setattr(documents_api, "os", SimpleNamespace(path=posixpath))
+        # 换不掉就是空转：这条 assert 保证 posix 那一臂真在测 posixpath 的 basename
+        assert documents_api.os.path is posixpath
     return request.param
 
 
@@ -273,3 +275,103 @@ def test_pure_traversal_name_is_refused_before_anything_is_written(raw):
     assert res.status_code == 415, res.text
     assert db.saved_docs == []
     assert store.added == []
+
+
+# --- 终审 D1：写不进去的文档必须在任何写入之前就说清楚 ---
+
+class ZeroChunkProcessor(FakeDocProcessor):
+    """切不出任何子块：真形态是图片型 PDF（PyPDF 只给空 page_content）与纯空白 txt。"""
+
+    def create_parent_child_chunks(self, documents, filename):
+        return [], []
+
+
+def test_document_without_retrievable_chunks_is_422_and_writes_nothing():
+    db, processor, store = RecordingDB(), ZeroChunkProcessor(), RecordingVectorStore()
+    client = make_client(db, processor=processor, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": ("a.pdf", b"%PDF-1.4", "application/pdf")})
+
+    assert res.status_code == 422, res.text
+    assert res.json() == {"detail": "未能解析出可检索的文本内容"}
+    # 这种文档永远检索不到，半创建（有行没块、或行已提交又回滚成「已回滚」的 500）都是误导
+    assert db.saved_docs == []
+    assert store.added == []
+    assert store.deleted == []
+    assert store.deleted_by_doc == []
+    assert db.deleted_docs == []
+
+
+def test_whitespace_only_txt_is_422_through_the_real_processor():
+    """真 DocumentProcessor 对纯空白文本切出 0 块，这条拒绝得覆盖到真实解析路径。"""
+    db, store = RecordingDB(), RecordingVectorStore()
+    client = make_client(db, processor=DocumentProcessor(ProcessorCfg()), vector_store=store)
+
+    res = client.post("/api/documents", files={"file": ("blank.txt", "  \n\n\t \n".encode("utf-8"), "text/plain")})
+
+    assert res.status_code == 422, res.text
+    assert db.saved_docs == []
+    assert store.added == []
+
+
+def make_long_filename(total_chars):
+    """长度算到"清洗后"那一头：88 字符名 + "_parent_" + 序号才顶到 String(100)。"""
+    return "a" * (total_chars - 4) + ".txt"
+
+
+@pytest.mark.parametrize("length, expected", [(88, 201), (89, 422)])
+def test_filename_length_guard_sits_at_88_chars(length, expected):
+    db, processor, store = RecordingDB(), SpyProcessor(), RecordingVectorStore()
+    client = make_client(db, processor=processor, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": (make_long_filename(length), "内容".encode("utf-8"), "text/plain")})
+
+    assert res.status_code == expected, res.text
+    if expected == 422:
+        assert res.json() == {"detail": "文件名过长，请控制在 88 字符以内"}
+        assert db.saved_docs == []
+        assert store.added == []
+        assert db.deleted_docs == []
+    else:
+        assert len(processor.seen) == 2
+
+
+# --- 终审 D2：add_documents 半途失败时，孤儿向量只能按 document_id 找回 ---
+
+class PartialAddVectorStore(FakeVectorStore):
+    """真 VectorStore 的失败形态：两次写入之前就打好了 document_id 戳，父集合已落、子集合炸，返回值仍是不存在的 ids。"""
+
+    def __init__(self, error=None):
+        super().__init__()
+        self.error = error or RuntimeError("chroma 写子集合时掉线")
+        self.calls = []
+
+    def add_documents(self, parent_docs, child_docs, document_id):
+        for doc in parent_docs + child_docs:
+            doc.metadata["document_id"] = str(document_id)
+        raise self.error
+
+    def delete_by_ids(self, parent_ids, child_ids):
+        self.calls.append(("delete_ids", list(parent_ids), list(child_ids)))
+        super().delete_by_ids(parent_ids, child_ids)
+
+    def delete_by_document_id(self, document_id):
+        self.calls.append(("sweep", document_id))
+        super().delete_by_document_id(document_id)
+
+
+def test_partial_vector_add_is_swept_by_document_id_first():
+    """ids 为空时 delete_by_ids 删不到已写入的父向量（ parked-b）：清扫必须按 document_id，且排在补偿第一步。"""
+    db = RecordingDB()
+    store = PartialAddVectorStore()
+    client = make_client(db, vector_store=store)
+
+    res = client.post("/api/documents", files={"file": ("a.txt", "内容".encode("utf-8"), "text/plain")})
+
+    assert res.status_code == 500
+    assert res.json() == {"detail": "文档入库失败，已回滚"}
+    assert store.deleted_by_doc == [42]
+    # 顺序也是契约：先按 document_id 扫孤儿，再按 ids 精确删（后者在这里必然删不到东西）
+    assert store.calls == [("sweep", 42), ("delete_ids", [], [])]
+    assert db.deleted_docs == [42]
+    assert db.chunks_saved is False

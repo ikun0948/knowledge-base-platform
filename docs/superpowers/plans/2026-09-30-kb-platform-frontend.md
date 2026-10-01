@@ -357,7 +357,7 @@ export function uploadDocument(file, { onProgress } = {}) {
 2. **422 有两种体**：领域异常与 handler 给的 `detail` 是字符串，FastAPI 自动参数校验给的是**数组**（元素含 `msg`）。`detailFromText` 里那条 `Array.isArray` 分支就是为它存在的——spec 六节"只读 detail"的写法在这一条上是不完整的。
 3. `GET /api/history` 的 user 行 `references` 是 **`null`**（`backend/schemas/chat.py` 的 `HistoryMessage` 默认值 + 后端 Task 8 Step 5 的实现），assistant 行才是数组；`useChat.restore` 用 `row.references ?? []` 归一，模板里再判 `.length`。
 4. 老行 `used_chunks` 为 `NULL` 或不是合法 JSON 时，后端降级成 `references: []` 而不是 500（后端计划 Task 8 的 `test_legacy_rows_without_used_chunks_still_load` / `test_corrupt_used_chunks_degrades_to_empty`）——所以"历史能恢复但没有引用区"是**预期行为**，不是前端 bug。
-5. 检索为空是 **200 + 一段说明文案**（`backend/core/rag_system.py:67-69`），不是错误码：前端不能把它当失败弹错误条。
+5. 检索为空是 **200 + 一段说明文案**（`backend/core/rag_system.py:74-76`），不是错误码：前端不能把它当失败弹错误条。
 
 - [ ] **Step 4: 写 `frontend/src/api/chat.js`**
 
@@ -415,7 +415,7 @@ curl -s -X POST http://localhost:5173/api/documents -F "file=@-;filename=bad.exe
 必须逐条对上（这是本 Task 的通过判据）：
 1. `d.listDocuments()` 打印出 1 个元素的数组，字段是 `id / filename / chunk_count / created_at`——与 `backend/schemas/documents.py` 一致。
 2. `c.request('/api/documents/nonexistent')` 抛出的 `Error.message` **逐字等于** curl 那条 `{"detail":"Not Found"}` 里的 `Not Found`（没有壳、没有包装前缀）。
-3. 空文件上传 reject 的 message 是 `文件内容为空`（HTTP 422，来自 `backend/api/documents.py:26`）。
+3. 空文件上传 reject 的 message 是 `文件内容为空`（HTTP 422，来自 `backend/api/documents.py:35`）。
 4. `.exe` 上传 reject 的 message 是 `不支持的文件类型: .exe`（HTTP 415，来自 `backend/core/document_processor.py:51`）——同一条规则在 XHR 路径和 fetch 路径文案一致，说明 `detailFromText` 抽对了。
 5. `uploadDocument` 的成功路径与进度：`await d.uploadDocument(new File(['甲公司的营收是 100 元。'], 'smoke-t2.txt', { type: 'text/plain' }), { onProgress: (p) => console.log('progress', p) })` → Console 依次打印若干百分比，promise resolve 出恰好四个键 `{id, filename:"smoke-t2.txt", chunk_count, created_at}`。**这条会真的入库一份文档**：本计划不做清理（后端没有删除接口，坑 10），它和 Task 4 Step 8 上传的那几份一起构成 Task 7 全量清单的基线，"文档数"按当时实际值看即可。不想在本 Task 留脏数据，就把文件名换成 `smoke-t2.exe`——`progress` 照样跑、最后 reject 415，只是 201 的响应形状得留到 Task 4 用真实文件验。
 
@@ -1851,7 +1851,7 @@ printf '安全测试片段：<script>alert(1)</script> 与 <img src=x onerror=al
 3. 勾 `comp.txt`（状态栏变蓝 `🔍 知识库模式（1 个文档）`），问 `甲公司的营收是多少？`：答案文本里出现 `100 元`；气泡下方先出现 `📚 知识库检索` 与 **引用区**（`📎 comp.txt(#2)` + 一行片段，末尾可能是 `...`），引用在字还在放的时候就已经在——这正是阶段二 SSE 的渲染前提。
 4. 打字还没放完就输入下一句并回车：输入框可用（`pending` 已随响应结束）、上一轮气泡**立刻补全成完整答案**（`finishTyping()` 生效），不会出现半截答案，也不会有两个定时器同时在放字（Network 里第二轮请求正常发出）。
 5. 勾 `xss.txt` 问 `尖括号里包着什么？`：引用片段把 `<script>alert(1)</script>` 当**纯文本**显示出来，页面无弹窗、Console 无 `alert` 执行痕迹；`document.querySelectorAll('script').length` 仍只有 Vite 注入的那几个模块脚本。
-6. 检索不到不是错误：勾 `third.txt`（内容只有一句占位文本）问 `甲公司的营收是多少？` → **不出现红色错误条**。具体文案两种都算通过：后端 `parent_docs` 为空时返回 `未在选中的文档里找到相关内容，请换个问法或确认文档已上传。`（`backend/core/rag_system.py:67-69`，200 业务结果）；或检索命中了无关块、LLM 按 system prompt 诚实说"上下文里没有相关信息"。区别只在引用区有无，界面都不该报错。
+6. 检索不到不是错误：勾 `third.txt`（内容只有一句占位文本）问 `甲公司的营收是多少？` → **不出现红色错误条**。具体文案两种都算通过：后端 `parent_docs` 为空时返回 `未在选中的文档里找到相关内容，请换个问法或确认文档已上传。`（`backend/core/rag_system.py:74-76`，200 业务结果）；或检索命中了无关块、LLM 按 system prompt 诚实说"上下文里没有相关信息"。区别只在引用区有无，界面都不该报错。
 7. 后端停掉（终端 C Ctrl-C）再问一句 → 红色错误条 `⚠️ 无法连接后端，请确认 uvicorn 已在 :8000 运行`，**消息列表里既不留半截 assistant 气泡、也不留那句 user 气泡**（`splice` 撤掉两条），输入框里的原文还给你（`handleSend` 的 `if (!ok)`）。重启后端后刷新，界面与历史都对得上。
 8. 点"关闭"能收掉错误条；Console 零 error / 零 Vue warning。
 
@@ -1960,9 +1960,10 @@ async function handleClear() {
 - [ ] **Step 3: 已知边界，写清楚不隐藏**
 
 - `getHistory` 用后端默认 `limit=50`（一轮 = 一条 `chat_history` 行 = 界面两条消息），后端取的是**最近** 50 轮再正序返回（`backend/core/database.py:224` 的 `order_by(id.desc()).limit()` + `reversed`）。所以超长寿会话刷新后只会看到最近 50 轮，更早的不在界面上。本次不做分页/加载更多（spec 一节的非目标）。
+- `GET /api/history` 的 `limit` 单位是 **DB 行数**，不是消息条数（`backend/api/history.py:28` 的 `Query(50, ge=1, le=200)`）：一行渲染成 user + assistant 两条消息，所以 `limit=200` 这个上限最多也只能拿回 400 条消息，传 201 会直接 422。
 - 改造前就写进 `chat_history` 的老行 `used_chunks` 是 `NULL`：后端 Task 8 把它们降级成 `references: []`，所以这些历史**能恢复但没有引用区**。要实测这条路径，就把 `localStorage.session_id` 手工改成一个旧会话 id（`SELECT DISTINCT session_id FROM chat_history;` 任取一条）再刷新——预期是消息照常显示、引用区不出现、页面不报错。
 - 后端 `api/history.py` 已落地并通过评审；本 Task 描述的形状（每行 → user+assistant 两条、user 行 `references: null`、assistant 行数组）即其实测行为，若再发现不符，以后端为准并回改 `api/history.js` 的注释。
-- 刷新后恢复出来的 assistant 气泡**没有来源标签**：后端 `HistoryMessage` 只暴露 `role/content/references/created_at`，不带 `mode`，连 `document_ids` 都没露出来（`backend/schemas/chat.py`）。于是 `MessageBubble` 的 `v-if="props.message.mode"` 不成立，`📚 知识库检索` / `💬 自由对话` 那一行在刷新后消失，但引用区照常显示——这是预期行为，不是 bug，验证时别当失败报。也别想用"有没有引用区"去反推 `mode`：空检索时后端仍返回 `mode: "rag"` 且 `references: []`（`backend/core/rag_system.py:67-69` 那条说明文案），引用有无和走没走 RAG 链是两件事。真要在刷新后也显示来源标签，就得给后端 `chat_history` 加 `mode` 列并扩 `HistoryMessage` 字段——那是后端的活，本计划不做。
+- 刷新后恢复出来的 assistant 气泡**没有来源标签**：后端 `HistoryMessage` 只暴露 `role/content/references/created_at`，不带 `mode`，连 `document_ids` 都没露出来（`backend/schemas/chat.py`）。于是 `MessageBubble` 的 `v-if="props.message.mode"` 不成立，`📚 知识库检索` / `💬 自由对话` 那一行在刷新后消失，但引用区照常显示——这是预期行为，不是 bug，验证时别当失败报。也别想用"有没有引用区"去反推 `mode`：空检索时后端仍返回 `mode: "rag"` 且 `references: []`（`backend/core/rag_system.py:74-76` 那条说明文案），引用有无和走没走 RAG 链是两件事。真要在刷新后也显示来源标签，就得给后端 `chat_history` 加 `mode` 列并扩 `HistoryMessage` 字段——那是后端的活，本计划不做。
 
 - [ ] **Step 4: 浏览器验证（spec 十节判据 4 的前端一半）**
 

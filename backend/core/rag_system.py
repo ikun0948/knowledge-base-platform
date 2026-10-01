@@ -14,6 +14,7 @@ logger = logging.getLogger("kb.rag")
 # detail 会被前端原样弹出来：固定文案，原始异常文本只进日志（spec 八节"不透堆栈给前端"）
 LLM_FAILED = "大模型调用失败，请稍后重试"
 RETRIEVAL_FAILED = "检索或上下文压缩失败，请稍后重试"
+EMPTY_RETRIEVAL_ANSWER = "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。"
 
 
 class RAGSystem:
@@ -65,17 +66,30 @@ class RAGSystem:
 
     def chat_with_documents(self, question, document_ids, session_id):
         """基于文档的 RAG 问答：子块召回 → 回溯父块 → 压缩 → 带历史生成。"""
+        no_retrieval = False
         try:
             retriever = self.vector_store.create_retriever(document_ids)
             retrieved_docs = retriever.invoke(question)
             parent_docs = self.vector_store.get_parent_documents(retrieved_docs)
             if not parent_docs:
-                # 检索为空不是故障：这是业务结果，原样返回，让接口用 200 携带说明文案
-                return "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。", []
-            compressed_docs = self.vector_store.compressor.compress_documents(parent_docs, question)
+                # 检索为空不是故障：业务结果，用 200 携带说明文案，落库在 try 之后（终审 D4）
+                no_retrieval = True
+            else:
+                compressed_docs = self.vector_store.compressor.compress_documents(parent_docs, question)
         except Exception as exc:
             logger.exception("检索或上下文压缩失败")
             raise RetrievalError(RETRIEVAL_FAILED) from exc
+
+        if no_retrieval:
+            # 落库在域错误包装之外：这一轮不进历史的话，刷新后它就凭空消失了（spec 五节"后端是真相"）
+            self.db_manager.save_chat_history(
+                session_id=session_id,
+                user_message=question,
+                assistant_message=EMPTY_RETRIEVAL_ANSWER,
+                document_ids=",".join(map(str, document_ids)),
+                used_chunks=None,
+            )
+            return EMPTY_RETRIEVAL_ANSWER, []
 
         context = "\n\n".join(d.page_content for d in compressed_docs)
         logger.debug("最终检索上下文长度: %d", len(context))
