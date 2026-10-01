@@ -96,3 +96,7 @@ Task 7: minor (deferred): 补偿顺序（先向量后行）无测试钉——修
 Task 7: minor (deferred): 端点 basename 清洗无提交测试且与 document_processor 重复（Windows 反斜杠只在一侧处理）——**归 T9 注入面回归**
 Task 7: minor (deferred): get_document 返回 None 会在提交成功后 AttributeError→500
 Task 7: parked (deferred, real): 图片型 PDF（零块非空）以 500 出场而非 422/201，spec 6.1 未覆盖此形态——最终评审/用户定夺
+
+Task 7: complete (commits `bb71106`..`cdc0b70`，impl `67cc454` + fix round 1/5 `cdc0b70`；复核：All findings addressed, no new Critical/Important；brief 断言与 fakes 不兼容的 plan bug 修法获独立确认)
+Task 7: minor (deferred): 双补偿同败时 detail 仍说「已回滚」（裁定保持原消息，真相在日志）；候选改法：rollback_ok 旗标或改文案——交最终评审定夺
+Task 7: minor (deferred): 缺"两步同时失败"合并用例（逻辑已被两个分立用例蕴含）
