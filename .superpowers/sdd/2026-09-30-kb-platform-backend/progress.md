@@ -109,3 +109,9 @@ Task 8: minor (deferred): `schemas/chat.py` 的 `mode: str` 未用 `Literal["rag
 Task 8: minor (deferred, **前端计划必携带**): history 的 user 消息 wire 上是 `references: null`（brief DTO 与测试都钉了 null，spec 6.1 未言明）——前端 MessageList 必须 `msg.references ?? []`，直接 `.length` 会在 user 行抛错。
 Task 8: minor (deferred): 422 detail 双形态（chat=FastAPI 数组、documents=字符串）——归 T9/T10 统一裁定，非本任务引入。
 Task 8: minor (deferred): "502 失败不写历史"靠构造保证（端点无 get_db、rag_system 在 save 前 raise）+ live 证据，无自动测试钉——T9 注入面回归可顺带在 rag_system 层补一条。
+
+前端计划（另一份计划，spec 十一节第 6-7 步）：`docs/superpowers/plans/2026-09-30-kb-platform-frontend.md` 已写完并提交 `cf66d7a`（2086 行，7 Task / 58 步，起草代理为分段增量写盘重派版）。起草代理留下的 5 处「以后端 Task 8 实现为准」悬置标注已随 Task 8 落地全部改写为实测事实（chat 收窄后的错误接管面、history user 行 references:null 且 restore 已 `?? []` 归一）。待用户审阅后才开前端 SDD 执行。
+
+Task 8: complete (commits `bbbbd43`..`912a88d`，impl `6ee5adc` + fix round 1/5 `912a88d`；复核：All findings addressed, no new breakage。复核者独立确认：detail 断言可区分中央 handler 与兜底 500、FakeRAG 双方法注入、StorageError 在 core/ 零抛出点、无基线污染)
+Task 8: minor (residual, ruling-inherent): 收窄后的两处 try/except 唯一独占行为只剩 logger.warning，删整块仍绿（中央映射同样 502+str(exc)）——是裁定选择保留日志，非回归。
+Task 8: minor (carried→T9): rag_system 在域错误包装之外直接调 get/save_chat_history（rag_system.py:44,56,77），MySQL 故障落兜底 500 且答案丢失——归 T9 注入面范围一并裁定。
