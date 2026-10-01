@@ -48,3 +48,5 @@ Task 1: complete — commits `533e78c` (impl) + `4b0f750` (fix round 1) — revi
 Ruling: 工程整体迁移到独立目录 `D:\知识库平台-前后端分离`（backend/ + frontend/ 两个文件夹），基线提交 `9224c69`。本 ledger 与 `docs/` 下的 spec、计划均以新路径为准；`backend/.env` 的 `CHROMA_PERSIST_DIR=D:/知识库平台-前后端分离/backend/data/chroma_db`。原项目 `D:\AI-python\知识库平台` 从此**只读**，充当 legacy Streamlit 档案（随时 `streamlit run app.py` 对照），不再往里提交任何东西。迁移校验：新位置 `python -m pytest tests` 8/8 通过。共用资源不变：解释器 `D:\python\python.exe` (3.12.3)、`D:/AI-python/.env` 只作键值来源不再被读取。
 
 Task 2: complete (原仓库 commits `d72a054`..`e80f758`，含 fix round 1；迁移后于新位置复跑 pytest 8/8 复验)
+
+Ruling (2026-10-01 修订): 新会话 Agent 工具虽有 `model` 参数，但本机无法枚举合法模型档位，盲传 ID 有派单失败风险 — 继续全部子代理继承会话模型 — 代价：机械转写型任务无法降档省钱。
