@@ -85,3 +85,7 @@ Task 6: minor (deferred): 两个新 DB 方法真实 SQL 零自动覆盖，delete
 Task 6: minor (deferred, plan-mandated): _build_references 用 d.metadata["document_id"] 直接取键，坏数据会在成功生成后 KeyError→500 且丢历史
 Task 6: minor (deferred, plan-mandated): snippet 实为 SNIPPET_LIMIT+3（"..." 在切片后追加）——**派 T8/前端时携带**，前端按 83 或自适应省略号处理
 Task 6: minor (deferred): 领域异常把原始 exc 文本透进 detail（泄露内部信息）——归 T9 注入面回归范围，派 T9 时携带
+
+Task 7: review Approved；1 条 plan bug 坐实（brief 的回滚断言与 fakes append 语义不可兼容，测试侧修法经评审独立确认）+ 2 条 Important [plan-mandated]：
+  (A) 补偿调用无守卫（delete_by_ids 抛则行不删；delete_document 抛则幽灵状态且裸异常逃逸）——Ruling: spec 坑 3 的原话就是"500 必须可信地表示整件事没发生"，补偿自身裸奔直接违背该目标，且修法被限制在 api/documents.py:49-51 三行范围内 → **进修复轮 1/5**：每步补偿各自 try/记日志，最终仍抛 StorageError。
+  (B) add_documents 半途失败（父集合已写、子集合失败）时 ids 仍为 []，补偿删不到已写父向量——Ruling: 真缺陷但修复需要 store 侧渐进式 id API（计划未预留该表面，spec 十二节本就有"入库任务化"遗留项），**parked（deferred, real）**：交最终评审与用户决定是否单开任务。
