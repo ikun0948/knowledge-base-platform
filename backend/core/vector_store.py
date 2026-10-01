@@ -1,9 +1,13 @@
+import logging
+
 import chromadb
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_core.documents import Document
+
+logger = logging.getLogger("kb.vector_store")
 
 COLLECTION_PARENT = "parent_document"
 COLLECTION_CHILD = "child_document"
@@ -49,6 +53,13 @@ class VectorStore:
             "parent": self.chroma_client.get_collection(COLLECTION_PARENT).count(),
             "child": self.chroma_client.get_collection(COLLECTION_CHILD).count(),
         }
+
+    def delete_by_ids(self, parent_ids, child_ids):
+        """回滚入口：按向量 id 删除刚写入的块（spec 第七节 坑 3 的补偿动作）。"""
+        if parent_ids:
+            self.parent_vectorstore.delete(ids=parent_ids)
+        if child_ids:
+            self.child_vectorstore.delete(ids=child_ids)
 
     def add_documents(self, parent_docs, child_docs, document_id):
         """添加文档到向量存储"""
@@ -96,6 +107,6 @@ class VectorStore:
                         page_content=results["documents"][0],
                         metadata=results["metadatas"][0] or {},
                     ))
-            except Exception as e:
-                print(f"获取父文档时出错 (parent_id: {parent_id}): {e}")
+            except Exception as exc:
+                logger.warning("获取父文档失败 parent_id=%s: %s", parent_id, exc)
         return parent_docs
