@@ -107,3 +107,49 @@
   .panel-toggle { display: inline-flex; align-self: start; }
   .chat-messages { padding: 12px; }
 }
+
+/* ---- 文档区（Task 4）：.doc-card 从 app.py 搬，margin/padding 的侧栏居中hack 改成随栏宽 ---- */
+.doc-list { display: flex; flex-direction: column; gap: 8px; }
+.doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 8px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  cursor: pointer;
+}
+.doc-card:hover,
+.doc-card-checked {
+  border-color: var(--brand-1);
+  box-shadow: var(--shadow-card-hover);
+}
+.doc-name { font-weight: 600; }
+.doc-meta { font-size: 12px; color: var(--text-muted); }
+
+.uploader { display: flex; flex-direction: column; gap: 8px; }
+.uploader-label { display: inline-flex; align-items: center; justify-content: center; }
+.file-input { display: none; }
+
+.queue { display: flex; flex-direction: column; gap: 6px; }
+.queue-item { padding: 6px 8px; background: #fff; border: 1px solid var(--border); border-radius: 6px; }
+.queue-ok { border-color: var(--ok-fg); }
+.queue-fail { background: var(--fail-bg); border-color: var(--fail-fg); }
+.queue-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.queue-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-state { color: var(--text-muted); }
+.queue-error { font-size: 12px; color: var(--fail-fg); }
+.progress { height: 6px; margin-top: 6px; overflow: hidden; background: var(--page-bg); border-radius: 3px; }
+.progress-bar { height: 100%; background: var(--grad-brand); transition: width 0.15s linear; }
+
+.metric {
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--page-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
