@@ -119,3 +119,6 @@ Task 8: minor (carried→T9): rag_system 在域错误包装之外直接调 get/s
 Task 9: 派单 BASE `2ccc952`，brief 115 行。随派单结转的裁定：(1) pytest.ini 已存在且双 marker 齐——MERGE 不 Create；(2) database.py:106,108 print→logger 归本任务；(3) detail 泄露（中央 handler str(exc)）由实施者择最小改法或如实裁定可接受；(4) 文件名清洗回归测试补 api 层；(5) mode→Literal 收编；(6) live 组须自清理、跑两遍不破 migration 基线。裁定：rag_system 历史调用不被域错误包装（T8 复核结转）OUT OF SCOPE，留最终评审。
 
 Task 10 预裁定（派单时携带）：brief Step 2 的"从本仓根 cp app.py/config/core/.streamlit 进 legacy_streamlit/"不成立——迁移后本仓根从未有过这些文件（原件在 D:/AI-python/知识库平台，且 2026-10-01 迁移裁定已确立**原目录即活体归档**，只读不改）。Ruling: Step 2 取消（再做物理拷贝=第三份真相，违 spec 7.2"最多两份"精神）；改为 legacy_streamlit/README.md 做**指路碑**（指向 D:/AI-python/知识库平台 的活体归档 + 坑 1/2/3/6 修复状态），Step 3 文档指针照做（其"坑已修复"行正是本任务该留的痕），Step 4 提交物相应为 README + 开发文档两处。若用户终审时希望物理冻结副本入库，可单独补一次 cp——不做也不损失任何 spec 判据。
+
+Task 9: complete (commits `2ccc952`..`becf535`，review: Approved / Spec ✅ 零 Critical/Important，一次过无修复轮。评审者独立复核：全异常面 str(exc)→detail 路径枚举、posix 非空转探针、live 组不触 Chroma、migration 基线不可漂移）
+Task 9: ruling: 8 条 Minor 不进修复轮（均测试加固/既有健壮性）；其中值得终评后一并处理的：#1 posix 模拟可静默空转（fixture 内补一句 assert documents_api.os.path is posixpath）、#4 >255 字符文件名在回滚 try 之外撞 String(255)→兜底 500（预存在，非泄露）、#6 live 测试红时探针行残留、#7 live skip 捕 Exception 过宽会掩真回归。归**最终评审后的单次修复 dispatch**候选清单。
