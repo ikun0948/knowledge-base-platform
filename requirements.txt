@@ -1,0 +1,21 @@
+# 记录实测已装版本；本机 python 是 D:\python\python.exe (3.12.3)，不是 D:/AI-python/.venv。
+# 约束：只新增不升级（详见 plan 的 Global Constraints）；本文件当前描述的是"已满足"的状态。
+fastapi>=0.141
+uvicorn>=0.52
+python-multipart>=0.0.32
+python-dotenv>=1.2
+sqlalchemy>=2.0,<2.1
+pymysql>=1.1
+chromadb>=1.5,<2
+langchain-core>=1.6
+langchain-openai>=1.1
+langchain-chroma>=1.1
+langchain-huggingface>=1.2
+langchain-text-splitters>=1.1
+langchain-community>=0.3
+langchain-classic>=1.0
+sentence-transformers>=6.0
+pypdf>=6.16
+docx2txt>=0.9
+pytest>=9.0
+httpx>=0.28

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 配置与密钥：真实 .env 永不入库，只提交 .env.example
+.env
+backend/.env
+
+# 向量库数据（本地持久化，体积大且与代码无关）
+backend/data/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+*.local
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/

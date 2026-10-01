@@ -1,0 +1,197 @@
+# Review package: d72a054..bf2398d
+
+## Commits
+bf2398d test(backend): 搬家校验改为身份比对且不再写入迁移后的库
+98b5bbc docs: 修正旧 Chroma 库真实路径与计数取法（Task 2 实测）
+
+## Files changed
+ backend/pytest.ini                                 |  4 ++
+ backend/tests/test_chroma_data.py                  | 44 ++++++++++++++++++----
+ .../plans/2026-09-30-kb-platform-backend.md        | 14 +++++--
+ ...30-kb-platform-frontend-backend-split-design.md |  2 +-
+ ...274\200\345\217\221\346\226\207\346\241\243.md" |  2 +-
+ 5 files changed, 53 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/backend/pytest.ini b/backend/pytest.ini
+new file mode 100644
+index 0000000..89680df
+--- /dev/null
++++ b/backend/pytest.ini
+@@ -0,0 +1,4 @@
++[pytest]
++markers =
++    migration: 一次性搬家校验（钉住迁移后那份库的计数与 id 基线），新数据入库后不再适用
++    live: 需要真实 MySQL/Chroma 的联调测试，Task 9 用 -m "not live" / -m live 显式选择
+diff --git a/backend/tests/test_chroma_data.py b/backend/tests/test_chroma_data.py
+index 3d55227..4cf0238 100644
+--- a/backend/tests/test_chroma_data.py
++++ b/backend/tests/test_chroma_data.py
+@@ -1,16 +1,44 @@
++import shutil
+ from pathlib import Path
+ 
+ import chromadb
+-from config.config import Config
++import pytest
++from config.config import BASE_DIR, Config
+ 
+-# 搬家前在旧目录实测的计数，作为"数据没丢"的判据（spec 第十节判据 1）
++# 搬家前在旧库实测的计数，Task 3 的 /api/health 共用这两个常量
+ PARENT_COUNT = 2
+ CHILD_COUNT = 7
+ 
++# 计数看不出"掉一行又补一行"，身份基线才证明活下来的是这几条（迁移后的库实测）
++PARENT_IDS = [
++    "a677b2f1-63b5-4836-aae5-c86355093902",
++    "e3985550-9937-42d9-a13a-acb7c75ca1ed",
++]
++CHILD_IDS = [
++    "42d647ea-3be1-4d21-a5c5-ea0d760477af",
++    "584148b1-9a83-4336-bdcc-a491f2ea08c9",
++    "770d63d5-685b-4256-9916-1c19c1ba6cb3",
++    "7ab5915f-b357-4544-8f43-09d7366e1aaf",
++    "b2e1cbda-1235-486e-94c5-bc76a077f393",
++    "c276a890-fb5a-4bbd-8323-611e9ac238d3",
++    "ee6ccabc-d25a-49af-b843-f1ced132a151",
++]
+ 
+-def test_collection_counts_survived_the_move():
+-    # PersistentClient 会把缺失的目录新建成空库，先确认打开的是搬过来的那一份
+-    assert (Path(Config.CHROMA_PERSIST_DIR) / "chroma.sqlite3").is_file()
+-    client = chromadb.PersistentClient(path=Config.CHROMA_PERSIST_DIR)
+-    counts = {c.name: client.get_collection(c.name).count() for c in client.list_collections()}
+-    assert counts == {"parent_document": PARENT_COUNT, "child_document": CHILD_COUNT}
++
++@pytest.mark.migration
++def test_collection_identity_survived_the_move(tmp_path):
++    # 旧库同样是绝对路径且计数一致，不钉住路径这条就能整体验证别的东西
++    assert Path(Config.CHROMA_PERSIST_DIR).resolve() == BASE_DIR / "data" / "chroma_db"
++    # PersistentClient 对不存在的路径会静默新建空库，先确认打开的是搬过来的那一份
++    sqlite = Path(Config.CHROMA_PERSIST_DIR) / "chroma.sqlite3"
++    assert sqlite.is_file(), f"{sqlite} 不存在：向量库未搬家，先把旧库复制进 backend/data/chroma_db"
++    # 打开持久化库本身就会回写 chroma.sqlite3，所以校验跑在 tmp_path 副本上，不碰迁移后的数据
++    store = tmp_path / "chroma_db"
++    shutil.copytree(Config.CHROMA_PERSIST_DIR, store)
++    collections = {c.name: c for c in chromadb.PersistentClient(path=str(store)).list_collections()}
++    assert {n: c.count() for n, c in collections.items()} == {
++        "parent_document": PARENT_COUNT,
++        "child_document": CHILD_COUNT,
++    }
++    assert sorted(collections["parent_document"].get()["ids"]) == sorted(PARENT_IDS)
++    assert sorted(collections["child_document"].get()["ids"]) == sorted(CHILD_IDS)
+diff --git a/docs/superpowers/plans/2026-09-30-kb-platform-backend.md b/docs/superpowers/plans/2026-09-30-kb-platform-backend.md
+index d11e38d..a840ddc 100644
+--- a/docs/superpowers/plans/2026-09-30-kb-platform-backend.md
++++ b/docs/superpowers/plans/2026-09-30-kb-platform-backend.md
+@@ -259,45 +259,53 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): 
+ - Create: `backend/data/chroma_db/`（复制）、`backend/tests/test_chroma_data.py`
+ 
+ **Interfaces:**
+ - Consumes: `Config.CHROMA_PERSIST_DIR`
+ - Produces: 断言基线 `PARENT_COUNT = 2`、`CHILD_COUNT = 7`，Task 3 的 `/api/health` 用同一组常量
+ 
+ - [ ] **Step 1: 复制数据目录**
+ 
+ ```bash
+ cd "D:/AI-python/知识库平台"
+-cp -r "D:/AI-python/core/chroma_db" backend/data/chroma_db
++cp -r "D:/AI-python/langchain框架/core/chroma_db" backend/data/chroma_db
+ ls backend/data/chroma_db
+ ```
+ 
+-原目录 `D:/AI-python/core/chroma_db` **保留不动**（回退只需把 `.env` 那行改回去）。
++原目录 `D:/AI-python/langchain框架/core/chroma_db` **保留不动**（回退只需把 `.env` 那行改回去）。
++
++> **事实修正（Task 2 实测）**：本节原写源目录为 `D:/AI-python/core/chroma_db`，该路径**不存在**（`find D:/AI-python -maxdepth 4 -type d -name chroma_db` 只有 `langchain框架/core/chroma_db` 与本计划的 `backend/data/chroma_db` 两个结果）。判定 `langchain框架/core/chroma_db` 就是本项目旧库的证据：其 `parent_document` 里两条记录的 metadata 为 `parent_id: deepseek简介.docx_parent_0 / _1`、`document_id: '1'`，与 MySQL `documents.id=1`（`deepseek简介.docx`）和 `parent_chunks.parent_id` 两行逐一对应，计数 2/7 也与 `parent_chunks`/`child_chunks` 行数一致。这也解释了坑 2 为何危险：`../core/chroma_db` 只有在 cwd 位于 `langchain框架` 下时才落到真实旧库，其它启动目录会静默新建空库。
+ 
+ - [ ] **Step 2: 写搬家校验测试**
+ 
+ `backend/tests/test_chroma_data.py`：
+ 
+ ```python
++from pathlib import Path
++
+ import chromadb
+ from config.config import Config
+ 
+ # 搬家前在旧目录实测的计数，作为"数据没丢"的判据（spec 第十节判据 1）
+ PARENT_COUNT = 2
+ CHILD_COUNT = 7
+ 
+ 
+ def test_collection_counts_survived_the_move():
++    # PersistentClient 对不存在的路径会静默新建空库，所以先证明这确实是搬进来的库
++    assert (Path(Config.CHROMA_PERSIST_DIR) / "chroma.sqlite3").exists()
+     client = chromadb.PersistentClient(path=Config.CHROMA_PERSIST_DIR)
+-    counts = {c.name: c.count() for c in client.list_collections()}
++    counts = {c.name: client.get_collection(c.name).count() for c in client.list_collections()}
+     assert counts == {"parent_document": PARENT_COUNT, "child_document": CHILD_COUNT}
+ ```
+ 
++`list_collections()` 返回的对象在本机 chromadb 1.5.9 上没有 `count()`，必须用 `client.get_collection(name).count()` 取计数。
++
+ - [ ] **Step 3: 运行**
+ 
+ ```bash
+ cd "D:/AI-python/知识库平台/backend" && python -m pytest tests/test_chroma_data.py -v
+ ```
+ 预期：PASS。若 FAIL 且计数为 0，先确认 `cp -r` 是否把整棵目录（含 `chroma.sqlite3`）复制完整，**不要**改测试里的常量去"适配"结果。
+ 
+ - [ ] **Step 4: 提交**
+ 
+ ```bash
+diff --git a/docs/superpowers/specs/2026-09-30-kb-platform-frontend-backend-split-design.md b/docs/superpowers/specs/2026-09-30-kb-platform-frontend-backend-split-design.md
+index 792f95b..bf3acf8 100644
+--- a/docs/superpowers/specs/2026-09-30-kb-platform-frontend-backend-split-design.md
++++ b/docs/superpowers/specs/2026-09-30-kb-platform-frontend-backend-split-design.md
+@@ -180,21 +180,21 @@ frontend/
+ - 实现要点：`rag_system` 增加 `chat_with_documents_stream()`（`llm.stream()` 版），写历史放在生成完成后；生成中途断流时**不写半截历史**（宁可不写，也不写进 `chat_history` 一条残缺答案污染后续上下文）。
+ - 收益：首字延迟从"检索 + 压缩 + 生成"降到"检索 + 压缩"。`LLMChainExtractor` 的 N 次 LLM 调用仍在这段等待里，前端靠先发 `meta` + 引用帧填充。
+ 
+ ---
+ 
+ ## 七、本次顺带修的 5 个问题
+ 
+ | 编号 | 问题 | 修法 | 为什么本次必须修 |
+ |---|---|---|---|
+ | 坑 1 | `default=datetime.now()`（4 张表，类定义时求值一次）→ 所有记录时间戳都是进程启动那一刻 | 改为 `default=datetime.now`（传函数引用） | 前端要显示上传时间，不修就是显示假时间，排错时误导。**限定**：只影响此后新写入的行，库里已有的记录仍是假的启动时刻，不会自动修正 |
+-| 坑 2 | `CHROMA_PERSIST_DIR=../core/chroma_db` 相对 cwd；换启动目录 = 静默换库 | `.env` 写绝对路径 `D:/AI-python/知识库平台/backend/data/chroma_db`，并 copy 现有 1.2M 数据过去（原 `D:\AI-python\core\chroma_db` 保留不动） | `uvicorn` 一启动 cwd 就变，不修立刻表现为"向量库凭空消失" |
++| 坑 2 | `CHROMA_PERSIST_DIR=../core/chroma_db` 相对 cwd；换启动目录 = 静默换库 | `.env` 写绝对路径 `D:/AI-python/知识库平台/backend/data/chroma_db`，并 copy 现有 1.2M 数据过去（原 `D:\AI-python\langchain框架\core\chroma_db` 保留不动） | `uvicorn` 一启动 cwd 就变，不修立刻表现为"向量库凭空消失"。实施时实测：旧库真实位置是 `langchain框架/core/chroma_db`（`../core/chroma_db` 只有从 `langchain框架` 下启动才命中），其 metadata `parent_id: deepseek简介.docx_parent_0/_1`、`document_id: '1'` 与 MySQL 逐条对应 |
+ | 坑 3 | MySQL 与 Chroma 无事务：向量已写、块记录写失败 → 检索命中却回溯不到父块 | `save_chunks` 抛异常时补偿：`vector_store.delete_by_ids(parent_ids + child_ids)` + 删除刚插入的 `documents` 行，再抛 `HTTPException(500)`。**注意 `delete_by_ids` 现在不存在，是本次在 `VectorStore` 新增的方法**（按 ids 从对应集合删） | 上传从函数调用变成 HTTP 接口后，500 必须是可信的"整件事没发生" |
+ | 坑 6 | 检索到的文档内容直接拼进 HTML（`unsafe_allow_html=True`），含 `<` 即破坏结构 | Vue 用 `{{ }}` 文本插值 + `white-space: pre-wrap`，**全程不出现 `v-html`** | 拆分顺带解决；将来若要 Markdown 必须 `marked` + `DOMPurify` 成对引入 |
+ | 新增（原 16 条未记） | `rag_system` 两个方法 `except` 后**把错误文本当答案返回**，于是 `"RAG对话出错: ..."` 被写进 `chat_history` 并作为后续对话上下文喂给 LLM | `rag_system` 不再吞异常，改为抛出；`api/chat.py` 捕获后转 `502`，**且不写历史** | 前端会把这串红字当成正常答案显示，且污染上下文——这是数据正确性问题，不是显示问题 |
+ 
+ `used_chunks` 补写：`save_chat_history(..., used_chunks=json.dumps(refs, ensure_ascii=False))`，读取时 `json.loads`。约 10 行，顺带就是把坑 4 的 `str(dict)` 写法用对。
+ 
+ ### 7.1 配置来源（坑 2 的具体落法）
+ 
+ 现状：`config.py` 里是无参 `load_dotenv()`，python-dotenv 从调用文件所在目录逐级向上找，实际命中的是 `D:\AI-python\.env`——那个文件同时服务同目录下的 `code01`/`code02`/`code03` 等其它脚本，属于**跨项目共用文件**。
+ 
+diff --git "a/\347\237\245\350\257\206\345\272\223\345\271\263\345\217\260\345\274\200\345\217\221\346\226\207\346\241\243.md" "b/\347\237\245\350\257\206\345\272\223\345\271\263\345\217\260\345\274\200\345\217\221\346\226\207\346\241\243.md"
+index 758ce7c..79a070b 100644
+--- "a/\347\237\245\350\257\206\345\272\223\345\271\263\345\217\260\345\274\200\345\217\221\346\226\207\346\241\243.md"
++++ "b/\347\237\245\350\257\206\345\272\223\345\271\263\345\217\260\345\274\200\345\217\221\346\226\207\346\241\243.md"
+@@ -374,21 +374,21 @@ streamlit run app.py
+ 
+ 需要补的工程基建（目前**都没有**）：`requirements.txt`、`.env.example`、`README`、任何单元测试、文档删除入口。
+ 
+ ---
+ 
+ ## 七、已知问题与坑（按严重度）
+ 
+ ### 高危
+ 
+ 1. **`default=datetime.now()` 在类定义时求值一次**（`database.py:18, 35, 58, 81`）。四张表的所有记录会拿到**进程启动那一刻**的相同时间戳。应写 `default=datetime.now`（传函数引用）或 `default=lambda: datetime.now()`。侧边栏显示的"🕒 上传时间"因此是假的，排错时会误导。
+-2. **`CHROMA_PERSIST_DIR` 默认值 `"../core/chroma_db"` 是相对 cwd 的**。从项目根启动时它实际指向 `D:\AI-python\core\chroma_db`（已确认该目录存在，在项目外面）。换启动目录 = 静默换库 = "向量凭空消失"。改绝对路径。
++2. **`CHROMA_PERSIST_DIR` 默认值 `"../core/chroma_db"` 是相对 cwd 的**。实测真实旧库在 `D:\AI-python\langchain框架\core\chroma_db`（即只有从 `langchain框架` 目录下启动才命中；早前本文写的 `D:\AI-python\core\chroma_db` 并不存在，是被误记的路径）。换启动目录 = 静默换库 = "向量凭空消失"，而且 `chromadb.PersistentClient` 对不存在的路径会**静默新建空库**，不报错。改绝对路径。
+ 3. **MySQL 与 Chroma 之间没有事务**。`add_documents` 成功而 `save_chunks` 失败时，向量已入库但关系库无记录 → 检索命中却回溯不到父块，且界面上看不到这个文档。需要：`save_chunks` 失败时回滚删除刚写入的 vector_ids，或入库前先做去重检查。
+ 
+ ### 中危
+ 
+ 4. `json_metadata = str(doc.metadata)`（`database.py:141, 159`）存的是 Python dict 的 `repr`（单引号），**不是合法 JSON**，`json.loads` 会失败。应 `json.dumps(..., ensure_ascii=False)`。
+ 5. **同名文件会互相覆盖选项**：`doc_options = {doc.filename: doc.id for doc in documents}`（`app.py:385`）用文件名当 dict 键，两个同名文档只剩一个 id；下拉里却显示一张卡。键改成 `f"{filename} (#{id})"`。
+ 6. **检索到的文档内容被直接拼进 HTML**（`render_message_html` 里 `{text}` + `unsafe_allow_html=True`）。文档里含 `<` / `<script>` 时会破坏气泡结构，属于注入面。应 `html.escape()`。
+ 7. `get_parent_documents_by_metadata` 对每个 parent_id 发一次 `where` 查询（`vector_store.py:79-84`），N 次往返。Chroma 支持 `{"parent_id": {"$in": [...]}}` 一次拿完。
+ 8. **`parent_id` 是 `String(100)`**，值为 `{文件名}_parent_{i}`。长中文文件名 + 大 i 有截断风险（MySQL 严格模式下会直接抛错）。
+ 9. `model="qwen3.8-max"`（`vector_store.py:38`、`rag_system.py:17`）**硬编码了两处**，且该名称不像有效的 DashScope 模型 id。应进 `.env`；另外改 embedding 模型时**必须重建 Chroma 集合**——集合里没记录模型版本，混用维度会静默返回垃圾结果。

@@ -1,0 +1,32 @@
+# Review package: 4b0f750..d72a054
+
+## Commits
+d72a054 test(backend): Chroma 搬家后集合计数与旧库一致
+
+## Files changed
+ backend/tests/test_chroma_data.py | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+## Diff
+diff --git a/backend/tests/test_chroma_data.py b/backend/tests/test_chroma_data.py
+new file mode 100644
+index 0000000..3d55227
+--- /dev/null
++++ b/backend/tests/test_chroma_data.py
+@@ -0,0 +1,16 @@
++from pathlib import Path
++
++import chromadb
++from config.config import Config
++
++# 搬家前在旧目录实测的计数，作为"数据没丢"的判据（spec 第十节判据 1）
++PARENT_COUNT = 2
++CHILD_COUNT = 7
++
++
++def test_collection_counts_survived_the_move():
++    # PersistentClient 会把缺失的目录新建成空库，先确认打开的是搬过来的那一份
++    assert (Path(Config.CHROMA_PERSIST_DIR) / "chroma.sqlite3").is_file()
++    client = chromadb.PersistentClient(path=Config.CHROMA_PERSIST_DIR)
++    counts = {c.name: client.get_collection(c.name).count() for c in client.list_collections()}
++    assert counts == {"parent_document": PARENT_COUNT, "child_document": CHILD_COUNT}

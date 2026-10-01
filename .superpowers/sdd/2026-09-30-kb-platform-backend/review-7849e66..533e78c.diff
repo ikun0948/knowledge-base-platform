@@ -1,0 +1,700 @@
+# Review package: 7849e66..533e78c
+
+## Commits
+533e78c feat(backend): 骨架与配置层，.env 定位脱离 cwd
+
+## Files changed
+ backend/.env.example               |  16 +++
+ backend/api/__init__.py            |   0
+ backend/config/__init__.py         |   0
+ backend/config/config.py           |  37 +++++++
+ backend/core/__init__.py           |   0
+ backend/core/database.py           | 213 +++++++++++++++++++++++++++++++++++++
+ backend/core/document_processor.py |  85 +++++++++++++++
+ backend/core/rag_system.py         | 116 ++++++++++++++++++++
+ backend/core/vector_store.py       |  92 ++++++++++++++++
+ backend/schemas/__init__.py        |   0
+ backend/tests/__init__.py          |   0
+ backend/tests/conftest.py          |   6 ++
+ backend/tests/test_config.py       |  20 ++++
+ requirements.txt                   |  21 ++++
+ 14 files changed, 606 insertions(+)
+
+## Diff
+diff --git a/backend/.env.example b/backend/.env.example
+new file mode 100644
+index 0000000..d92df1e
+--- /dev/null
++++ b/backend/.env.example
+@@ -0,0 +1,16 @@
++# 复制为 backend/.env 后填写。.env 已被 .gitignore 排除，永不入库。
++# 注意：D:/AI-python/.env 是其它脚本共用的，本项目不再读它（spec 7.1）。
++DASHSCOPE_API_KEY=
++DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
++# 本地 sentence-transformers 模型目录；换模型必须重建 Chroma 集合
++LOCAL_MODEL_PATH=
++MYSQL_HOST=localhost
++MYSQL_PORT=3306
++MYSQL_USER=root
++MYSQL_PASSWORD=
++MYSQL_DATABASE=mydb
++# 必须是绝对路径（坑 2）
++CHROMA_PERSIST_DIR=/absolute/path/to/backend/data/chroma_db
++CHUNK_SIZE=1000
++CHUNK_OVERLAP=200
++TOP_K=5
+diff --git a/backend/api/__init__.py b/backend/api/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/config/__init__.py b/backend/config/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/config/config.py b/backend/config/config.py
+new file mode 100644
+index 0000000..aeb6496
+--- /dev/null
++++ b/backend/config/config.py
+@@ -0,0 +1,37 @@
++import os
++from pathlib import Path
++from dotenv import load_dotenv
++
++# BASE_DIR 由本文件位置推导，不依赖启动时的 cwd（spec 7.1）
++BASE_DIR = Path(__file__).resolve().parent.parent
++ENV_FILE = BASE_DIR / ".env"
++
++if not ENV_FILE.exists():
++    raise RuntimeError(
++        f"缺少配置文件 {ENV_FILE}：请复制 backend/.env.example 为 backend/.env 并填入真实值"
++    )
++
++load_dotenv(ENV_FILE)
++
++
++class Config:
++    OPENAI_API_KEY = os.getenv("DASHSCOPE_API_KEY")
++    OPENAI_BASE_URL = os.getenv("DASHSCOPE_BASE_URL")
++    LOCAL_MODEL_PATH = os.getenv("LOCAL_MODEL_PATH")
++
++    MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
++    MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
++    MYSQL_USER = os.getenv("MYSQL_USER", "root")
++    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
++    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "mydb")
++
++    CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "")
++    _chroma = Path(CHROMA_PERSIST_DIR)
++    if not _chroma.is_absolute():
++        raise RuntimeError(
++            f"CHROMA_PERSIST_DIR 必须是绝对路径，当前为 {CHROMA_PERSIST_DIR!r}（坑 2）"
++        )
++
++    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
++    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
++    TOP_K = int(os.getenv("TOP_K", 5))
+diff --git a/backend/core/__init__.py b/backend/core/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/core/database.py b/backend/core/database.py
+new file mode 100644
+index 0000000..41a0ba1
+--- /dev/null
++++ b/backend/core/database.py
+@@ -0,0 +1,213 @@
++from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
++from sqlalchemy.dialects.mysql import MEDIUMTEXT
++from sqlalchemy.ext.declarative import declarative_base
++from sqlalchemy.orm import sessionmaker, relationship
++from datetime import datetime
++
++Base = declarative_base()
++
++# 定义一个创建documents表的类
++class Document(Base):
++    __tablename__ = 'documents'
++
++    id = Column(Integer, primary_key=True, autoincrement=True)
++    filename = Column(String(255), nullable=False)
++    file_path = Column(String(500), nullable=False)
++    content = Column(MEDIUMTEXT, nullable=False)
++    chunk_count = Column(Integer, default=0)
++    created_at = Column(DateTime, default=datetime.now())
++    is_active = Column(Boolean, default=True)
++
++    # 关联关系 设定一对多表 ParentChunk 关联模型 back_populates 关联字段 cascade级联操作(删除操作)
++    parent_chunks = relationship("ParentChunk", back_populates="document", cascade="all, delete-orphan")
++    child_chunks = relationship("ChildChunk", back_populates="document", cascade="all, delete-orphan")
++
++# 父文档表
++class ParentChunk(Base):
++    __tablename__ = 'parent_chunks'
++
++    id = Column(Integer, primary_key=True, autoincrement=True)
++    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
++    parent_id = Column(String(100), nullable=False, unique=True)  # 父文档唯一标识
++    content = Column(Text, nullable=False)
++    json_metadata = Column(Text)  # JSON格式存储元数据
++    vector_id = Column(String(100))  # Chroma中的向量ID
++    created_at = Column(DateTime, default=datetime.now())
++
++    # 关联关系
++    document = relationship("Document", back_populates="parent_chunks")
++    child_chunks = relationship("ChildChunk", back_populates="parent_chunk", cascade="all, delete-orphan")
++
++    # 索引  提高查询效率 通过树结构快速定位
++    __table_args__ = (
++        Index('idx_parent_document_id', 'document_id'),
++        Index('idx_parent_id', 'parent_id'),
++    )
++
++# 子文档表
++class ChildChunk(Base):
++    __tablename__ = 'child_chunks'
++
++    id = Column(Integer, primary_key=True, autoincrement=True)
++    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
++    parent_chunk_id = Column(Integer, ForeignKey('parent_chunks.id'), nullable=False)
++    child_id = Column(String(100), nullable=False)  # 子文档标识
++    content = Column(Text, nullable=False)
++    json_metadata = Column(Text)  # JSON格式存储元数据
++    vector_id = Column(String(100))  # Chroma中的向量ID
++    created_at = Column(DateTime, default=datetime.now())
++
++    # 关联关系
++    document = relationship("Document", back_populates="child_chunks")
++    parent_chunk = relationship("ParentChunk", back_populates="child_chunks")
++
++    # 索引
++    __table_args__ = (
++        Index('idx_child_document_id', 'document_id'),
++        Index('idx_child_parent_id', 'parent_chunk_id'),
++        Index('idx_child_id', 'child_id'),
++    )
++
++# 历史聊天记录表
++class ChatHistory(Base):
++    __tablename__ = 'chat_history'
++
++    id = Column(Integer, primary_key=True, autoincrement=True)
++    session_id = Column(String(100), nullable=False)
++    user_message = Column(Text, nullable=False)
++    assistant_message = Column(Text, nullable=False)
++    document_ids = Column(String(500))  # 存储使用的文档ID，逗号分隔
++    used_chunks = Column(Text)  # JSON格式存储使用的文档块信息
++    created_at = Column(DateTime, default=datetime.now())
++
++    # 索引
++    __table_args__ = (
++        Index('ix_chat_history_session_id_created_at', 'session_id', 'created_at'),
++        # 如果需要单独为 created_at 建立索引（例如全局清理旧数据时按时间查询）：
++        # Index('ix_chat_history_created_at', 'created_at'),
++    )
++
++class DatabaseManager:
++    def __init__(self, config):
++        self.config = config
++        self.engine = None
++        self.SessionLocal = None
++        self.init_database()
++
++    def init_database(self):
++        # 创建数据库连接
++        connection_string = f"mysql+pymysql://{self.config.MYSQL_USER}:{self.config.MYSQL_PASSWORD}@{self.config.MYSQL_HOST}:{self.config.MYSQL_PORT}/{self.config.MYSQL_DATABASE}?charset=utf8"
++
++        try:
++            self.engine = create_engine(connection_string,echo=False)
++            # 创建所有的表
++            Base.metadata.create_all(self.engine)
++            self.SessionLocal = sessionmaker(bind=self.engine)
++            print("数据库连接成功")
++        except Exception as e:
++            print(f"数据库连接失败: {e}")
++            raise
++
++    def get_session(self):
++        return self.SessionLocal()
++
++    def save_document(self, filename, file_path, content, chunk_count=0):
++        """保存文档主记录，返回doc_id"""
++        session = self.get_session()
++        try:
++            doc = Document(
++                filename=filename,
++                file_path=file_path,
++                content=content,
++                chunk_count=chunk_count
++            )
++            session.add(doc)
++            session.commit()
++            return doc.id
++        finally:
++            session.close()
++
++    def save_chunks(self, doc_id, parent_docs, child_docs, parent_vector_ids, child_vector_ids):
++        """保存父子文档块，并关联文档id与向量id"""
++        session = self.get_session()
++        try:
++            # 保存父文档块
++            parent_chunk_map = {}  # parent_id -> parent_chunk_id 映射
++            for i, (parent_doc, vector_id) in enumerate(zip(parent_docs, parent_vector_ids)):
++                parent_chunk = ParentChunk(
++                    document_id=doc_id,
++                    parent_id=parent_doc.metadata.get('parent_id', f'parent_{i}'),
++                    content=parent_doc.page_content,
++                    json_metadata=str(parent_doc.metadata),
++                    vector_id=vector_id
++                )
++                session.add(parent_chunk)
++                session.flush()
++                # 把父文档parent_id和父文档表的id进行绑定 "txt_parent_0": 1
++                parent_chunk_map[parent_chunk.parent_id] = parent_chunk.id
++
++            # 保存子文档块
++            for child_doc, vector_id in zip(child_docs, child_vector_ids):
++                parent_id = child_doc.metadata.get('parent_id', 'unknown')
++                parent_chunk_id = parent_chunk_map.get(parent_id) # 得到父文档表的id
++
++                child_chunk = ChildChunk(
++                    document_id=doc_id,
++                    parent_chunk_id=parent_chunk_id,
++                    child_id=child_doc.metadata.get('child_id', f'child_{len(child_docs)}'),
++                    content=child_doc.page_content,
++                    json_metadata=str(child_doc.metadata),
++                    vector_id=vector_id
++                )
++                session.add(child_chunk)
++
++            session.commit()
++
++        except Exception as e:
++            session.rollback()
++            raise e
++
++        finally:
++            session.close()
++
++    def get_all_documents(self):
++        # 返回Document表中is_active == True的所有数据
++        session = self.get_session()
++        try:
++            docs = session.query(Document).filter(Document.is_active == True).all()
++            return docs
++        finally:
++            session.close()
++
++    # 获取历史聊天记录
++    def get_chat_history(self, session_id, limit=10):
++        # 获取数据库操作游标
++        session = self.get_session()
++        try:
++            chats = session.query(ChatHistory).filter(
++                ChatHistory.session_id == session_id
++            ).order_by(ChatHistory.id.desc()).limit(limit).all()
++            return list(reversed(chats))
++        finally:
++            session.close()
++
++    # 保存历史聊天记录
++    def save_chat_history(self, session_id, user_message, assistant_message, document_ids=None, used_chunks=None):
++        session = self.get_session()
++        try:
++            chat = ChatHistory(
++                session_id=session_id,
++                user_message=user_message,
++                assistant_message=assistant_message,
++                document_ids=document_ids,
++                used_chunks=used_chunks
++            )
++            session.add(chat)
++            session.commit()
++        except Exception as e:
++            session.rollback()
++            raise e
++        finally:
++            session.close()
++
++
+diff --git a/backend/core/document_processor.py b/backend/core/document_processor.py
+new file mode 100644
+index 0000000..e7e8740
+--- /dev/null
++++ b/backend/core/document_processor.py
+@@ -0,0 +1,85 @@
++from langchain_text_splitters import RecursiveCharacterTextSplitter
++from langchain_community.document_loaders import PyPDFLoader, TextLoader
++from langchain_community.document_loaders import Docx2txtLoader
++import os
++import tempfile
++
++# 文档分割（父子索引）
++class DocumentProcessor:
++    def __init__(self, config):
++        self.config = config
++        self.text_splitter = RecursiveCharacterTextSplitter(
++            chunk_size=self.config.CHUNK_SIZE,
++            chunk_overlap=self.config.CHUNK_OVERLAP,
++            separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
++        )
++
++        # 父子文档分割器（RAG 父子检索 / 多向量检索方案）
++        self.parent_splitter = RecursiveCharacterTextSplitter(
++            chunk_size=self.config.CHUNK_SIZE * 2,  # 父文档块更大
++            chunk_overlap=self.config.CHUNK_OVERLAP,
++            separators=["\n\n", "\n", "。", "！", "？"]
++        )
++
++        self.child_splitter = RecursiveCharacterTextSplitter(
++            chunk_size=self.config.CHUNK_SIZE // 2,  # 子文档块更小
++            chunk_overlap=self.config.CHUNK_OVERLAP // 2,
++            separators=["\n", "。", "！", "？", ".", "!", "?", " "]
++        )
++
++    def load_document(self, uploaded_file):
++        """加载上传的文档"""
++        # 保存临时文件，suffix获取后缀（UploadedFile 是 BytesIO 子类，后缀只能从其 name 取）
++        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
++            # 获取当前数据
++            tmp_file.write(uploaded_file.getvalue())
++            # 获取当前临时文件地址
++            tmp_path = tmp_file.name
++        print(tmp_path)
++
++        try:
++            # 根据当前文件的类型选择加载器
++            if uploaded_file.name.endswith('.pdf'):
++                loader = PyPDFLoader(tmp_path)
++            elif uploaded_file.name.endswith('.docx'):
++                loader = Docx2txtLoader(tmp_path)
++            elif uploaded_file.name.endswith('.txt'):
++                loader = TextLoader(tmp_path, encoding='utf-8')
++            else:
++                raise ValueError(f"不支持当前文件的类型: {uploaded_file.name}")
++
++            documents = loader.load()
++            return documents
++
++        finally:
++            # 清理临时文件
++            if os.path.exists(tmp_path):
++                os.unlink(tmp_path)
++
++    def create_parent_child_chunks(self, documents, fileName):
++        """创建父子文档块"""
++        parent_docs = self.parent_splitter.split_documents(documents)
++        child_docs = []
++
++        for i, parent_doc in enumerate(parent_docs):
++            # 为每个父文档创建唯一ID
++            parent_id = f"{fileName}_parent_{i}"
++            parent_doc.metadata['parent_id'] = parent_id
++            # 添加doc_type字段: 父文档 or 子文档
++            parent_doc.metadata['doc_type'] = 'parent'
++
++            # 从父文档创建子文档, [parent_doc]包装成list
++            child_chunks = self.child_splitter.split_documents([parent_doc])
++            for j, child_doc in enumerate(child_chunks):
++                # 用id进行关联
++                child_doc.metadata['parent_id'] = parent_id
++                # 第 n 个父文档中的第 m 个子文档，如：child_0_1
++                child_doc.metadata['child_id'] = f"child_{i}_{j}"
++                child_doc.metadata['doc_type'] = 'child'
++                child_docs.append(child_doc)
++
++        # 获取到父文档 子文档
++        # 父文档 documents(metadata={'parent_id': 'aaa.txt_parent_0', 'doc_type': "parent"}, page_conten='文档内容')
++        # 子文档 documents(metadata={'parent_id': 'aaa.txt_parent_0', 'doc_type': "child", 'child_id': 'child_0_0'}, page_conten='文档内容'
++
++        return parent_docs, child_docs
+\ No newline at end of file
+diff --git a/backend/core/rag_system.py b/backend/core/rag_system.py
+new file mode 100644
+index 0000000..6ef67d8
+--- /dev/null
++++ b/backend/core/rag_system.py
+@@ -0,0 +1,116 @@
++from langchain_openai import ChatOpenAI
++from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
++from langchain_core.messages import HumanMessage, AIMessage
++import uuid
++
++
++class RAGSystem:
++    def __init__(self, config, db_manager, vector_store):
++        self.config = config
++        self.db_manager = db_manager
++        self.vector_store = vector_store
++
++        # 初始化LLM（通义千问，兼容OpenAI接口格式）
++        self.llm = ChatOpenAI(
++            api_key=config.OPENAI_API_KEY,
++            base_url=config.OPENAI_BASE_URL,
++            model="qwen3.8-max",
++            temperature=0.7,
++            streaming=True,
++        )
++
++        self.rag_prompt = ChatPromptTemplate.from_messages([
++            ("system", """你是一个智能助手。请基于以下上下文信息回答用户的问题。如果上下文中没有相关信息，请诚实地说明。
++        上下文信息:
++        {context}"""),
++            MessagesPlaceholder(variable_name="chat_history"),
++            ("human", "{question}")
++        ])
++
++
++    def generate_session_id(self):
++        # 生成会话id 判断是否是同一个用户
++        return str(uuid.uuid4())
++
++    def normal_chat(self, question, session_id):
++        """普通对话（不使用文档）"""
++        try:
++            # 获取历史对话
++            chat_history = self.db_manager.get_chat_history(session_id)
++
++            # 构建对话上下文
++            messages = []
++            for chat in chat_history[-5:]:  # 最近5轮对话
++                messages.append(f"Human: {chat.user_message}")
++                messages.append(f"Assistant: {chat.assistant_message}")
++
++            # 添加当前问题
++            messages.append(f"Human: {question}")
++
++            conversation_context = "\n".join(messages)
++
++            # 生成回答
++            response = self.llm.invoke(conversation_context + "\nAssistant:")
++            answer = response.content
++
++            # 保存对话历史
++            self.db_manager.save_chat_history(
++                session_id=session_id,
++                user_message=question,
++                assistant_message=answer,
++            )
++
++            return answer
++
++        except Exception as e:
++            error_msg = f"普通对话出错: {str(e)}"
++            print(error_msg)
++            return error_msg
++
++    def chat_with_documents(self, question, document_ids, session_id):
++        """基于文档的RAG对话"""
++        try:
++            # 创建子文档检索器（限定在用户选中的文档范围内，只负责初始召回）
++            retriever = self.vector_store.create_retriever(document_ids)
++            retrieved_docs = retriever.invoke(question)
++
++            # 回溯到父文档，获得完整上下文（Document对象）
++            parent_docs = self.vector_store.get_parent_documents(retrieved_docs)
++            if not parent_docs:
++                return "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。", []
++
++            # 对父文档做上下文压缩，只保留与问题相关的部分
++            compressed_docs = self.vector_store.compressor.compress_documents(
++                parent_docs, question
++            )
++            context = "\n\n".join(d.page_content for d in compressed_docs)
++            print("最终检索的上下文：", context)
++
++            # 历史对话转为消息对象（MessagesPlaceholder不接受字符串）
++            chat_history = self.db_manager.get_chat_history(session_id)
++            history_msgs = []
++            for chat in chat_history[-3:]:  # 最近3轮对话
++                history_msgs.append(HumanMessage(content=chat.user_message))
++                history_msgs.append(AIMessage(content=chat.assistant_message))
++
++            # 组装提示词并生成回答
++            answer = (self.rag_prompt | self.llm).invoke({
++                "context": context,
++                "chat_history": history_msgs,
++                "question": question,
++            }).content
++
++            # 保存对话历史
++            self.db_manager.save_chat_history(
++                session_id=session_id,
++                user_message=question,
++                assistant_message=answer,
++                document_ids=",".join(map(str, document_ids))
++            )
++
++            return answer, compressed_docs
++        except Exception as e:
++            error_msg = f"RAG对话出错: {str(e)}"
++            print(error_msg)
++            return error_msg, []
++
+diff --git a/backend/core/vector_store.py b/backend/core/vector_store.py
+new file mode 100644
+index 0000000..69df35e
+--- /dev/null
++++ b/backend/core/vector_store.py
+@@ -0,0 +1,92 @@
++import chromadb
++from langchain_chroma import Chroma
++from langchain_openai import ChatOpenAI
++from langchain_huggingface import HuggingFaceEmbeddings
++from langchain_classic.retrievers.document_compressors import LLMChainExtractor
++from langchain_core.documents import Document
++
++
++class VectorStore:
++    def __init__(self, config):
++        self.config = config
++        # 初始化模型
++        embed_path = self.config.LOCAL_MODEL_PATH
++        self.embeddingd = HuggingFaceEmbeddings(model_name=embed_path)
++
++        # 初始化Chroma客户端
++        self.chroma_client = chromadb.PersistentClient(
++            path=config.CHROMA_PERSIST_DIR,
++        )
++
++        # 父文档和子文档使用不同集合
++        self.parent_vectorstore = Chroma(
++            client=self.chroma_client,
++            collection_name="parent_document",
++            embedding_function=self.embeddingd
++        )
++
++        self.child_vectorstore = Chroma(
++            client=self.chroma_client,
++            collection_name="child_document",
++            embedding_function=self.embeddingd
++        )
++
++        # 初始化大模型
++        self.llm = ChatOpenAI(
++            api_key=self.config.OPENAI_API_KEY,
++            base_url=self.config.OPENAI_BASE_URL,
++            model="qwen3.8-max",
++            temperature=0,
++        )
++
++        self.compressor = LLMChainExtractor.from_llm(self.llm)
++
++    def add_documents(self, parent_docs, child_docs, document_id):
++        """添加文档到向量存储"""
++        # 为所有文档添加document_id元数据
++        for doc in parent_docs + child_docs:
++            doc.metadata['document_id'] = str(document_id)
++        # 存储父文档和子文档
++        parent_ids = self.parent_vectorstore.add_documents(parent_docs)
++        child_ids = self.child_vectorstore.add_documents(child_docs)
++        # print(parent_ids, child_ids)
++        return parent_ids, child_ids
++
++    def create_retriever(self, document_ids=None):
++        """创建子文档检索器(只负责初始召回)"""
++        search_kwargs = {"k": self.config.TOP_K * 2}
++        if document_ids:
++            # 给检索器增加一个 元数据过滤条件
++            search_kwargs["filter"] = {
++                "document_id": {"$in": [str(i) for i in document_ids]}
++            }
++        # 返回一个 LangChain 检索器对象
++        return self.child_vectorstore.as_retriever(search_kwargs=search_kwargs)
++
++    def get_parent_documents(self, child_docs):
++        """根据子文档获取对应的父文档的parent_id"""
++        parent_ids = set() # 集合去重，如: 多个子文档可能属于同一个父文档
++        for doc in child_docs:
++            if 'parent_id' in doc.metadata:
++                parent_ids.add(doc.metadata['parent_id'])
++
++        return self.get_parent_documents_by_metadata(list(parent_ids))
++
++    def get_parent_documents_by_metadata(self, parent_ids):
++        if not parent_ids:
++            return []
++        parent_docs = []
++        for parent_id in parent_ids:
++            try:
++                results = self.parent_vectorstore.get(
++                    where={"parent_id": parent_id},
++                    include=["documents", "metadatas"],
++                )
++                if results["documents"]:
++                    parent_docs.append(Document(
++                        page_content=results["documents"][0],
++                        metadata=results["metadatas"][0] or {},
++                    ))
++            except Exception as e:
++                print(f"获取父文档时出错 (parent_id: {parent_id}): {e}")
++        return parent_docs
+\ No newline at end of file
+diff --git a/backend/schemas/__init__.py b/backend/schemas/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/tests/__init__.py b/backend/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/tests/conftest.py b/backend/tests/conftest.py
+new file mode 100644
+index 0000000..0e1ad1f
+--- /dev/null
++++ b/backend/tests/conftest.py
+@@ -0,0 +1,6 @@
++import sys
++from pathlib import Path
++
++BACKEND_DIR = Path(__file__).resolve().parents[1]
++if str(BACKEND_DIR) not in sys.path:
++    sys.path.insert(0, str(BACKEND_DIR))
+diff --git a/backend/tests/test_config.py b/backend/tests/test_config.py
+new file mode 100644
+index 0000000..156e514
+--- /dev/null
++++ b/backend/tests/test_config.py
+@@ -0,0 +1,20 @@
++from pathlib import Path
++from config.config import Config
++
++
++def test_chroma_dir_is_absolute():
++    """坑 2：相对 cwd 的 CHROMA_PERSIST_DIR 会因启动目录不同而静默换库。"""
++    assert Path(Config.CHROMA_PERSIST_DIR).is_absolute()
++
++
++def test_env_file_is_located_by_file_position_not_cwd(tmp_path, monkeypatch):
++    """spec 7.1：配置来源必须与 cwd 无关。"""
++    from config import config as config_module
++    monkeypatch.chdir(tmp_path)
++    assert config_module.ENV_FILE.exists()
++    assert config_module.BASE_DIR == Path(__file__).resolve().parents[2] / "backend"
++
++
++def test_required_keys_present():
++    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "LOCAL_MODEL_PATH", "MYSQL_DATABASE"):
++        assert getattr(Config, key)
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..b234def
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,21 @@
++# 记录实测已装版本；本机 python 是 D:\python\python.exe (3.12.3)，不是 D:/AI-python/.venv。
++# 约束：只新增不升级（详见 plan 的 Global Constraints）；本文件当前描述的是"已满足"的状态。
++fastapi>=0.141
++uvicorn>=0.52
++python-multipart>=0.0.32
++python-dotenv>=1.2
++sqlalchemy>=2.0,<2.1
++pymysql>=1.1
++chromadb>=1.5,<2
++langchain-core>=1.6
++langchain-openai>=1.1
++langchain-chroma>=1.1
++langchain-huggingface>=1.2
++langchain-text-splitters>=1.1
++langchain-community>=0.3
++langchain-classic>=1.0
++sentence-transformers>=6.0
++pypdf>=6.16
++docx2txt>=0.9
++pytest>=9.0
++httpx>=0.28
