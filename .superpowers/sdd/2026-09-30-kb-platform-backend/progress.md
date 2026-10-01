@@ -89,3 +89,10 @@ Task 6: minor (deferred): 领域异常把原始 exc 文本透进 detail（泄露
 Task 7: review Approved；1 条 plan bug 坐实（brief 的回滚断言与 fakes append 语义不可兼容，测试侧修法经评审独立确认）+ 2 条 Important [plan-mandated]：
   (A) 补偿调用无守卫（delete_by_ids 抛则行不删；delete_document 抛则幽灵状态且裸异常逃逸）——Ruling: spec 坑 3 的原话就是"500 必须可信地表示整件事没发生"，补偿自身裸奔直接违背该目标，且修法被限制在 api/documents.py:49-51 三行范围内 → **进修复轮 1/5**：每步补偿各自 try/记日志，最终仍抛 StorageError。
   (B) add_documents 半途失败（父集合已写、子集合失败）时 ids 仍为 []，补偿删不到已写父向量——Ruling: 真缺陷但修复需要 store 侧渐进式 id API（计划未预留该表面，spec 十二节本就有"入库任务化"遗留项），**parked（deferred, real）**：交最终评审与用户决定是否单开任务。
+
+Task 7: minor (deferred): MAX_UPLOAD_BYTES 注释言过其实（Starlette 解析期已落盘/进内存，守卫只约束管线留存）；且 20MB > MEDIUMTEXT 16MiB 上限，17-20MB txt 会以裸 500 出场——改读 file.size 或收小常量
+Task 7: minor (deferred): 201 响应体未证明来自 DB（RecordingDB 返回值与请求字面量同值）——给 stub 返回可区分值即可钉死
+Task 7: minor (deferred): 补偿顺序（先向量后行）无测试钉——修复合入时看能否顺带钉住
+Task 7: minor (deferred): 端点 basename 清洗无提交测试且与 document_processor 重复（Windows 反斜杠只在一侧处理）——**归 T9 注入面回归**
+Task 7: minor (deferred): get_document 返回 None 会在提交成功后 AttributeError→500
+Task 7: parked (deferred, real): 图片型 PDF（零块非空）以 500 出场而非 422/201，spec 6.1 未覆盖此形态——最终评审/用户定夺
