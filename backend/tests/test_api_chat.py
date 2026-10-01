@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from deps import get_rag_system
-from exceptions import LLMError, RetrievalError
+from exceptions import LLMError, RetrievalError, StorageError
 from fakes import FakeRAG
 from main import create_app
 from schemas.common import Reference
@@ -98,6 +98,23 @@ def test_normal_chain_llm_failure_is_502():
     client = make_client(FakeRAG(error=LLMError("大模型调用失败: boom")))
     res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": []})
     assert res.status_code == 502
+
+
+def test_storage_error_on_rag_path_is_not_hijacked_into_502():
+    """StorageError 不是聊天系异常：端点必须放行，让 main.py 的 STATUS_BY_ERROR 给 500。
+    宽 except KnowledgeBaseError 会把它改写成 502，中央映射就形同虚设（spec 八节）。"""
+    client = make_client(FakeRAG(error=StorageError("存储坏了")))
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]})
+    assert res.status_code == 500
+    assert res.json()["detail"] == "存储坏了"
+
+
+def test_storage_error_on_normal_path_is_not_hijacked_into_502():
+    """normal 分支的 except 同样只该接管 RetrievalError/LLMError。"""
+    client = make_client(FakeRAG(error=StorageError("存储坏了")))
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": []})
+    assert res.status_code == 500
+    assert res.json()["detail"] == "存储坏了"
 
 
 def test_empty_retrieval_is_a_200_business_result_not_an_error():

@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from deps import get_rag_system
-from exceptions import KnowledgeBaseError
+from exceptions import LLMError, RetrievalError
 from schemas.chat import ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/api/chat")
@@ -18,7 +18,7 @@ def chat(payload: ChatRequest, rag=Depends(get_rag_system)):
             answer, references = rag.chat_with_documents(
                 payload.question, payload.document_ids, payload.session_id
             )
-        except KnowledgeBaseError as exc:
+        except (RetrievalError, LLMError) as exc:
             # 失败不写历史：残缺答案进 chat_history 会污染后续上下文（spec 七节）
             logger.warning("RAG 问答失败: %s", exc)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -26,7 +26,7 @@ def chat(payload: ChatRequest, rag=Depends(get_rag_system)):
     else:
         try:
             answer = rag.normal_chat(payload.question, payload.session_id)
-        except KnowledgeBaseError as exc:
+        except (RetrievalError, LLMError) as exc:
             logger.warning("普通对话失败: %s", exc)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         references, mode = [], "normal"
