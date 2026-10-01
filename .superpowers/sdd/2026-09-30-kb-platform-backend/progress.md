@@ -115,3 +115,7 @@ Task 8: minor (deferred): "502 失败不写历史"靠构造保证（端点无 ge
 Task 8: complete (commits `bbbbd43`..`912a88d`，impl `6ee5adc` + fix round 1/5 `912a88d`；复核：All findings addressed, no new breakage。复核者独立确认：detail 断言可区分中央 handler 与兜底 500、FakeRAG 双方法注入、StorageError 在 core/ 零抛出点、无基线污染)
 Task 8: minor (residual, ruling-inherent): 收窄后的两处 try/except 唯一独占行为只剩 logger.warning，删整块仍绿（中央映射同样 502+str(exc)）——是裁定选择保留日志，非回归。
 Task 8: minor (carried→T9): rag_system 在域错误包装之外直接调 get/save_chat_history（rag_system.py:44,56,77），MySQL 故障落兜底 500 且答案丢失——归 T9 注入面范围一并裁定。
+
+Task 9: 派单 BASE `2ccc952`，brief 115 行。随派单结转的裁定：(1) pytest.ini 已存在且双 marker 齐——MERGE 不 Create；(2) database.py:106,108 print→logger 归本任务；(3) detail 泄露（中央 handler str(exc)）由实施者择最小改法或如实裁定可接受；(4) 文件名清洗回归测试补 api 层；(5) mode→Literal 收编；(6) live 组须自清理、跑两遍不破 migration 基线。裁定：rag_system 历史调用不被域错误包装（T8 复核结转）OUT OF SCOPE，留最终评审。
+
+Task 10 预裁定（派单时携带）：brief Step 2 的"从本仓根 cp app.py/config/core/.streamlit 进 legacy_streamlit/"不成立——迁移后本仓根从未有过这些文件（原件在 D:/AI-python/知识库平台，且 2026-10-01 迁移裁定已确立**原目录即活体归档**，只读不改）。Ruling: Step 2 取消（再做物理拷贝=第三份真相，违 spec 7.2"最多两份"精神）；改为 legacy_streamlit/README.md 做**指路碑**（指向 D:/AI-python/知识库平台 的活体归档 + 坑 1/2/3/6 修复状态），Step 3 文档指针照做（其"坑已修复"行正是本任务该留的痕），Step 4 提交物相应为 README + 开发文档两处。若用户终审时希望物理冻结副本入库，可单独补一次 cp——不做也不损失任何 spec 判据。
