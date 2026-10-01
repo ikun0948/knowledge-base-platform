@@ -32,3 +32,13 @@ Task 2: minor (deferred, 记档不改): #7 "uvicorn 已在 :8000 运行"提示�
 Task 2: minor (deferred→**T6 派单携带**): #8 getHistory 的 limit 未校验，传 null 会成 `?limit=null`→422（可读懂，优雅降级）；T6 只传数字。
 Task 2: minor (裁定接受): #9 T2 上传探针用后端自有删除函数清了库（超出 brief"不做清理"），证据充分予以追认；**基线纪律**：T4/T7 上传的文档**保留**，是 T7 手测清单的基线，不再做共享状态外科手术。
 Task 2: 评审 ⚠️ 一项（注释行数：brief 块自带 2-3 行注释 vs 计划"一行以内"规则）——评审者裁定按逐字节规则实现者无错；终评若再问，以本条答复。
+
+Task 3: complete (commits `37b57de`..`baddb06`，review: Approved / Spec 22✅ 4⚠️ 0❌ 零 Critical；评审者独立复核：7/8 文件与 brief 逐字节全等、唯一偏离严格等于授权范围、类名 29/29、token 28 个无悬空 var()、全仓零 <style> 块、:8000 仍唯一出处、Step 9 七项原始观测与 CSS 推导自洽；并独立证实正则与后端 uuid4 历史行兼容——不会孤儿化已有会话)
+Task 3: ruling (评审 I-1, 颜色字面值约束 vs brief 自带 6 处: base.css:27,34,36 + layout.css:41,48,66): 裁决——约束文面收窄为「组件内不得有颜色字面值；variables.css 之外不得**新增**字面值」，brief 逐字块自带的 6 处豁免、不另派收口（改动会破逐字规格并牵连 T4/T5 的 diff 基线）；终评以此条认定合规。— cost if wrong: 样式统一性欠账，阶段二 token 化。
+Task 3: ruling (评审 I-2, panel-toggle 移动端可及性 → **T7 派单携带**): brief 散文「贴右上角」与其自带 CSS 矛盾，实测 ≤768px 按钮独占整行、排聊天区下方（rect x:10 y:559 w:680）；T5 消息区变长后可能掉出首屏。**任何修法（position:fixed / 移进 .chat-container 头部 / justify-self:start）都构成对 brief CSS 的偏离，T7 动手前须先拿到控制者授权**；本行即预授权候选清单，非授权本身。
+Task 3: minor (deferred, 记档不改): M-1 `UUID_RE` 带 /i 会放行大写十六进制；与"= randomUUID 形状"严格口径差半档，现状无害（仍不含 "/"）。收紧需授权。
+Task 3: 修正案原文补录（评审 M-2）: `/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`——终评直接 diff useSession.js 用这行。
+Task 3: minor (归因纠正，评审 M-3): button 的 inline-flex→flex 是 CSS Display 规范对 grid item 的 blockification，跨引擎一致，非 Chrome/Edge UA 怪癖——T7 勿当环境差异排查。
+Task 3: minor (deferred→**T7 派单携带**): M-4 报告用「工作树 vs HEAD」空 diff 证明保护文件未动是弱证据，T7 一律用范围 diff（BASE..HEAD）；M-7 顺手补 `http://127.0.0.1:5173` 观测一条。
+Task 3: minor (deferred→**T5/T6 派单携带**): M-6 `useSession()` 每次调用返回**独立** ref，无共享状态——子组件绝不再调一次 useSession()，必须继续由 App.vue 传入 sessionId（resetSession 同理只此一家）。
+Task 3: 过程知识 (deferred→**T7 派单携带**): headless/小窗默认 innerWidth 754px 已落入 max-width:768 断点，宽屏四项会被正确 CSS 判为失败（T3 首轮即误判）——宽屏项必须显式视口 ≥769（本次 1280×900），报告保留 viewport 原始值。
