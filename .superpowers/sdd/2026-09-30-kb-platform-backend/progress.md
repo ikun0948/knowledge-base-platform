@@ -136,3 +136,11 @@ Task 10: 待办继承：坑 6 的"前端侧转义"目前只是承诺（frontend/
 - D5：前端计划 4 处 file:line 锚点漂移 + limit 单位（行≠消息）补一句。
 - 终审确认 ledger 三条结转已被后续任务实际关闭（T3 fakes 签名、T7 顺序钉、T6 live SQL 覆盖）——终审者补的"closed tick"义务归我们：见本行。
 修复 dispatch：单一实施者一次提交 D1-D5，BASE `5e7db21`；完成后 scoped 复核，复核通过即后端阶段收口。
+
+== 后端阶段收口 (2026-10-01) ==
+终审修复轮复核：D1-D5 全 ADDRESSED，无新 Critical/Important（复核者逐项验：88 字符数学闭合 String(100) 悬崖且顺手闭合 T9#4 的 255 悬崖；stamp 论断以当前树证实；补偿 sweep-先于 delete_by_ids 无双删危害；D4 翻转真实且三条错误路径不持久化仍被钉；D5 锚点按 post-fix 树判定——literal 72-74 反而会错）。
+最终状态：commits 9224c69..a0? 即 `29e9e89` 为后端末码；tests not-live 103 / live 5 / migration 1 全绿，仅 MovedIn20Warning。
+D4 supersede 记档（复核结转建议）：task-8-report.md:14,82,124 与 backend plan :1044-1045 关于"空检索不写历史"的记载自本行起作废，以 D4（持久化）为准——历史文件不回改，此为更正戳。
+仍开账（阶段二/用户决定，不阻塞合并）：parked(c) 双补偿同败文案、parked(e)+document_ids 无界(String(500)) 确定性丢轮、limit 行/消息语义（前端计划已带）、空检索轮进入后续 LLM 上下文窗口（D4 的直接后果，已披露）。
+工作区保留：前端计划（2026-09-30-kb-platform-frontend）将进入自己的 SDD 周期，届时另建 workspace；本目录到 spec 第十节手测 + finishing-a-development-branch 完成后才删除。
+下一步：① 用户审阅前端计划 cf66d7a；② spec 第十节 1-6 浏览器手测（backend uvicorn + frontend 尚无——手测 2/4/6 中纯后端项可现在做，涉前端项随前端 Task 完成后做）；③ 前端 SDD 执行。
