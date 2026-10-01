@@ -179,6 +179,29 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def get_document(self, doc_id):
+        session = self.get_session()
+        try:
+            return session.get(Document, doc_id)
+        finally:
+            session.close()
+
+    def delete_document(self, doc_id):
+        """回滚专用：删 documents 行，parent/child_chunks 由 ORM cascade 带走。"""
+        session = self.get_session()
+        try:
+            doc = session.get(Document, doc_id)
+            if doc is None:
+                return 0
+            session.delete(doc)
+            session.commit()
+            return 1
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def count_documents(self) -> int:
         session = self.get_session()
         try:

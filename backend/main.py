@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.documents import router as documents_router
 from config.config import Config
 from core.database import DatabaseManager
 from core.document_processor import DocumentProcessor
@@ -80,6 +81,8 @@ def create_app() -> FastAPI:
             "document_count": db.count_documents(),
             "vector_counts": vector_store.collection_counts(),
         }
+
+    app.include_router(documents_router)
 
     return app
 
