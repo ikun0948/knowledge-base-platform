@@ -68,3 +68,5 @@ Task 4: minor (deferred): 空 .txt 静默切出 0 块无异常——**派 T7 时
 Task 4: minor (deferred): 大写后缀 `.TXT` 现在能过（legacy 拒绝）——行为超集，记入等价清单
 Task 4: minor (deferred): `loader_cls` 对 txt 实为 partial 工厂，名不副实
 Task 4: minor (deferred): SUPPORTED_SUFFIXES 与 LOADER_BY_SUFFIX 键双真相（plan-mandated）——**派 T7 时携带**：import 复用而非再抄
+
+Task 5 预检（派 T6 时携带）：T5 implementer 实测 brief "print 全转完" 说法与树不符——现存 5 处 live print：`core/database.py:106,108`（无主）与 `core/rag_system.py:67,87,114`（brief 划归 T6）。T6 派单需明确 rag_system 3 处的归属，并裁定 database 2 处（默认：保持原状，非本计划清单）。
