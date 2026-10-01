@@ -5,6 +5,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_core.documents import Document
 
+COLLECTION_PARENT = "parent_document"
+COLLECTION_CHILD = "child_document"
+
 
 class VectorStore:
     def __init__(self, config):
@@ -21,13 +24,13 @@ class VectorStore:
         # 父文档和子文档使用不同集合
         self.parent_vectorstore = Chroma(
             client=self.chroma_client,
-            collection_name="parent_document",
+            collection_name=COLLECTION_PARENT,
             embedding_function=self.embeddingd
         )
 
         self.child_vectorstore = Chroma(
             client=self.chroma_client,
-            collection_name="child_document",
+            collection_name=COLLECTION_CHILD,
             embedding_function=self.embeddingd
         )
 
@@ -40,6 +43,12 @@ class VectorStore:
         )
 
         self.compressor = LLMChainExtractor.from_llm(self.llm)
+
+    def collection_counts(self) -> dict:
+        return {
+            "parent": self.chroma_client.get_collection(COLLECTION_PARENT).count(),
+            "child": self.chroma_client.get_collection(COLLECTION_CHILD).count(),
+        }
 
     def add_documents(self, parent_docs, child_docs, document_id):
         """添加文档到向量存储"""

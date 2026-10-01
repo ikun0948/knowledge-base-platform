@@ -15,7 +15,7 @@ class Document(Base):
     file_path = Column(String(500), nullable=False)
     content = Column(MEDIUMTEXT, nullable=False)
     chunk_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
     is_active = Column(Boolean, default=True)
 
     # 关联关系 设定一对多表 ParentChunk 关联模型 back_populates 关联字段 cascade级联操作(删除操作)
@@ -32,7 +32,7 @@ class ParentChunk(Base):
     content = Column(Text, nullable=False)
     json_metadata = Column(Text)  # JSON格式存储元数据
     vector_id = Column(String(100))  # Chroma中的向量ID
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
 
     # 关联关系
     document = relationship("Document", back_populates="parent_chunks")
@@ -55,7 +55,7 @@ class ChildChunk(Base):
     content = Column(Text, nullable=False)
     json_metadata = Column(Text)  # JSON格式存储元数据
     vector_id = Column(String(100))  # Chroma中的向量ID
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
 
     # 关联关系
     document = relationship("Document", back_populates="child_chunks")
@@ -78,7 +78,7 @@ class ChatHistory(Base):
     assistant_message = Column(Text, nullable=False)
     document_ids = Column(String(500))  # 存储使用的文档ID，逗号分隔
     used_chunks = Column(Text)  # JSON格式存储使用的文档块信息
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
 
     # 索引
     __table_args__ = (
@@ -176,6 +176,13 @@ class DatabaseManager:
         try:
             docs = session.query(Document).filter(Document.is_active == True).all()
             return docs
+        finally:
+            session.close()
+
+    def count_documents(self) -> int:
+        session = self.get_session()
+        try:
+            return session.query(Document).filter(Document.is_active == True).count()
         finally:
             session.close()
 
