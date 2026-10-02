@@ -25,3 +25,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Ruling（concern 1）: `tests/test_chroma_data.py` 钉的是搬家时计数 2/7，现库 11/22 为阶段一摄入的正常增长——先于本 diff 就红，与流式无关。阶段二不动它；Task 6 收口时把钉值更新为当时实测并在测试注释写明"再上传需重钉"。
 - Ruling（concern 2）: pytest 收集基线实为 108（台账 87 是 `^def test` 计数，漏了 parametrize 展开）。计划里"预期 N passed"一律降为参考值；判据改为"零 failed（除上述 known-red）+ 报告记实数"。
 - Task 1: minor (deferred): brief Step 2 文案"既有 15 个 PASS"应为 10（Step 4 的 10+7=17 才是准数）。
+- Task 1: review Approved（零 Critical/零 Important；实现与 brief 逐字一致经评审者字符串比对证实；GREEN 复核 17 passed）。
+- Task 1: ⚠️ 处置 3 条：① brief"既有 15"= 计划文案笔误，已裁（见上）；② `_build_references`/`get_chat_history` 在生成器 try 外抛原生异常——裁定由 Task 2 端点的 `except Exception → 泛化 error 帧（不 str(exc) 原文）`承接，写进 Task 2 派发词；③ 端到端断连（Starlette 关迭代器）TestClient 难以干净模拟——裁定接受"单元层 gen.close() + Task 5 浏览器断流手测"两段证据链，Task 6 记档。
+- Task 1: minor (deferred)（评审者 7 条择要，终审再 triage）：流式 used_chunks 只钉了开头（可加 round-trip 断言）；normal 链 LLM 中途失败分支无测试；中途失败测试未验证"已产出事件后才 raise"时序；流/非流约 15 行重复（回退安全授权，阶段二后合并候选）。
+- Task 1: complete (commits b0a142e..34975e0, review clean)
