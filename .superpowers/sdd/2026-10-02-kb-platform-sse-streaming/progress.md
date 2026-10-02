@@ -13,7 +13,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 | T4↔T5 | T4 保留 sendChat（构建不炸）；T5 与调用方切换同提交删除 | 一致 |
 | T5↔T6 | T5 git rm typewriter；T6 grep 零残留 + 构建冒烟 | 一致 |
 | T2/T4 环境 | 编辑后端文件触发现存 uvicorn --reload 重启（同进程位，不是第二实例）；计划已写"瞬时 502 等 3 秒" | 合规（1455 红线不触） |
-| 测试数 | 基线 87（实测 grep 计数）；T1+7、T2+9、T3+4 → T3 末 107 | 计划文三处预期值已修正后入库 |
+| 测试数 | 基线 87（实测 grep 计数）；T1+7、T2+9、T3+4 → T3 末 107 | 修正口径见裁定：仅计划文 Task 3 行（:726）带"零 failed 为判据记实数"的软化；:203/:500 的"既有 PASS"旧值**未改文**，终审 M-i 已证实，整体降级为参考值，阶段三写计划前统一修订 |
 
 裁定：扫描无阻断冲突；无 plan-vs-rubric 缺陷（无空断言、无逻辑块复制）。
 
@@ -105,3 +105,25 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 6: complete (commit c4bc753 test 重钉 + 本 docs 收口台账；全链路终验通过)
 - Task 6 review: Approved（零 Critical/零 Important；评审独立复跑 test_chroma_data 1 passed，实证重钉与 live 快照全等；代码域 grep 门禁经评审核实确实 exit 1）
 - Task 6 minor(deferred): M6-1 全量 1 warning=SQLAlchemy declarative_base 弃用（预存在，未进阶段三清单，本行补记移交）；M6-2 报告/台账"line 39-44"叙述随重钉漂移（实际断言在 :63-68）；M6-3 台账颜色行 17/11 表述偏压缩（报告正文已展开）。
+
+## 全分支终审与修复波（2026-10-02）
+
+终审包 `review-d2ce465..0ce68e8.diff`（20 commits）。裁决 **With fixes**：零 Critical、两条 Important、若干 Minor；四条 ledger 裁定（signal.aborted 替换、Boom 生成器化、grep 判据、chroma 重钉）经终审**对码核实**均已落地。
+
+### 修复波（一次，commits f8b0fe9 / 1cfdf7b / 19981a9）
+- I-1 `done` 哨兵：useChat 认 `ended`，EOF-without-done → 撤泡 + '流式响应意外中断，请重试' + false；client.js 增 content-type `text/event-stream` 守卫（中文报错）。探针 RED 16/26→GREEN 26/26（stub fetch，零真实后端）。
+- I-2 并发上限注释：chat.py:59 一行（同步生成器经 threadpool，≈40 并发流上限；措辞"占一个 worker"略强于机制实况——token 是按 next() 借还，因 next() 阻塞在 LLM 读上才近似全程占用，Minor nit 不改）。
+- M-a stream 侧 used_chunks 全等 round-trip 断言（与非流 :112-116 镜像）；M-c `errored` 布尔+空 detail 兜底文案；M-d 静默分支改 `signal.aborted`（G-2 对称）；M-f 422 零帧判据收紧为 `"event:" not in`。
+- M-h pytest addopts=`-m "not migration"`：默认 127 passed + 1 deselected；`-m migration` 显式 1 passed。
+- 复审 **All ADDRESSED，零新 Critical/Important**。新 Minor 两条入册：① 命令行显式 `-m` 会整体覆盖 addopts（阶段一文档门禁 `-m "not live"` 仍会跑搬家守卫——非回归，预存在行为，阶段三知会）；② I-2 注释措辞 nit（同上）。
+
+### 终审 M-i 修正（本台账原文失实，已改）
+"计划文三处预期值已修正后入库"不实：仅 :726 带零-failed 软化，:203/:500 旧值未改文。Pre-flight 表已改口径；阶段三写计划前统一修订计划文 + 颜色 glob 口径（M6-3/G-4）。
+
+### 终审遗留（阶段三入口项/记档）
+- 前端无测试运行器，SSE 客户端契约仅靠 git-ignored 探针背书——阶段三若动 useChat 需先落 in-repo 回归（终审 Out-of-Scope ①）。
+- M-b StorageError 分支生产不可达（改名或随 M2-7 包裹）；M-e 50 项上界不防超长整数溢出 String(500)（计划级缺口，加 ge/digit 界）；M-g 无心跳帧/无 X-Accel-Buffering（上网关日补）；M-j 422 英文 msg 透传进中文 UI（计划授权"detail 照旧"，记档）；断流证明链自动化为 @pytest.mark.live 脚本测试（终审建议 3）；mode 判定三处复制可提 `mode_of()` 共享（建议 4）；停止生成按钮**不可盲用 removeTurn**——done 前已落库窗口期撤泡会显示丢失已持久化轮次，停止后应重取历史（建议 2，重要设计告诫）。
+- 数据面：修复波零落库（探针全 stub fetch）；`-m migration` 只读校验。
+
+### 分支终态
+HEAD=19981a9；后端默认门 127 passed/1 deselected + migration 显式 1 passed；前端 build exit 0；工作区干净。模型说明沿用：全部派发继承会话模型。
