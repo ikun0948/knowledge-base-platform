@@ -74,3 +74,12 @@ Task 7: 授权修法执行记录: 判据①修复前 false → 末尾追加 `@me
 Task 7: 基线更新: documents 9 行（+#78 wide.txt，Step 1 唯一一次上传，按纪律保留）、chat_history 25 行/10 会话、主测量会话 feec926f…（6 行↔界面 12 条）。
 Task 7: ruling (评审 M-1 当代闭环): Step 3 构建证据原产自 10-01 源码树、未覆盖授权 CSS——评审者已在当前 HEAD 用临时 outDir 代跑：零 error/warning、JS md5 与前任产物相同、CSS 7367→7458B 且产物内仅授权两条声明无夹带。**阶段一构建冒烟对最终树成立**，无需返工。M-2/M-3/M-4/M-5 为报告卫生项（追加 17 行致内部行号引用陈旧、状态行未回收、:394 一处数字串档），记档不返工；阶段二派单引用 T7 报告行号时须 +17 或以本节为准。
 Task 7: 遗留移交阶段二 (L-1~L-11 全量见 task-7-report.md 末表): 移动端 panel-toggle 掉出首屏 + ≤768 侧栏塌 2px + ≤768 消息区非有界滚动（同族根因=行高未中和，修法构成 brief 偏离需授权）；chat_history 加 mode 列；同名重传唯一键；方法学三条（edge.kill localStorage、confirm 死锁须不 await 派发、GBK 控制台字数虚增）。
+=== 全分支终审 (range ebc1994..b451709, 16 commits) ===
+终审: Approved (final-review.md 258 行；代码 Critical 0 / Important 0 / Minor 7；零返工零修复派单)。五关注面全绿：全树不变量、跨 Task 接缝、计划级验收（T7 M-1 记录经磁盘产物 7367/7458 差值与 esbuild 压缩长度精确互证）、提交史卫生（16 条无空提交、45 路径无违禁混入、layout.css 三段追加全 append-only）、账本闭合（L-1~L-11 有归属、+17 校正量四锚点实测成立）。
+终审: 授权偏离终审确认: useSession UUID 守卫 diff 与 ledger:40 字符级一致；T7 CSS 严格等于授权串且兜底未动——本分支全部代码级偏离盘点闭合，无未记档漂移。
+终审: G-2 收口 (重要): AbortError 修正案收口条件成立——全树无 signal 调用方（终审 grep 证实），按 Task 4 流程裁定正式落**阶段二项**：SSE 第一个 signal 使用者落地当天，client.js 冻结解除须携本条派单。
+终审: 阶段二移交补录 (G-1/G-3/G-5): ①`document_ids` 后端无界（String(500) 绑定议题）进移交表；②`res.json()` 空体兜底（204/空 200 场景）与 G-5 三条（取消/超时/卸载）与 T6 M-4 竞态记档**同族合并**为「请求生命周期」一条，阶段二 SSE 天然重写过一半；③无 signal 前的最小实现即现状，不返工。
+终审: G-4 记档缺口 (颜色豁免清单 6→11): 终审逐行 blame 证实 variables.css 外 11 处字面值**全部** brief 逐字块自带（T4/T5 的 5 处此前不在 I-1 清单）——清单补全为：base.css:27,34,36；layout.css:41,48,66 + T4 文档区 #fff + T5 消息区 5 处（终审报告 §1 行号为准）。零实施者责任不变，阶段二 token 收口按 11 处计。
+终审: G-6 更正: task-7-report.md:305 引「Task 5 ruling I-2」应为 M-2（来源标签缺席），引用方以 ledger 为准。
+终审: G-7 方法学记档: Task 1-6 的评审者返回报告未落盘（目录只 git 跟踪 progress.md），理由链存于各会话转录 jsonl（`C:/Users/31439/.qoder/projects/D-------------/*.jsonl`，grep 独特短语回收，见 user 记忆 [[ref-transcript-recovery]]）；结论均已凝练进本 ledger。阶段二纪律：**评审返回即落盘 task-N-review.md**。
+终审: Minor 不返工记档: M-F2 `ReferenceList.vue:14` 内联重复 `{filename}(#id)` 显示格式（docLabel 唯一出处出现第二处实现，阶段二引用组件重构时合并）；M-F3 `handleSend` 忽略 emit 载荷（现状正确，SSE 派单时注意）；M-F4 `.empty-hint` 悬空（brief 已记档）与 `.reference-snippet` 无规则（无样式裸类，显示由父级承载）；M-F6 磁盘 dist/ 为修复前产物已过期（gitignore 内、构建冒烟以终审代跑为准）；M-F7 T5/T6 提交信息轨道错位系 brief 逐字规定，不改历史。
