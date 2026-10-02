@@ -37,3 +37,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 2: ⚠️ 处置：逐帧不缓冲=控制器活体冒烟已证（裁定③）；断连穿路由=裁定②既定。评审者补核 Starlette 1.6.0 iterate_in_threadpool 无显式 close——引用计数兜底，语义仍"不落库"，确定性化并入 Minor 8。
 - Task 2: minor (deferred)（终审 triage）：M2-1 `default=str` 掩盖形状跑偏；M2-2 else 当 token 可改显式 elif+raise；M2-3 Cache-Control 头无断言；M2-4 422 零帧断言偏弱（应 `"event:" not in body`）；M2-5 spy 测试未钉 200；M2-6 normal 桩缺耗尽后抛分支；M2-7 生产流式路径 StorageError 不可达（DB 层抛原始 sqlalchemy 异常→泛化帧；如需恢复策展文案语义应在 database.save_chat_history 包 StorageError——涉及非流 500 语义，留终审裁决）；M2-8 断连清理确定性（try/finally close 或 async generator）与 threadpool 每帧占 worker 的多用户含义。
 - Task 2: complete (commits d2727de..f6e5629, review clean)
+- Task 3: implementer DONE_WITH_CONCERNS, commit 9612115。RED 4failed/35passed → 焦点 39 passed；全量 127 passed + known-red 1（brief 参考值 107 偏低，按裁定记实数）。brief 代码逐字可用，无笔误修正。
+- 环境事故2：旧 uvicorn 的 watchfiles 监听失灵（编辑后 80 秒不热重载）。控制器停 b9dlt0wbh、重启为 b7uria781（任务实例 4648 已止），健康 200。此后各 Task 改完后端文件一律由控制器重启实例取信 reload，派发词照旧"勿杀勿起"。
+- 控制器代补 Step 5 活体：51 项 → /api/chat 与 /api/chat/stream 均 422（JSON 体、无 `event:` 前缀，validation 先于生成器成立）；GET /api/history/sse-smoke-1 modes=[None,'rag',None,'normal']（rag/normal 派生实测在真数据上）。t3-live 未落库（422 挡在写前）；implementer 探测产生的 t3-probe 2 行已由其自行 DELETE 清零。
+- Task 3: minor (deferred): L-4 记账面确认——legacy pre-2026-09-19 rag 行读作 normal，已有显式测试钉住（成本接受，阶段三若有迁移再收）。
