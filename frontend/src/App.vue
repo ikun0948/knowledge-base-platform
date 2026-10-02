@@ -16,7 +16,7 @@ const {
   documents, selectedIds, queue, listError, docCount,
   refresh, toggleSelect, enqueue, retry, dismiss,
 } = useDocuments()
-const { messages, pending, error, restore, send, clear } = useChat()
+const { messages, pending, error, restore, send, clear, abortStream } = useChat()
 
 const question = ref('')
 const clearing = ref(false)
@@ -52,6 +52,13 @@ async function handleSend() {
   const ok = await send({ session_id: sessionId.value, question: text, document_ids: selectedIds.value })
   // 后端失败时不写历史，本地那两条也已经撤掉；把问题还给输入框，别让用户重打
   if (!ok) question.value = text
+}
+
+// 停止不能只信本地撤泡：后端在 done 帧前一刻已落库的窗口里，界面==历史只有重拉才能成立。
+// 已知窄口：GET 早于后端最终落库返回时本轮看不到那条答案，刷新一次自愈（记档于阶段三）。
+async function handleStop() {
+  abortStream()
+  await restore(sessionId.value)
 }
 
 function dismissError() {
@@ -95,7 +102,7 @@ function dismissError() {
             <button class="btn btn-ghost btn-small" type="button" @click="dismissError">关闭</button>
           </p>
           <MessageList :messages="messages" :has-documents="documents.length > 0" />
-          <ChatInput v-model="question" :pending="pending" @send="handleSend" />
+          <ChatInput v-model="question" :pending="pending" @send="handleSend" @stop="handleStop" />
         </div>
       </div>
     </main>
