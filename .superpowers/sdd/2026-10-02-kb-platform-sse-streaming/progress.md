@@ -58,3 +58,48 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 5: minor (deferred): M5-1 error 帧 detail 若为空串会静默当成功（spec 保证不可达，阶段三加固候选：`if (fail !== '')` 或 'error' in events 标记位）；M5-2 done 分支无注释（brief 原文）。
 - 环境事故3：vite 后台任务以 127 退出（npm 在任务尾 shell 解析失败），现象=端口无人监听。处置记录：控制器重启并双端口探活后才派浏览器棒；后续浏览器 Task 一律先探 :5173。
 - Task 5: complete (commits baef88d..b7cc1ab, review clean)
+
+## 阶段二收口（Task 6 · 全链路终验 + 构建冒烟 + 台账，2026-10-02）
+
+控制器实例 uvicorn b7uria781(:8000)、vite b8jvlzgln(:5173) 全程复用，未杀未起。本 Task 只验证与记账，**不做分支集成**（集成走 finishing-a-development-branch 三选一菜单，归控制器/用户）。
+
+### 五个 Task 提交范围与评审结论（读自本台账）
+- Task 1 `b0a142e..34975e0`：review Approved（零 Critical/零 Important）。
+- Task 2 `d2727de..f6e5629`：review Approved（评审复跑 test_api_chat 24 passed）。
+- Task 3 `de103d7..fc32760`：review Approved after 1 fix round（422 测试补钉零 SSE 帧）。
+- Task 4 `c05b626..3c3ca5b`：review Approved + 3 Important（全 plan-mandated，合并裁决=修）after 1 fix round。
+- Task 5 `baef88d..b7cc1ab`：review Approved（宽 grep 判据裁定 + 视口 542 记 deviation）。
+
+### Step 1 后端全量（实测计数，非抄预期）
+- 改钉前 `1 failed, 127 passed`（总 128；红项唯一 = test_chroma_data 搬家守卫钉值 2/7 vs live 11/22）。
+- Step 1.5 重钉后全量复跑 `128 passed`（零 failed；1 warning = SQLAlchemy declarative_base 弃用，与流式无关）。brief "107" 是计划参考值，按 Task 1 裁定记实数。
+
+### Step 1.5 chroma 重钉（新增，另立提交 c4bc753）
+- 权威值 live `GET /api/health`：`document_count 9`、`vector_counts {parent:11, child:22}`；父 11/子 22 全集 ids 从 tmp 副本读出，**真库零写、零上传**。
+- 原迁移 2 父 + 7 子**全部仍是现集合子集**（搬家守卫使命达成后重钉）；计数与两套 ids 同步重钉（否则 line 39-44 全等断言仍红）。测试加中文注释「计数为 2026-10-02 阶段二收口实测，后续再上传文档需重钉」；顺带删去失实的"/api/health 共用这两个常量"一句（test_health 走 FakeVectorStore，与此无关，未动）。单文件复跑 `1 passed`。
+
+### Step 2 活体手测（打 :8000，原文）
+- POST /api/chat（heredoc --data-binary 规避 GBK body，session t6-check）：`HTTP_CODE=200` `CTYPE=application/json`，body `{"answer":"你好！有什么我可以帮你的吗？","references":[],"mode":"normal"}`——回退路径存活，真实落库 1 行 normal（预期副作用）。
+- POST /api/chat/stream 51 项：`status 422` `ctype application/json` `has_event_colon False`，body `{"detail":[{"type":"too_long","loc":["body","document_ids"],...}]}`——G-1 上界在流开始**前**拦截，零 SSE 帧。
+
+### Step 3 静态把关（逐条实测 exit）
+- v-html/innerHTML → EXIT=1 ✓；sendChat( → EXIT=1 ✓；import .*sendChat**\b**（精确词边界）→ EXIT=1 ✓；后端地址 127.0.0.1:8000|localhost:8000 → EXIT=1 ✓。
+- ⚠️ 台账原语 `import .*sendChat`（**无词边界**）实测 EXIT=0，命中 `useChat.js:3 import { sendChatStream }`——是**新**流式符号误报，非旧 sendChat 残留；已用词边界式钉死"旧 sendChat 无任何 import"。宽 grep（typewriter|startTypewriter|fullText|finishTyping|sendChat\b）仅命中 `chat.js:7` 解释性注释（Task 5 裁定：记档非门禁）→ typewriter 删除彻底。
+- 颜色字面量两度量分开报：brief Step-3 原命令（glob 含 variables.css）实测 **17** unique hex（16 枚在受许 token 文件 variables.css，`.vue`/App.vue 侧 **0**）；"≤11 / T7 基线 11 处"是**另一度量**=variables.css 之外的颜色字面出现次数（hex+rgba）实测仍 **11**（base.css:27,34,36 + layout.css:41,48,66,138,171,172,211,223）。`git log master..HEAD -- frontend/src/styles` **空** → 阶段二零改 CSS，两度量皆与阶段一逐字相等、无增长；17≠11 系命令 glob 口径差异，非回归。G-4 仍是阶段三 token 收敛项。
+
+### Step 4 构建冒烟
+- `rm -rf dist && npm run build`：`vite v8.3.2` 30 modules transformed，`✓ built in 158ms`，**exit 0**；构建后 `git status` **干净**，`frontend/.gitignore:11 dist` 经 `git check-ignore` 证实不入库。
+
+### 阶段二数据面（chat_history 新增，记档）
+- Task 2 活体 `sse-smoke-1` 2 轮；Task 4 探针 `t4-probe-normal/rag/rag-payload/errframe` 各 1 行（净 4），`t4-probe-abort/abort-pre/422/timeout` 全 0 行；Task 5 探针 `t5-live-normal-20261002120929`(2)、`t5-live-rag-20261002120929`(2)，`t5-live-abort-*`/`t5-live-seed-*`/`t5-curl-probe` 全 0；Task 3 `t3-live` 未落库（422 挡写前）、`t3-probe` 2 行自清；Task 6 `t6-check` 1 行 normal（51 项 stream 0 行）。净增以实测记于各 Task 报告。
+- **断流不落半截验证会话 id**：`t4-probe-abort`（收 3 帧仍 0 行，后端生成器 close）+ `t5-live-abort-20261002120929`（前端 abort → GET /api/history rows=0，异常落 save 前）—— Task 1 裁定③"单元 gen.close() + 浏览器断流"两段链至此闭合。
+
+### L-4 legacy 记档
+- 会话 `0a6e5ed2…`（pre-2026-09-19 老 rag 行）刷新后按设计显示"💬 自由对话"（mode 派生 normal），非缺陷；Task 3 显式测试已钉住该记账面，阶段三若有历史迁移再收。
+
+### 阶段三候选（备查，本阶段不做）
+停止生成按钮（postStream signal + useChat.abortStream 已就绪，只缺 ChatInput 按钮与 pending 期样式）；L-1/L-2/L-3 移动端适配；G-4 颜色 tokens 化（含把颜色判据命令的 glob 口径统一，消除 17/11 歧义）；M-F2 ReferenceList docLabel 内联重复；M-F3 handleSend 忽略 emit 载荷；M5-1 error 帧 detail 空串静默当成功的边界加固；M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
+
+### 收口判定
+后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。
+- Task 6: complete (commit c4bc753 test 重钉 + 本 docs 收口台账；全链路终验通过)
