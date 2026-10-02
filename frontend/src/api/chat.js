@@ -1,8 +1,13 @@
-import { request } from './client.js'
+import { postStream, request } from './client.js'
 
 // 入参直接用后端形状，不做 camelCase 映射层。
-// 形状即 backend/api/chat.py 的实测行为：ChatRequest 三字段入，ChatResponse 出（answer/references/mode），
-// 失败 502 {"detail"}（RetrievalError/LLMError 就地转，其余领域错误走中央映射）。
+// sendChat 是阶段一的一次性问答（Task 5 切换调用方后即删）；
+// sendChatStream 对应 backend/api/chat.py 的 chat_stream：五种帧经 onEvent 逐帧回调，
+// 帧序 meta → references(rag) → token* → done，中途失败以 error 帧到达（HTTP 已是 200）。
 export function sendChat(payload) {
   return request('/api/chat', { method: 'POST', body: payload })
+}
+
+export function sendChatStream(payload, onEvent, { signal } = {}) {
+  return postStream('/api/chat/stream', payload, onEvent, { signal })
 }

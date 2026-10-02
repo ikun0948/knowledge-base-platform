@@ -40,3 +40,63 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
   if (!res.ok) throw new Error(detailFromText(await res.text(), res.status))
   return res.json()
 }
+
+// 阶段二（spec 6.4）：SSE 读取。EventSource 不支持 POST body，只能用 fetch + ReadableStream。
+// AbortError 约定（ledger 终审 G-2 收口）：调用方主动 abort 时原样上抛——
+// 把它包成"无法连接后端"会让用户去查服务器，而真相是他自己取消了。
+export async function postStream(path, payload, onEvent, { signal } = {}) {
+  let res
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err
+    throw new Error('无法连接后端，请确认 uvicorn 已在 :8000 运行')
+  }
+  if (!res.ok) {
+    // 流开始前的失败（422/502/500）仍是普通 HTTP：状态码 + detail 照旧
+    throw new Error(detailFromText(await res.text(), res.status))
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let cut = buffer.indexOf('\n\n')
+      while (cut >= 0) {
+        dispatch(buffer.slice(0, cut), onEvent)
+        buffer = buffer.slice(cut + 2)
+        cut = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err
+    throw new Error('流式响应中断，请重试')
+  }
+}
+
+// 一条帧 = "event: 名" 行 + "data: 单行JSON" 行；无 event 行按 SSE 默认名 message 派发，
+// 后端不会发这种帧，但默认值让 onEvent 的 switch 分支不用处理 undefined。
+function dispatch(frame, onEvent) {
+  let event = 'message'
+  const dataLines = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (!dataLines.length) return
+  let data
+  try {
+    data = JSON.parse(dataLines.join('\n'))
+  } catch {
+    throw new Error('流式帧解析失败，请重试')
+  }
+  onEvent(event, data)
+}
