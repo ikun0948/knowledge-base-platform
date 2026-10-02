@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableGenerator, RunnableLambda
 
 from core.rag_system import RAGSystem
 from exceptions import LLMError, RetrievalError
@@ -211,3 +211,96 @@ def test_chat_llm_failure_hides_internals_from_detail(caplog):
             rag.chat_with_documents("q", [7], "s1")
     assert str(exc_info.value) == LLM_DETAIL
     assert_detail_is_curated(exc_info.value, LLMError, caplog)
+
+
+# --- 流式生成器（阶段二 Task 1）---
+
+
+def stream_llm(tokens, error_at=None):
+    """假 LLM 的流式版：RunnableGenerator 让 `prompt | llm` 的 .stream() 逐块产出。
+    error_at=i 表示产出第 i 块时抛错（None = 全程顺利）。"""
+    def gen(_):
+        for i, t in enumerate(tokens):
+            if error_at is not None and i == error_at:
+                raise RuntimeError("流到一半断了")
+            yield SimpleNamespace(content=t)
+    return RunnableGenerator(gen)
+
+
+def collect(gen):
+    events = list(gen)
+    return events, "".join(d for k, d in events if k == "token")
+
+
+def test_rag_stream_yields_references_before_tokens_and_saves_once():
+    db = StubDb(filenames={7: "操作手册.txt"})
+    rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["基于", "文档"]))
+    events, answer = collect(rag.chat_with_documents_stream("父子索引是什么", [7], "s1"))
+
+    assert [k for k, _ in events] == ["references", "token", "token"]
+    assert events[0][1] == [Reference(document_id=7, parent_id="p0",
+                                      filename="操作手册.txt", snippet="父 块 内容")]
+    assert answer == "基于文档"
+    assert len(db.saved) == 1
+    saved = db.saved[0]
+    assert saved["assistant_message"] == "基于文档"
+    assert saved["document_ids"] == "7"
+    assert saved["used_chunks"].startswith('[{"document_id"')
+
+
+def test_normal_stream_yields_tokens_only_and_saves_plain_history():
+    db = StubDb(history=[chat("旧问", "旧答")])
+    events, answer = collect(build(db, StubVectorStore([]), stream_llm(["你", "好"])).normal_chat_stream("你好", "s1"))
+
+    assert [k for k, _ in events] == ["token", "token"]
+    assert answer == "你好"
+    assert db.saved == [{"session_id": "s1", "user_message": "你好", "assistant_message": "你好"}]
+
+
+def test_rag_stream_empty_retrieval_is_notice_token_and_persists_once():
+    db = StubDb()
+    events, answer = collect(build(db, StubVectorStore(parent_docs=[]), stream_llm([])).chat_with_documents_stream("无关问题", [7], "s1"))
+
+    assert events == [("references", []), ("token", "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。")]
+    assert len(db.saved) == 1
+    assert db.saved[0]["used_chunks"] is None
+    assert db.saved[0]["document_ids"] == "7"
+
+
+def test_rag_stream_retrieval_failure_raises_before_first_event():
+    db = StubDb()
+    rag = build(db, StubVectorStore(parent_docs=[], retriever_error=RuntimeError("chroma down")), stream_llm(["x"]))
+    gen = rag.chat_with_documents_stream("q", [7], "s1")
+    with pytest.raises(RetrievalError):
+        next(gen)
+    assert db.saved == []
+
+
+def test_rag_stream_llm_failure_midway_raises_llmerror_and_saves_nothing(caplog):
+    db = StubDb(filenames={7: "a.txt"})
+    rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["开头", "炸了"], error_at=1))
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(LLMError) as exc_info:
+            list(rag.chat_with_documents_stream("q", [7], "s1"))
+    assert str(exc_info.value) == "大模型调用失败，请稍后重试"
+    assert "流到一半断了" in caplog.text
+    assert db.saved == []
+
+
+def test_stream_consumer_disconnect_saves_nothing():
+    """消费方只拿前两个事件就 close()：GeneratorExit 落在 yield 点（BaseException，
+    不被 except Exception 捕获），落库代码执行不到——spec 6.4"不写半截历史"的机制证明。"""
+    db = StubDb(filenames={7: "a.txt"})
+    rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["一段", "二段", "三段"]))
+    gen = rag.chat_with_documents_stream("q", [7], "s1")
+    next(gen); next(gen)
+    gen.close()
+    assert db.saved == []
+
+
+def test_normal_stream_disconnect_saves_nothing():
+    db = StubDb()
+    gen = build(db, StubVectorStore([]), stream_llm(["x", "y"])).normal_chat_stream("你好", "s1")
+    next(gen)
+    gen.close()
+    assert db.saved == []

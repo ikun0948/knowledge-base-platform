@@ -135,3 +135,83 @@ class RAGSystem:
                 snippet=text,
             ))
         return references
+
+    def normal_chat_stream(self, question, session_id):
+        """normal 链流式版（spec 6.4）：只产 token；生成完成后落库一次。
+        断流时消费方 close() 使 GeneratorExit 落在 yield 点——它不是 Exception，
+        不会被下面的 except 捕获，落库自然执行不到（残缺答案绝不进历史）。"""
+        chat_history = self.db_manager.get_chat_history(session_id)
+        messages = []
+        for chat in chat_history[-5:]:
+            messages.append(f"Human: {chat.user_message}")
+            messages.append(f"Assistant: {chat.assistant_message}")
+        messages.append(f"Human: {question}")
+
+        pieces = []
+        try:
+            for chunk in self.llm.stream("\n".join(messages) + "\nAssistant:"):
+                if chunk.content:
+                    pieces.append(chunk.content)
+                    yield ("token", chunk.content)
+        except Exception as exc:
+            logger.exception("normal 链 LLM 流式调用失败")
+            raise LLMError(LLM_FAILED) from exc
+
+        self.db_manager.save_chat_history(
+            session_id=session_id, user_message=question, assistant_message="".join(pieces)
+        )
+
+    def chat_with_documents_stream(self, question, document_ids, session_id):
+        """rag 链流式版：references 事件先于一切 token（引用先于答案上屏，spec 6.4 帧表）。
+        落库时机与非流版一致：生成完成之后、一次。"""
+        try:
+            retriever = self.vector_store.create_retriever(document_ids)
+            retrieved_docs = retriever.invoke(question)
+            parent_docs = self.vector_store.get_parent_documents(retrieved_docs)
+            compressed_docs = None if not parent_docs else self.vector_store.compressor.compress_documents(parent_docs, question)
+        except Exception as exc:
+            logger.exception("检索或上下文压缩失败（流式）")
+            raise RetrievalError(RETRIEVAL_FAILED) from exc
+
+        if compressed_docs is None:
+            references = []
+            self.db_manager.save_chat_history(
+                session_id=session_id,
+                user_message=question,
+                assistant_message=EMPTY_RETRIEVAL_ANSWER,
+                document_ids=",".join(map(str, document_ids)),
+                used_chunks=None,
+            )
+            yield ("references", references)
+            yield ("token", EMPTY_RETRIEVAL_ANSWER)
+            return
+
+        references = self._build_references(compressed_docs)
+        yield ("references", references)
+
+        context = "\n\n".join(d.page_content for d in compressed_docs)
+        chat_history = self.db_manager.get_chat_history(session_id)
+        history_msgs = []
+        for chat in chat_history[-3:]:
+            history_msgs.append(HumanMessage(content=chat.user_message))
+            history_msgs.append(AIMessage(content=chat.assistant_message))
+
+        pieces = []
+        try:
+            for chunk in (self.rag_prompt | self.llm).stream(
+                {"context": context, "chat_history": history_msgs, "question": question}
+            ):
+                if chunk.content:
+                    pieces.append(chunk.content)
+                    yield ("token", chunk.content)
+        except Exception as exc:
+            logger.exception("rag 链 LLM 流式调用失败")
+            raise LLMError(LLM_FAILED) from exc
+
+        self.db_manager.save_chat_history(
+            session_id=session_id,
+            user_message=question,
+            assistant_message="".join(pieces),
+            document_ids=",".join(map(str, document_ids)),
+            used_chunks=json.dumps([r.model_dump() for r in references], ensure_ascii=False),
+        )
