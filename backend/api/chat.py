@@ -56,6 +56,7 @@ def chat_stream(payload: ChatRequest, rag=Depends(get_rag_system)):
         mode = "normal"
 
     def frames():
+        # 同步生成器经 threadpool 驱动：每条流占一个 worker 直到 done，默认 40 线程≈并发流上限；阶段三若上多用户再改 async
         yield _sse("meta", {"mode": mode, "session_id": payload.session_id})
         try:
             for kind, data in events:

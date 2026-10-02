@@ -249,7 +249,7 @@ def test_stream_blank_question_is_plain_http_422_before_any_frame():
     """body 校验发生在 StreamingResponse 之前：422 仍是真状态码 + JSON detail。"""
     res = post_stream(stream_client(FakeRAG()), {"session_id": "s1", "question": "", "document_ids": [1]})
     assert res.status_code == 422
-    assert not res.text.startswith("event:")
+    assert "event:" not in res.text
 
 
 def test_stream_payload_is_forwarded_in_the_right_positions():

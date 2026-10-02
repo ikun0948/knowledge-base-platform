@@ -246,6 +246,12 @@ def test_rag_stream_yields_references_before_tokens_and_saves_once():
     assert saved["assistant_message"] == "基于文档"
     assert saved["document_ids"] == "7"
     assert saved["used_chunks"].startswith('[{"document_id"')
+    # 镜像非流式那条（:112-116）的强断言：流式落库的 used_chunks 必须与 references 帧**逐字节相同**
+    # 且能原样读回同一批 Reference——"流式/非流持久化同形"这条约束只有 round-trip 才钉得住。
+    refs = events[0][1]
+    assert "操作手册.txt" in saved["used_chunks"]
+    assert saved["used_chunks"] == json.dumps([r.model_dump() for r in refs], ensure_ascii=False)
+    assert [Reference(**i) for i in json.loads(saved["used_chunks"])] == refs
 
 
 def test_normal_stream_yields_tokens_only_and_saves_plain_history():
