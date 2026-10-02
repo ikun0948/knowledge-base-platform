@@ -42,8 +42,9 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
 }
 
 // 阶段二（spec 6.4）：SSE 读取。EventSource 不支持 POST body，只能用 fetch + ReadableStream。
-// AbortError 约定（ledger 终审 G-2 收口）：调用方主动 abort 时原样上抛——
-// 把它包成"无法连接后端"会让用户去查服务器，而真相是他自己取消了。
+// 中断约定（ledger 终审 G-2 收口）：调用方主动中断（AbortController 的 AbortError、
+// AbortSignal.timeout 的 TimeoutError）在 fetch 与读取两个阶段都原样上抛，判据是 signal?.aborted
+// 而不是 err.name —— 包成"无法连接后端"会让用户去查服务器，而真相是他自己取消的。
 export async function postStream(path, payload, onEvent, { signal } = {}) {
   let res
   try {
@@ -54,7 +55,7 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
       signal,
     })
   } catch (err) {
-    if (err?.name === 'AbortError') throw err
+    if (signal?.aborted) throw err  // 调用方主动中断（AbortError / TimeoutError）原样上抛
     throw new Error('无法连接后端，请确认 uvicorn 已在 :8000 运行')
   }
   if (!res.ok) {
@@ -66,9 +67,17 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
   let buffer = ''
   try {
     while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      // 只有 read() 属于"网络断裂"域：dispatch/onEvent 的异常一律原样上抛，
+      // 把回调 bug 翻译成"流式响应中断"会把下一个调试会话骗去查服务器
+      let chunk
+      try {
+        chunk = await reader.read()
+      } catch (err) {
+        if (signal?.aborted) throw err  // 调用方主动（cancel 或 AbortSignal.timeout 的 TimeoutError）都原样传播
+        throw new Error('流式响应中断，请重试')
+      }
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
       let cut = buffer.indexOf('\n\n')
       while (cut >= 0) {
         dispatch(buffer.slice(0, cut), onEvent)
@@ -76,9 +85,10 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
         cut = buffer.indexOf('\n\n')
       }
     }
-  } catch (err) {
-    if (err?.name === 'AbortError') throw err
-    throw new Error('流式响应中断，请重试')
+  } finally {
+    // 任何出口（EOF/abort/回调异常）都把流归还：EOF 后 cancel 是无害 no-op，
+    // 异常出口则让后端生成器随断连停下，而不是对着没人读的 socket 续产
+    reader.cancel().catch(() => {})
   }
 }
 
