@@ -25,7 +25,7 @@ const welcomeText = computed(() =>
   ].join('\n'),
 )
 
-// 打字机每 20ms 改一次最后一条的 content，所以 watch 的是"长度"而不只是条数，
+// 阶段二流式：token 逐帧追加会让最后一条 content 持续变长，所以 watch 的是"长度"而不只是条数，
 // 否则气泡会长出视口外而页面不跟到底部。
 watch(
   () => [props.messages.length, props.messages.at(-1)?.content.length ?? 0],
