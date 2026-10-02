@@ -48,3 +48,6 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 4: review Approved + 3 Important（全部 labeled plan-mandated，指向计划文 Task 4 代码块本身）。
 - Ruling（I-1/I-2/I-3 合并裁决：修，不授权带病过账）: 评审者实证 my-try 把 onEvent 回调异常与 dispatch 帧解析异常都重新包装成"流式响应中断"（Task 5 将成为第一个被误导的调试会话）；AbortSignal.timeout 的 TimeoutError 在两阶段都落入误导文案（头前→"无法连接后端"，正是 G-2 反模式）；异常出口无 reader 归还，后端生成器对着无人读的 socket 续产。修法=收窄网络 try 只包 read()，dispatch/onEvent 移出其外原样上抛；abort 判定改 `signal?.aborted`（用户 cancel 与 timeout 同为调用方主动，都原样传播）；finally 归还 reader（EOF 时 cancel 为无害 no-op）。代价：postStream 契约微移——回调/解析异常不再被翻译——Task 5 派发词须带上；若误判，代价是 Task 5 里多一层 try 的返工，可逆。
 - Task 4: minor (deferred): CRLF 全流静默零帧、EOF 尾缓冲丢弃、无 decode() flush、body:null 裸 TypeError、空 event 名派发 ''、abort 后同 chunk 缓冲帧继续派发（Task 5 若需硬停自查 signal.aborted）、未校验响应 content-type。
+- Task 4: fix round 1/5（3 addressed, 0 open；commits 2226ee0..3c3ca5b；复审者用 stubbed fetch 18 断言独立复现 I-1/I-2/I-3 全关，且回归护栏 G/H 未破）。
+- Task 4: 契约微移（复审者提示，必须带进 Task 5 派发词）: ① dispatch/onEvent 回调异常与帧解析异常现**原样上抛**，不再被翻译成"流式响应中断"；② `signal?.aborted` 判据意味着"抛错⇏网络错"，Task 5 的 AbortError 静默分支按 name==='AbortError' 判定仍成立（应用内唯一 abort 源是 AbortController）；③ finally cancel 不 await，无观测面。
+- Task 4: complete (commits c05b626..3c3ca5b, review clean after 1 fix round)
