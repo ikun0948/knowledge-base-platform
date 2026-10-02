@@ -33,3 +33,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 环境事故与处置：:8000/:5173 后台实例随会话重启丢失（implementer 撞 connection refused 是实情）。控制器重启 uvicorn(b9dlt0wbh) 与 vite(b2wdmahiw) 各一实例（非双开），并由控制器补跑 Step 6 活体冒烟：normal 链 meta→token…中文可读；rag 链(69) meta→references(第2帧,先于一切token)→token…→done，data 全单行 JSON。冒烟会话 sse-smoke-1 落库 2 轮，属预期。
 - Ruling（concern 2）: brief 两处测试代码笔误系计划缺陷——① `post_stream(Boom())` 少了 TestClient 包装；② Boom 若按 call-time 抛则异常落在 frames() try 之外，测试永红。实现者改为生成器形态（与真 rag_system 一致：调用只造 generator，raise 发生在迭代期）并包 stream_client，语义钉住了本条线要考的 `except Exception → 泛化帧`。授权成立；"call-time raise 不再被测"无生产对应物（generator function 调用不执行 body），接受。
 - Task 2: minor (deferred): `_sse` 沿用 brief 的 `default=str`（会静默字符串化意外载荷）——终审再裁是否收紧。
+- Task 2: review Approved（零 Critical/零 Important；评审者复跑 test_api_chat 24 passed，旧 15 断言零改动核实；非流端点 diff 内全为上下文行）。
+- Task 2: ⚠️ 处置：逐帧不缓冲=控制器活体冒烟已证（裁定③）；断连穿路由=裁定②既定。评审者补核 Starlette 1.6.0 iterate_in_threadpool 无显式 close——引用计数兜底，语义仍"不落库"，确定性化并入 Minor 8。
+- Task 2: minor (deferred)（终审 triage）：M2-1 `default=str` 掩盖形状跑偏；M2-2 else 当 token 可改显式 elif+raise；M2-3 Cache-Control 头无断言；M2-4 422 零帧断言偏弱（应 `"event:" not in body`）；M2-5 spy 测试未钉 200；M2-6 normal 桩缺耗尽后抛分支；M2-7 生产流式路径 StorageError 不可达（DB 层抛原始 sqlalchemy 异常→泛化帧；如需恢复策展文案语义应在 database.save_chat_history 包 StorageError——涉及非流 500 语义，留终审裁决）；M2-8 断连清理确定性（try/finally close 或 async generator）与 threadpool 每帧占 worker 的多用户含义。
+- Task 2: complete (commits d2727de..f6e5629, review clean)
