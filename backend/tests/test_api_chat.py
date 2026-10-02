@@ -282,3 +282,14 @@ def test_stream_frames_are_single_line_json_with_readable_chinese():
     assert sum(1 for ln in lines if ln.startswith("data: ")) == 4  # meta/references/token/done
     assert "中文片段" in res.text and "\\u" not in res.text
     assert "第一段\\n第二段" in res.text  # 换行被 JSON 转义在字符串内部
+
+
+def test_more_than_50_document_ids_is_422():
+    """G-1 收口：String(500) 列 + 检索扇出都不该吃无界列表；50 项上限一次钉住两个端点。"""
+    client = make_client(FakeRAG())
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
+                                         "document_ids": list(range(1, 52))})
+    assert res.status_code == 422
+    res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
+                                                "document_ids": list(range(1, 52))})
+    assert res.status_code == 422

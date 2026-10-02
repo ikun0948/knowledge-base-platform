@@ -30,11 +30,12 @@ def get_history(
 ):
     messages: list[HistoryMessage] = []
     for row in db.get_chat_history(session_id, limit=limit):
+        mode = "rag" if row.document_ids else "normal"
         messages.append(HistoryMessage(role="user", content=row.user_message,
                                        references=None, created_at=row.created_at))
         messages.append(HistoryMessage(role="assistant", content=row.assistant_message,
                                        references=_parse_references(row.used_chunks),
-                                       created_at=row.created_at))
+                                       created_at=row.created_at, mode=mode))
     return messages
 
 

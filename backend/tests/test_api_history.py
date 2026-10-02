@@ -10,10 +10,11 @@ REF = Reference(document_id=1, parent_id="p", filename="a.txt", snippet="片段"
 
 
 class Row:
-    def __init__(self, used_chunks):
+    def __init__(self, used_chunks, document_ids=None):
         self.user_message = "问"
         self.assistant_message = "答"
         self.used_chunks = used_chunks
+        self.document_ids = document_ids
         self.created_at = datetime(2026, 9, 30, 10, 0)
 
 
@@ -106,3 +107,26 @@ def test_limit_below_one_is_422():
 
 def test_empty_history_returns_empty_array():
     assert make_client(HistoryDB([])).get("/api/history/nobody").json() == []
+
+
+# --- mode 派生（阶段二 Task 3，闭合 L-4）---
+
+
+def test_assistant_mode_is_rag_when_document_ids_present():
+    body = make_client(HistoryDB([Row('[]', document_ids="69,71")])).get("/api/history/s1").json()
+    assert body[0]["mode"] is None            # user 行永远不带 mode
+    assert body[1]["mode"] == "rag"
+
+
+def test_assistant_mode_is_normal_when_document_ids_missing():
+    body = make_client(HistoryDB([Row(None)])).get("/api/history/s1").json()
+    assert body[1]["mode"] == "normal"
+
+
+def test_legacy_rows_read_as_normal_and_load_cleanly():
+    """改造前的老行 document_ids 也是 NULL：统一读成 normal。
+    把老 rag 轮误标成"自由对话"是可接受的代价——加 mode 列的迁移没有赚头（终审 L-4 裁定路径）。"""
+    body = make_client(HistoryDB([Row('[{"document_id":1,"parent_id":"p","filename":"a.txt","snippet":"片"}]')])) \
+        .get("/api/history/0a6e5ed2-legacy").json()
+    assert body[1]["mode"] == "normal"
+    assert body[1]["references"][0]["filename"] == "a.txt"
