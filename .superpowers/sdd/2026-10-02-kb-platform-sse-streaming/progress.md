@@ -29,3 +29,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 1: ⚠️ 处置 3 条：① brief"既有 15"= 计划文案笔误，已裁（见上）；② `_build_references`/`get_chat_history` 在生成器 try 外抛原生异常——裁定由 Task 2 端点的 `except Exception → 泛化 error 帧（不 str(exc) 原文）`承接，写进 Task 2 派发词；③ 端到端断连（Starlette 关迭代器）TestClient 难以干净模拟——裁定接受"单元层 gen.close() + Task 5 浏览器断流手测"两段证据链，Task 6 记档。
 - Task 1: minor (deferred)（评审者 7 条择要，终审再 triage）：流式 used_chunks 只钉了开头（可加 round-trip 断言）；normal 链 LLM 中途失败分支无测试；中途失败测试未验证"已产出事件后才 raise"时序；流/非流约 15 行重复（回退安全授权，阶段二后合并候选）。
 - Task 1: complete (commits b0a142e..34975e0, review clean)
+- Task 2: implementer DONE_WITH_CONCERNS, commit f6e5629。RED 9failed/15passed(404) → 焦点 41 passed；全量 123 passed + known-red 1。
+- 环境事故与处置：:8000/:5173 后台实例随会话重启丢失（implementer 撞 connection refused 是实情）。控制器重启 uvicorn(b9dlt0wbh) 与 vite(b2wdmahiw) 各一实例（非双开），并由控制器补跑 Step 6 活体冒烟：normal 链 meta→token…中文可读；rag 链(69) meta→references(第2帧,先于一切token)→token…→done，data 全单行 JSON。冒烟会话 sse-smoke-1 落库 2 轮，属预期。
+- Ruling（concern 2）: brief 两处测试代码笔误系计划缺陷——① `post_stream(Boom())` 少了 TestClient 包装；② Boom 若按 call-time 抛则异常落在 frames() try 之外，测试永红。实现者改为生成器形态（与真 rag_system 一致：调用只造 generator，raise 发生在迭代期）并包 stream_client，语义钉住了本条线要考的 `except Exception → 泛化帧`。授权成立；"call-time raise 不再被测"无生产对应物（generator function 调用不执行 body），接受。
+- Task 2: minor (deferred): `_sse` 沿用 brief 的 `default=str`（会静默字符串化意外载荷）——终审再裁是否收紧。
