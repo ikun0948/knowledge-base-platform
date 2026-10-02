@@ -45,10 +45,13 @@ class FakeDocProcessor:
 
 
 class FakeRAG:
-    def __init__(self, answer="回答", refs=(), error=None):
+    def __init__(self, answer="回答", refs=(), tokens=("片段1", "片段2"), error=None, error_after=None):
         self.answer = answer
         self.refs = list(refs)
         self.error = error
+        self.tokens = list(tokens)
+        # error_after=None：不抛错；整数=产出第 n 个 token 前抛（模拟流到一半失败）
+        self.error_after = error_after
 
     def generate_session_id(self):
         return "fake-session"
@@ -62,3 +65,26 @@ class FakeRAG:
         if self.error:
             raise self.error
         return self.answer
+
+    def chat_with_documents_stream(self, question, document_ids, session_id):
+        if self.error is not None and self.error_after is None:
+            raise self.error  # 检索/压缩失败：第一个事件都没有
+        yield ("references", self.refs)
+        emitted = 0
+        for token in self.tokens:
+            if self.error is not None and emitted == self.error_after:
+                raise self.error
+            yield ("token", token)
+            emitted += 1
+        if self.error is not None and self.error_after is not None and emitted == self.error_after:
+            raise self.error  # error_after 越过 token 数：生成完成后、done 之前失败
+
+    def normal_chat_stream(self, question, session_id):
+        if self.error is not None and self.error_after is None:
+            raise self.error
+        emitted = 0
+        for token in self.tokens:
+            if self.error is not None and emitted == self.error_after:
+                raise self.error
+            yield ("token", token)
+            emitted += 1
