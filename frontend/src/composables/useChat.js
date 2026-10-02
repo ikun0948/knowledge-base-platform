@@ -70,7 +70,11 @@ export function useChat() {
 
     controller = new AbortController()
     const signal = controller.signal
-    let fail = ''
+    // 后端只在历史落库之后才发 done，所以 done 是"这一轮真存在于 chat_history"的唯一凭据；
+    // error 帧的 detail 也可能是空串，真值判断会把它当成成功 → 失败与收流都只用显式标记记账。
+    let ended = false
+    let errored = false
+    let errorText = ''
     try {
       await sendChatStream(
         { session_id, question, document_ids },
@@ -89,24 +93,36 @@ export function useChat() {
               break
             case 'error':
               // error 帧后流正常关闭，postStream 不 throw；失败在这里记账，走循环后分支
-              fail = data.detail
+              errored = true
+              errorText = String(data.detail ?? '')
               break
             case 'done':
+              // 落库已完成的信号：只有收到它，本地这两条才有资格留在界面上
+              ended = true
               break
           }
         },
         { signal },
       )
-      if (fail) {
+      if (errored) {
         // meta 后失败：后端没写历史（异常在 save 前抛出），本地两条一起撤 + 横幅
         removeTurn(bubble)
-        error.value = fail
+        error.value = errorText || '流式响应出错，请重试'
+        return false
+      }
+      if (!ended) {
+        // 干净 EOF 却没有 done 帧 = 这一轮没落库（反代吞流、生成器被提前回收都会这样）。
+        // 留着气泡就是"刷新后消息凭空蒸发"的案发现场：撤两条 + 一句能行动的中文。
+        removeTurn(bubble)
+        error.value = '流式响应意外中断，请重试'
         return false
       }
       return true
     } catch (err) {
-      if (err?.name === 'AbortError') {
-        // 自己按的打断：不弹横幅（真相是用户自己取消了，弹错反而让人去查服务器），
+      if (signal.aborted) {
+        // 调用方主动取消（AbortController 的 AbortError、AbortSignal.timeout 的 TimeoutError）：
+        // 判据与 client.js 的 G-2 约定一致——看 signal 不认错误名，否则超时会被弹成一句英文红横幅。
+        // 不弹横幅（真相是用户自己取消了，弹错反而让人去查服务器），
         // 但半截那两条必须撤——后端断流即丢，从没写历史。
         removeTurn(bubble)
         return false

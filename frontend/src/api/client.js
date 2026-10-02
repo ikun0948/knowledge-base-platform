@@ -62,6 +62,11 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
     // 流开始前的失败（422/502/500）仍是普通 HTTP：状态码 + detail 照旧
     throw new Error(detailFromText(await res.text(), res.status))
   }
+  // 反代把 SSE 缓冲成整包、或 200 落地一张 HTML 错误页时 res.ok 仍为真，读循环只会拿到零帧：
+  // 先认内容类型，否则"根本没有流"会被当成"读完了一条空流"。
+  if (!String(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+    throw new Error('响应不是 SSE 事件流，请检查代理配置')
+  }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
