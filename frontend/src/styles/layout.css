@@ -227,3 +227,12 @@
   /* app.py 断点里唯一还有意义的规则 */
   .message-content { max-width: 85%; }
 }
+
+/* ---- Task 7 收口（ledger Task 5 ruling I-1 授权，纯末尾追加）：
+   宽屏下中和 .app-shell 的隐式 auto 行与 .chat-main 的自动最小尺寸，
+   否则内容超过可用高度时行高被撑开、chat-container 的 max-height:100% 解析在已撑高的行上，
+   .chat-messages 永不成有界滚动容器（clientHeight == scrollHeight，滚动 no-op）。 ---- */
+@media (min-width: 769px) {
+  .app-shell { grid-template-rows: minmax(0, 1fr); }
+  .chat-main { min-height: 0; }
+}
