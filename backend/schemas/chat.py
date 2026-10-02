@@ -9,7 +9,8 @@ from schemas.common import Reference
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=100)
     question: str = Field(min_length=1)
-    document_ids: list[int] = Field(default_factory=list)
+    # G-1：上限 50 项——String(500) 的落库列与检索扇出都吃不消无界列表
+    document_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
 class ChatResponse(BaseModel):
@@ -24,3 +25,5 @@ class HistoryMessage(BaseModel):
     content: str
     references: list[Reference] | None = None
     created_at: datetime | None = None
+    # 由行的 document_ids 派生（api/history.py），不给 chat_history 加列——L-4 的最小闭法
+    mode: Literal["rag", "normal"] | None = None

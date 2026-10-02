@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from deps import get_rag_system
@@ -155,3 +157,143 @@ def test_backend_hands_the_snippet_back_as_plain_text_and_escapes_nothing():
     # JSON 里的引号会被转义成 \"，原文匹配只用不带引号的那半截
     assert "<script>alert(1)</script>" in res.text
     assert "&lt;script&gt;" not in res.text and "&amp;" not in res.text
+
+
+# --- POST /api/chat/stream（阶段二 Task 2）---
+
+
+def sse_frames(text):
+    """把响应体切成 (event, data) 列表；帧以空行分隔，与前端 client.js 的切法同构。"""
+    frames = []
+    for block in text.strip().split("\n\n"):
+        event = data = None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                event = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        frames.append((event, data))
+    return frames
+
+
+def stream_client(rag):
+    return make_client(rag)
+
+
+def post_stream(client, payload):
+    return client.post("/api/chat/stream", json=payload)
+
+
+def test_stream_rag_frame_sequence_is_meta_references_tokens_done():
+    res = post_stream(stream_client(FakeRAG(refs=[REF], tokens=["基于", "文档"])),
+                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/event-stream")
+    frames = sse_frames(res.text)
+    assert [e for e, _ in frames] == ["meta", "references", "token", "token", "done"]
+    assert frames[0][1] == {"mode": "rag", "session_id": "s1"}
+    assert frames[1][1] == [{"document_id": 1, "parent_id": "a.txt_parent_0", "filename": "a.txt", "snippet": "片段"}]
+    assert frames[2][1] == {"text": "基于"}
+    assert frames[-1][1] == {}
+
+
+def test_stream_normal_frame_sequence_has_no_references_frame():
+    res = post_stream(stream_client(FakeRAG(tokens=["你", "好"])),
+                      {"session_id": "s1", "question": "q", "document_ids": []})
+    assert [e for e, _ in sse_frames(res.text)] == ["meta", "token", "token", "done"]
+    assert sse_frames(res.text)[0][1] == {"mode": "normal", "session_id": "s1"}
+
+
+def test_stream_midway_llm_failure_degrades_to_error_frame_after_200():
+    """meta 之后头已发出：LLM 中途失败只能是 error 帧，不能是 502 状态码。"""
+    res = post_stream(stream_client(FakeRAG(refs=[REF], tokens=["开头"], error=LLMError("大模型调用失败，请稍后重试"), error_after=1)),
+                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+    assert res.status_code == 200
+    frames = sse_frames(res.text)
+    assert [e for e, _ in frames] == ["meta", "references", "token", "error"]
+    assert frames[-1][1] == {"detail": "大模型调用失败，请稍后重试"}
+    assert "done" not in [e for e, _ in frames]
+
+
+def test_stream_storage_error_comes_as_error_frame_not_hijacked():
+    """StorageError（写历史失败，发生在生成完成后）：中央映射对已开播的流无能为力，
+    detail 必须原文进 error 帧——前端据此撤消息，界面与后端历史一致。"""
+    res = post_stream(stream_client(FakeRAG(tokens=["x"], error=StorageError("存储坏了"), error_after=1)),
+                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+    frames = sse_frames(res.text)
+    assert frames[-1] == ("error", {"detail": "存储坏了"})
+
+
+def test_stream_retrieval_failure_is_meta_plus_error_only():
+    res = post_stream(stream_client(FakeRAG(error=RetrievalError("检索或上下文压缩失败，请稍后重试"))),
+                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+    assert res.status_code == 200
+    assert [e for e, _ in sse_frames(res.text)] == ["meta", "error"]
+
+
+def test_stream_unknown_failure_gives_generic_detail_without_internals():
+    class Boom(FakeRAG):
+        # 真实 rag_system 的这条链是生成器：_build_references / get_chat_history 的原始异常
+        # 在**迭代时**抛出（不是端点取事件的调用时），桩必须同构，否则测的不是同一条路径。
+        def chat_with_documents_stream(self, q, ids, sid):
+            raise RuntimeError("OperationalError(2003): 密码 hunter2 @ 127.0.0.1:3306")
+            yield  # 永不执行；仅这一行让上面的 raise 落在迭代期
+
+    res = post_stream(stream_client(Boom()), {"session_id": "s1", "question": "q", "document_ids": [1]})
+    detail = sse_frames(res.text)[-1][1]["detail"]
+    assert detail == "服务器内部错误"
+    assert "hunter2" not in res.text
+
+
+def test_stream_blank_question_is_plain_http_422_before_any_frame():
+    """body 校验发生在 StreamingResponse 之前：422 仍是真状态码 + JSON detail。"""
+    res = post_stream(stream_client(FakeRAG()), {"session_id": "s1", "question": "", "document_ids": [1]})
+    assert res.status_code == 422
+    assert "event:" not in res.text
+
+
+def test_stream_payload_is_forwarded_in_the_right_positions():
+    class SpyStreamRAG(FakeRAG):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.stream_calls = []
+
+        def chat_with_documents_stream(self, question, document_ids, session_id):
+            self.stream_calls.append(("rag", question, list(document_ids), session_id))
+            return super().chat_with_documents_stream(question, document_ids, session_id)
+
+        def normal_chat_stream(self, question, session_id):
+            self.stream_calls.append(("normal", question, session_id))
+            return super().normal_chat_stream(question, session_id)
+
+    rag = SpyStreamRAG(tokens=["x"])
+    post_stream(stream_client(rag), {"session_id": "s9", "question": "营收多少", "document_ids": [3, 1]})
+    post_stream(stream_client(rag), {"session_id": "s9", "question": "你好", "document_ids": []})
+    assert rag.stream_calls == [("rag", "营收多少", [3, 1], "s9"), ("normal", "你好", "s9")]
+
+
+def test_stream_frames_are_single_line_json_with_readable_chinese():
+    """帧协议钉死（spec 6.4）：一条帧的 data 恰好一行——ensure_ascii=False 保中文逐字，
+    JSON 字符串里的换行自带转义，不可能劈开帧。"""
+    ref = Reference(document_id=1, parent_id="p", filename="甲.txt", snippet="中文片段")
+    res = post_stream(stream_client(FakeRAG(refs=[ref], tokens=["第一段\n第二段"])),
+                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+    lines = res.text.strip().split("\n")
+    assert sum(1 for ln in lines if ln.startswith("data: ")) == 4  # meta/references/token/done
+    assert "中文片段" in res.text and "\\u" not in res.text
+    assert "第一段\\n第二段" in res.text  # 换行被 JSON 转义在字符串内部
+
+
+def test_more_than_50_document_ids_is_422():
+    """G-1 收口：String(500) 列 + 检索扇出都不该吃无界列表；50 项上限一次钉住两个端点。"""
+    client = make_client(FakeRAG())
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
+                                         "document_ids": list(range(1, 52))})
+    assert res.status_code == 422
+    res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
+                                                "document_ids": list(range(1, 52))})
+    assert res.status_code == 422
+    # 状态码只是另一半：校验发生在 StreamingResponse 之前，这里必须零 SSE 帧、纯 JSON
+    assert "event:" not in res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.json()["detail"]
