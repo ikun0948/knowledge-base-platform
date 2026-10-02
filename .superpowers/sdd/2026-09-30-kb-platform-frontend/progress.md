@@ -83,3 +83,4 @@ Task 7: 遗留移交阶段二 (L-1~L-11 全量见 task-7-report.md 末表): 移�
 终审: G-6 更正: task-7-report.md:305 引「Task 5 ruling I-2」应为 M-2（来源标签缺席），引用方以 ledger 为准。
 终审: G-7 方法学记档: Task 1-6 的评审者返回报告未落盘（目录只 git 跟踪 progress.md），理由链存于各会话转录 jsonl（`C:/Users/31439/.qoder/projects/D-------------/*.jsonl`，grep 独特短语回收，见 user 记忆 [[ref-transcript-recovery]]）；结论均已凝练进本 ledger。阶段二纪律：**评审返回即落盘 task-N-review.md**。
 终审: Minor 不返工记档: M-F2 `ReferenceList.vue:14` 内联重复 `{filename}(#id)` 显示格式（docLabel 唯一出处出现第二处实现，阶段二引用组件重构时合并）；M-F3 `handleSend` 忽略 emit 载荷（现状正确，SSE 派单时注意）；M-F4 `.empty-hint` 悬空（brief 已记档）与 `.reference-snippet` 无规则（无样式裸类，显示由父级承载）；M-F6 磁盘 dist/ 为修复前产物已过期（gitignore 内、构建冒烟以终审代跑为准）；M-F7 T5/T6 提交信息轨道错位系 brief 逐字规定，不改历史。
+收尾: feat/backend-split 已 fast-forward 合并回 master（0b67144，48 提交，零分叉零新提交），合并树与终审通过树逐字节相同（diff 行数 0）；分支已按 finishing-a-development-branch 流程删除。本行与其后账目提交在 master 上。阶段一（后端 10 Task + 前端 7 Task）整体闭环；阶段二（SSE）另起 writing-plans 时以本 ledger + final-review.md + task-7-report.md 遗留表为移交底稿。
