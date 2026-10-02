@@ -44,3 +44,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 3: fix round 1/5（1 addressed, 0 open；commits 9612115..fc32760；复审确认三条断言就位且非空洞，`"event:" not in body` 比同文件旧测更强）。
 - Task 3: minor (deferred) 补录：M3-1 `document_ids=""` 假值面未钉（写侧不可能产出空串，加固候选）；M3-2 恰好 50 项接受边界未钉；M3-3 mode 计算早于使用一语句。修枝者自启过实例一事核实为误判：现 :8000 唯一监听 29184 = 控制器 b7uria781 的重载子进程，watchfiles 恢复正常（改测试即热重载），后续仍按计划"复用勿动"。
 - Task 3: complete (commits de103d7..fc32760, review clean after 1 fix round)
+- Task 4: implementer DONE, commit 2226ee0。探针①②③全过（references 第2帧钉住；AbortError 原样；帧距 70ms 渐进）；byte-exact 对 brief，Node 相对 URL shim 仅探针侧。
+- Task 4: review Approved + 3 Important（全部 labeled plan-mandated，指向计划文 Task 4 代码块本身）。
+- Ruling（I-1/I-2/I-3 合并裁决：修，不授权带病过账）: 评审者实证 my-try 把 onEvent 回调异常与 dispatch 帧解析异常都重新包装成"流式响应中断"（Task 5 将成为第一个被误导的调试会话）；AbortSignal.timeout 的 TimeoutError 在两阶段都落入误导文案（头前→"无法连接后端"，正是 G-2 反模式）；异常出口无 reader 归还，后端生成器对着无人读的 socket 续产。修法=收窄网络 try 只包 read()，dispatch/onEvent 移出其外原样上抛；abort 判定改 `signal?.aborted`（用户 cancel 与 timeout 同为调用方主动，都原样传播）；finally 归还 reader（EOF 时 cancel 为无害 no-op）。代价：postStream 契约微移——回调/解析异常不再被翻译——Task 5 派发词须带上；若误判，代价是 Task 5 里多一层 try 的返工，可逆。
+- Task 4: minor (deferred): CRLF 全流静默零帧、EOF 尾缓冲丢弃、无 decode() flush、body:null 裸 TypeError、空 event 名派发 ''、abort 后同 chunk 缓冲帧继续派发（Task 5 若需硬停自查 signal.aborted）、未校验响应 content-type。
