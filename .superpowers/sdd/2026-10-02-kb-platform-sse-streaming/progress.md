@@ -41,3 +41,6 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 环境事故2：旧 uvicorn 的 watchfiles 监听失灵（编辑后 80 秒不热重载）。控制器停 b9dlt0wbh、重启为 b7uria781（任务实例 4648 已止），健康 200。此后各 Task 改完后端文件一律由控制器重启实例取信 reload，派发词照旧"勿杀勿起"。
 - 控制器代补 Step 5 活体：51 项 → /api/chat 与 /api/chat/stream 均 422（JSON 体、无 `event:` 前缀，validation 先于生成器成立）；GET /api/history/sse-smoke-1 modes=[None,'rag',None,'normal']（rag/normal 派生实测在真数据上）。t3-live 未落库（422 挡在写前）；implementer 探测产生的 t3-probe 2 行已由其自行 DELETE 清零。
 - Task 3: minor (deferred): L-4 记账面确认——legacy pre-2026-09-19 rag 行读作 normal，已有显式测试钉住（成本接受，阶段三若有迁移再收）。
+- Task 3: fix round 1/5（1 addressed, 0 open；commits 9612115..fc32760；复审确认三条断言就位且非空洞，`"event:" not in body` 比同文件旧测更强）。
+- Task 3: minor (deferred) 补录：M3-1 `document_ids=""` 假值面未钉（写侧不可能产出空串，加固候选）；M3-2 恰好 50 项接受边界未钉；M3-3 mode 计算早于使用一语句。修枝者自启过实例一事核实为误判：现 :8000 唯一监听 29184 = 控制器 b7uria781 的重载子进程，watchfiles 恢复正常（改测试即热重载），后续仍按计划"复用勿动"。
+- Task 3: complete (commits de103d7..fc32760, review clean after 1 fix round)
