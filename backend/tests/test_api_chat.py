@@ -293,3 +293,7 @@ def test_more_than_50_document_ids_is_422():
     res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
                                                 "document_ids": list(range(1, 52))})
     assert res.status_code == 422
+    # 状态码只是另一半：校验发生在 StreamingResponse 之前，这里必须零 SSE 帧、纯 JSON
+    assert "event:" not in res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.json()["detail"]
