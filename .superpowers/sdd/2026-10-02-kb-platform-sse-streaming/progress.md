@@ -103,3 +103,5 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 ### 收口判定
 后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。
 - Task 6: complete (commit c4bc753 test 重钉 + 本 docs 收口台账；全链路终验通过)
+- Task 6 review: Approved（零 Critical/零 Important；评审独立复跑 test_chroma_data 1 passed，实证重钉与 live 快照全等；代码域 grep 门禁经评审核实确实 exit 1）
+- Task 6 minor(deferred): M6-1 全量 1 warning=SQLAlchemy declarative_base 弃用（预存在，未进阶段三清单，本行补记移交）；M6-2 报告/台账"line 39-44"叙述随重钉漂移（实际断言在 :63-68）；M6-3 台账颜色行 17/11 表述偏压缩（报告正文已展开）。
