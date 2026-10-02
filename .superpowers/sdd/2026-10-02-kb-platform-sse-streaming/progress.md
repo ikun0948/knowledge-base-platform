@@ -51,3 +51,10 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - Task 4: fix round 1/5（3 addressed, 0 open；commits 2226ee0..3c3ca5b；复审者用 stubbed fetch 18 断言独立复现 I-1/I-2/I-3 全关，且回归护栏 G/H 未破）。
 - Task 4: 契约微移（复审者提示，必须带进 Task 5 派发词）: ① dispatch/onEvent 回调异常与帧解析异常现**原样上抛**，不再被翻译成"流式响应中断"；② `signal?.aborted` 判据意味着"抛错⇏网络错"，Task 5 的 AbortError 静默分支按 name==='AbortError' 判定仍成立（应用内唯一 abort 源是 AbortController）；③ finally cancel 不 await，无观测面。
 - Task 4: complete (commits c05b626..3c3ca5b, review clean after 1 fix round)
+- Task 5: implementer 分两棒——首棒 BLOCKED（vite :5173 死于后台任务 127 退码，遵守"勿动服务"正确）；控制器重启 vite=b8jvlzgln 后续棒 6/6 PASS 并提交 b7cc1ab（3 修改+typewriter 删除，diffstat +73/-90 恰为 brief 文件集）。
+- Ruling（Step 4 判据自冲突，plan-mandated）: `sendChat\b` 宽 grep 必然命中 brief 自己在 chat.js:7 的注释。验收取代码面判据：`sendChat(` 与 `import .*sendChat` 零命中（实测 exit 1）。Task 6 静态总表沿用此判据（宽 grep 结果只作记档不作门禁）。
+- Ruling（视口）: browser-use 无 resize 工具，6/6 在 innerWidth=542 移动路径完成；六项判据皆内容级（时序/顺序/cursor 数/一致性/Console），与视口无关；CSS 阶段二零改动，桌面宽屏回归列阶段三手测清单。记 deviation 不记缺陷。
+- Task 5: review Approved（评审者逐字节重建核对 brief 三块全等，"立即"修复在案；三重命名风险核对：App.vue 解构无 finishTyping、MessageBubble 契约未动、typewriter 无其他引用者）。
+- Task 5: minor (deferred): M5-1 error 帧 detail 若为空串会静默当成功（spec 保证不可达，阶段三加固候选：`if (fail !== '')` 或 'error' in events 标记位）；M5-2 done 分支无注释（brief 原文）。
+- 环境事故3：vite 后台任务以 127 退出（npm 在任务尾 shell 解析失败），现象=端口无人监听。处置记录：控制器重启并双端口探活后才派浏览器棒；后续浏览器 Task 一律先探 :5173。
+- Task 5: complete (commits baef88d..b7cc1ab, review clean)
