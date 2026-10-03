@@ -89,3 +89,25 @@ def test_used_chunks_round_trips_through_json(db):
     finally:
         db.delete_chat_history("probe-live")
     assert db.get_chat_history("probe-live") == []
+
+
+def test_emoji_survives_the_history_round_trip(db):
+    """4 字节字符必须写得进、读得出：连接串回退成 `charset=utf8` 时这条会红。
+
+    表是 utf8mb4，但 PyMySQL 按连接串的 charset 协商**会话**字符集——utf8 即 utf8mb3，
+    只装得下 3 字节。千问很爱在回答里带 😊，于是 INSERT 撞 MySQL 1366 Incorrect string
+    value，整轮历史落不进去：用户先看到答案逐字上屏，接着弹一条"保存对话历史失败"，
+    刷新后这一轮凭空消失。2026-10-03 换 flash 模型后第一次真正生成成功才暴露——
+    此前全在 LLM 那一步 error，写历史那行从未执行过。
+    """
+    question = "用一个表情符号跟我打个招呼 😀"
+    answer = "你好 😀 😊 ✅ 🚀"  # 中文与 4 字节字符混排
+    db.save_chat_history(session_id="probe-emoji", user_message=question,
+                         assistant_message=answer)
+    try:
+        rows = db.get_chat_history("probe-emoji")
+        assert [(r.user_message, r.assistant_message) for r in rows] == [(question, answer)]
+        assert db.delete_chat_history("probe-emoji") == 1
+    finally:
+        db.delete_chat_history("probe-emoji")
+    assert db.get_chat_history("probe-emoji") == []
