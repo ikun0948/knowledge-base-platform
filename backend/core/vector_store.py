@@ -42,7 +42,7 @@ class VectorStore:
         self.llm = ChatOpenAI(
             api_key=self.config.OPENAI_API_KEY,
             base_url=self.config.OPENAI_BASE_URL,
-            model="qwen3.8-max",
+            model="qwen3.7-flash",
             temperature=0,
         )
 

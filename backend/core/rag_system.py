@@ -27,7 +27,7 @@ class RAGSystem:
         self.llm = ChatOpenAI(
             api_key=config.OPENAI_API_KEY,
             base_url=config.OPENAI_BASE_URL,
-            model="qwen3.8-max",
+            model="qwen3.7-flash",
             temperature=0.7,
             streaming=True,
         )
