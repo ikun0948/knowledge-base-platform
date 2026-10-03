@@ -94,15 +94,29 @@
 
 .panel-toggle { display: none; }
 
+/* L-1/L-2/L-3（阶段三授权，brief 偏离已裁）：≤768 分支做宽屏 :235 同款行高中和。
+   app-shell 钉死视口 + 显式两轨（按钮行 auto、聊天行 minmax(0,1fr)）后，
+   chat-container 的 max-height:100% 解析在有界行上，.chat-messages 才成有界滚动容器；
+   侧栏改 position:fixed 浮层——fixed 的 grid item 不占轨，展开不再挤塌聊天行（旧塌 2px 的根治）。 */
 @media (max-width: 768px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; }
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
+    gap: 10px;
+    padding: 10px;
+  }
+  .chat-main { min-height: 0; }
   .side-panel { display: none; }
   .app-shell.panel-open .side-panel {
     display: block;
-    position: sticky;
-    top: 10px;
-    z-index: 2;
+    position: fixed;
+    top: 56px;
+    left: 10px;
+    right: 10px;
+    z-index: 3;
     max-height: 70vh;
+    overflow-y: auto;
   }
   .panel-toggle { display: inline-flex; align-self: start; }
   .chat-messages { padding: 12px; }
