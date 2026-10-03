@@ -24,16 +24,16 @@ code { font-family: ui-monospace, Consolas, monospace; }
 /* 原 .stButton > button：只搬样式，Streamlit 的选择器本身丢掉 */
 .btn {
   background: var(--grad-brand);
-  color: #fff;
+  color: var(--on-brand);
   border: none;
   border-radius: var(--radius-card);
   padding: 8px 16px;
   font-weight: 500;
   transition: transform 0.2s, box-shadow 0.2s;
 }
-.btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3); }
+.btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: var(--shadow-btn-hover); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
-.btn-ghost { background: #fff; color: var(--brand-1); border: 1px solid var(--border); }
+.btn-ghost { background: var(--panel-bg); color: var(--brand-1); border: 1px solid var(--border); }
 .btn-small { padding: 4px 10px; font-size: 12px; }
 /* 停止生成：只用现有 token（--fail-*），颜色字面量口径不增 */
 .btn-stop { background: var(--fail-bg); color: var(--fail-fg); border: 1px solid var(--fail-fg); }

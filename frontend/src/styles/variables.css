@@ -10,6 +10,8 @@
   --bubble-user-fg: #ffffff;
   --bubble-assistant: #ffffff;
   --bubble-assistant-fg: #333333;
+  /* 压在品牌渐变上的前景字（.btn/chat-header/两个 avatar 的白字），G-4 收口后 #fff 唯一出处 */
+  --on-brand: #ffffff;
 
   --page-bg: #f8f9fa;
   --panel-bg: #ffffff;
@@ -32,6 +34,9 @@
   --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.1);
   --shadow-card-hover: 0 2px 8px rgba(102, 126, 234, 0.1);
   --shadow-bubble: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-btn-hover: 0 4px 12px rgba(102, 126, 234, 0.3);
+  /* focus 光圈只收颜色不收 2px solid——宽度与样式是使用处的语义，不是 token 的 */
+  --focus-ring: rgba(102, 126, 234, 0.35);
 
   --side-width: 320px;
 }
