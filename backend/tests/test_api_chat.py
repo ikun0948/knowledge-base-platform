@@ -297,3 +297,22 @@ def test_more_than_50_document_ids_is_422():
     assert "event:" not in res.text
     assert res.headers["content-type"].startswith("application/json")
     assert res.json()["detail"]
+
+
+def test_document_id_wider_than_9_digits_is_422():
+    """M-e 宽度账：9 位×50 + 49 个逗号 = 499 恰落 String(500)；到 10 位就可能溢出，
+    而溢出的炸点在生成完成后的落库——答案已经花掉了，报错只赔一句 500。"""
+    client = make_client(FakeRAG())
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
+                                         "document_ids": [10**9]})
+    assert res.status_code == 422
+
+
+def test_stream_rejects_oversized_and_nonpositive_document_ids_with_zero_frames():
+    """负数/0 连"存在的主键"都不是，同属坏请求；流端点依旧 422 前挡、零帧。"""
+    client = make_client(FakeRAG())
+    for bad in ([10**9], [0], [-1]):
+        res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
+                                                    "document_ids": bad})
+        assert res.status_code == 422, bad
+        assert "event:" not in res.text
