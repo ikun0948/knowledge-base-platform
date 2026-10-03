@@ -74,5 +74,7 @@ def chat_stream(payload: ChatRequest, rag=Depends(get_rag_system)):
     return StreamingResponse(
         frames(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
+        # X-Accel-Buffering 关 nginx 系响应缓冲：开着会把逐字流憋成最后一整块（M-g）。
+        # 心跳帧仍不做——它只在"网关有 idle 超时"时才有意义，等真上网关再补，别为不存在的环境加复杂度。
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

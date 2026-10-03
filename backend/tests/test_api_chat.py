@@ -316,3 +316,14 @@ def test_stream_rejects_oversized_and_nonpositive_document_ids_with_zero_frames(
                                                     "document_ids": bad})
         assert res.status_code == 422, bad
         assert "event:" not in res.text
+
+
+def test_stream_headers_forbid_proxy_buffering():
+    """M-g/M2-3：反代（nginx 系）默认缓冲响应，逐字流会被憋成"最后一整块"——
+    状态码与帧序全对，用户看到的却是转圈后一次吐完。X-Accel-Buffering: no 是关它；
+    Cache-Control: no-cache 此前无人断言（M2-3），一并钉住。"""
+    res = post_stream(stream_client(FakeRAG(tokens=["你", "好"])),
+                      {"session_id": "s1", "question": "q", "document_ids": []})
+    assert res.headers["x-accel-buffering"] == "no"
+    assert res.headers["cache-control"] == "no-cache"
+    assert res.headers["content-type"].startswith("text/event-stream")
