@@ -24,10 +24,10 @@
 - **安全（坑 6 不变）**：全项目 `v-html`/`innerHTML` 零出现；SSE 帧文本、答案、片段一律 `{{ }}` 插值 + `white-space: pre-wrap`。后端依旧不转义任何 HTML，转义是渲染层职责。
 - **字段命名保持 snake_case**（`session_id` / `document_ids` / `mode` / `detail`），前端不做 camelCase 映射层。
 - **引用形状不变**：`{document_id, parent_id, filename, snippet}`，`snippet` 最长 83（后端 `SNIPPET_LIMIT = 80` + `"..."`），前端不再截断。
-- **CSS 纪律**：颜色字面值只允许出现在 `variables.css`（阶段一终审核定的 11 处豁免保持原样，本计划不新增第 12 处）；组件不写 `<style>` 块；`layout.css` 只允许文件末尾追加（append-only）。本计划**预期不动 CSS**——`streaming-cursor`、`.pre-wrap`、气泡样式全部原样复用（SSE 下 `streaming` 由 `done`/`error`/abort 置 false）。
+- **CSS 纪律**：颜色字面值只允许出现在 `variables.css`（阶段一终审核定的 11 处豁免保持原样，本计划不新增第 12 处。〔2026-10-03 阶段三更新：G-4 `5e1c9de` 已把这 11 处收敛至 **0**，`variables.css` 成为唯一字面量出处；判据命令见 Task 6 Step 3〕）；组件不写 `<style>` 块；`layout.css` 只允许文件末尾追加（append-only）。本计划**预期不动 CSS**——`streaming-cursor`、`.pre-wrap`、气泡样式全部原样复用（SSE 下 `streaming` 由 `done`/`error`/abort 置 false）。
 - **Git**：仓库根 `D:/知识库平台-前后端分离`；提交身份一律 `git -c user.name="31439" -c user.email="31439@local" commit`，不改配置、不 `--amend`、不 `--no-verify`；`.env` 与 `D:/AI-python/**` 绝不触碰；`frontend/dist/`、`node_modules/` 已被 gitignore，构建产物不进库。
 - **文案与注释**：界面字符串全中文；注释只写"为什么"，一行以内。
-- **验证 = 后端 pytest + 前端手测**：后端每步 TDD（先失败测试后实现）；前端没有测试框架，每个前端 Task 结尾是浏览器/Console/curl 核对清单 + 一次静态把关。
+- **验证 = 后端 pytest + 前端手测**：后端每步 TDD（先失败测试后实现）；前端没有测试框架（〔2026-10-03 阶段三更新：此描述仅在本计划执行期属实——阶段三已引入 vitest，`npm test` 现 36 条 in-repo 回归，SSE 客户端契约不再只靠 git-ignored 探针背书〕），每个前端 Task 结尾是浏览器/Console/curl 核对清单 + 一次静态把关。
 - **数据纪律**：手测产生的新文档/新会话一律保留不清库；**同名文档禁止重传**（后端唯一键会 500，属已记档限制 L-5）；`xss.txt` 用库内 #74，不重传。
 
 ---
@@ -200,7 +200,9 @@ def test_normal_stream_disconnect_saves_nothing():
 ```bash
 cd "D:/知识库平台-前后端分离/backend" && python -m pytest tests/test_rag_system.py -q 2>&1 | tail -4
 ```
-预期：新增 7 个 FAIL（`AttributeError: 'RAGSystem' object has no attribute 'chat_with_documents_stream'`），既有 15 个 PASS。
+预期：新增 7 个 FAIL（`AttributeError: 'RAGSystem' object has no attribute 'chat_with_documents_stream'`），既有 **10** 个 PASS（焦点合计 17）。
+
+> 2026-10-03 阶段三修订：原文"既有 15 个 PASS"系计划期笔误。实测 RED = `7 failed / 10 passed`、GREEN = `17 passed`（阶段二 ledger :24/:27/:29，Task 1 派发词①已裁）。
 
 - [ ] **Step 3: 实现** —— 追加到 `backend/core/rag_system.py` 末尾（类内）：
 
@@ -497,7 +499,9 @@ def test_stream_frames_are_single_line_json_with_readable_chinese():
 ```bash
 cd "D:/知识库平台-前后端分离/backend" && python -m pytest tests/test_api_chat.py -q 2>&1 | tail -4
 ```
-预期：新增 9 个 FAIL（`/api/chat/stream` 404），既有 14 个 PASS。
+预期：新增 9 个 FAIL（`/api/chat/stream` 404），既有 **15** 个 PASS（焦点合计 24）。
+
+> 2026-10-03 阶段三修订：原文"既有 14 个 PASS"失实。实测 RED = `9 failed / 15 passed` → 焦点 24 passed（阶段二 ledger :32/:36，评审并核实"旧 15 断言零改动"）。
 
 - [ ] **Step 4: 实现** —— `backend/api/chat.py` **整文件替换**为：
 
@@ -723,7 +727,9 @@ class HistoryMessage(BaseModel):
 ```bash
 cd "D:/知识库平台-前后端分离/backend" && python -m pytest -q 2>&1 | tail -3
 ```
-预期：全绿（基线 87 + 本计划 Task 1-3 新增 20 条 = **107 passed** 量级；若数字对不上，以"零 failed"为判据并把实数记进报告）。
+判据：**零 failed（除 known-red）+ 把实数记进报告**；下方"预期 N passed"一律只是参考值，不作判据。
+
+> 2026-10-03 阶段三修订：pytest 收集数受 parametrize 展开影响，台账"基线 87"是 `^def test` 行计数口径（实收 108），故计划期所有预测数整体降为参考值（Task 1 裁定，ledger :26）。实数链：Task 3 末全量 `127 passed + known-red 1` → 阶段二收口重钉搬家守卫后 `128 passed`（ledger :40/:74/:75）→ 2026-10-03 默认门 `129 passed / 2 skipped / 1 deselected`。
 
 - [ ] **Step 5: 活服务契约复验（curl，直连 :8000）**
 
@@ -1101,9 +1107,11 @@ export function useChat() {
 cd "D:/知识库平台-前后端分离"
 git rm frontend/src/utils/typewriter.js
 grep -rn "typewriter\|startTypewriter\|fullText\|finishTyping" frontend/src/ ; echo "残留检查退出码 $?"
-grep -rn "sendChat\b" frontend/src/ ; echo "sendChat 检查退出码 $?"
+grep -rn "sendChat(" frontend/src/ ; echo "sendChat 调用面退出码 $?"
 ```
-预期两条都打印 `退出码 1`（零残留；`sendChatStream` 不会被 `\b` 边界误匹配）。
+预期两条都打印 `退出码 1`。第二条判的是"非流版调用者已消失"：pattern 带左括号只打调用面，`sendChatStream(` 因中间隔 `Stream` 不会被命中，`api/chat.js` 里"非流版 sendChat 已删除"那条史注也不会被误当残留。
+
+> 2026-10-03 阶段三修订：原文写作 `sendChat\b` 并称"`sendChatStream` 不会被 `\b` 边界误匹配"——那句把风险说反了：`sendChatStream` 确实不撞 `\b`，但**注释文本里的裸 `sendChat` 会**，导致该步"退出码 1"永不可满足。阶段二收口判定已记此为命令口径遗留（非代码缺陷），本次改为带括号的调用面判据。
 
 - [ ] **Step 5: 浏览器全链路验证（vite :5173，复用现存 uvicorn :8000——严禁再起第二个后端）**
 
@@ -1175,11 +1183,13 @@ PY
 ```bash
 cd "D:/知识库平台-前后端分离/frontend"
 grep -rn "v-html\|innerHTML" src/ ; echo "退出码 $?"
-grep -rn "typewriter\|startTypewriter\|fullText\|finishTyping\|sendChat\b" src/ ; echo "退出码 $?"
+grep -rn "typewriter\|startTypewriter\|fullText\|finishTyping\|sendChat(" src/ ; echo "退出码 $?"
 grep -rn "127.0.0.1:8000\|localhost:8000" src/ ; echo "退出码 $?"
-grep -rEoh "#[0-9a-fA-F]{3,8}\b" src/styles/*.css src/components/*.vue src/App.vue | sort | uniq | wc -l
+grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css' ; echo "颜色字面量退出码 $?"
 ```
-预期前三条 `退出码 1`；第四条颜色字面量去重计数 **≤11**（T7 基线 11 处，阶段二 CSS 零改动，不该增长）。
+预期前三条 `退出码 1`；第四条颜色判据 **0 命中**（`variables.css` 本体是唯一豁免位）。第二条的 `sendChat(` 带左括号只打调用面——无边界写法会命中 `src/api/chat.js` 里"非流版 sendChat 已删除"的史注（口径订正详见 Task 5 Step 4 注记）。
+
+> 2026-10-03 阶段三修订：原第四条 `grep -rEoh "#[0-9a-fA-F]{3,8}\b" src/styles/*.css src/components/*.vue src/App.vue | sort | uniq | wc -l` **恒返 17**——`src/styles/*.css` 把 `variables.css` 自身算了进去，与台账"11 处豁免"（排除 variables.css）是两个互斥口径，"≤11"这条预期用原命令永远测不成立。**17/11 双度量就此废弃**，唯一口径 = 上面那条命令 0 命中；G-4（`5e1c9de`）已把 variables.css 外字面量 11→0。
 
 - [ ] **Step 4: 构建冒烟（dist 已 gitignore，纯验证不入库）**
 
@@ -1203,9 +1213,11 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "docs(ledger): �
 
 ## 阶段三候选（本计划不做，记账备查）
 
-- **停止生成按钮**：`postStream` 的 `signal` 与 `useChat.abortStream()` 已就绪，缺的只是 ChatInput 上的一个按钮和 pending 期的可点样式。
-- **移动端适配**：L-1/L-2/L-3（阶段一遗留，见 `2026-09-30-kb-platform-frontend` 台账）。
-- **颜色 tokens 化**：G-4（基线 11 处字面量的收敛）。
-- **小杂项**：M-F2 ReferenceList docLabel 内联重复、M-F3 handleSend 忽略 emit 载荷。
+> 2026-10-03 阶段三更新：以下四项**全部已交付**（明细与判据见阶段二 ledger"阶段三候选"节销账行）。真正剩余：计划文其余口径项已随本次修订闭合；`M2-7/M-b StorageError 包裹`、`M-g 心跳帧/X-Accel-Buffering`、`M-j 422 英文 detail 透传`、`mode_of() 三处去重`、`桌面宽屏浏览器回归清单`。
+
+- ✅(822437b) **停止生成按钮**：`postStream` 的 `signal` 与 `useChat.abortStream()` 已就绪，缺的只是 ChatInput 上的一个按钮和 pending 期的可点样式。（落地形态：pending 原位替换 + `handleStop = abortStream() → restore()` 重拉历史对账，不用 removeTurn 以免撤掉已落库轮次）
+- ✅(51e7ca7) **移动端适配**：L-1/L-2/L-3（阶段一遗留，见 `2026-09-30-kb-platform-frontend` 台账）。
+- ✅(5e1c9de) **颜色 tokens 化**：G-4（基线 11 处字面量的收敛）→ 现 0 处，唯一口径判据见 Task 6 Step 3。
+- ✅(47f31af / merge 52ec28c) **小杂项**：M-F2 ReferenceList docLabel 内联重复、M-F3 handleSend 忽略 emit 载荷。
 
 ---
