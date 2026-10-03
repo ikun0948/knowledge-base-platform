@@ -98,7 +98,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 会话 `0a6e5ed2…`（pre-2026-09-19 老 rag 行）刷新后按设计显示"💬 自由对话"（mode 派生 normal），非缺陷；Task 3 显式测试已钉住该记账面，阶段三若有历史迁移再收。
 
 ### 阶段三候选（备查，本阶段不做）
-✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；✅(5e1c9de) G-4 颜色 tokens 化（variables.css 外字面量 11→0；新增 --on-brand/--shadow-btn-hover/--focus-ring，白底复用 --panel-bg；**17/11 双度量就此废弃**，唯一口径判据 = `grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'` 期望 0 命中，variables.css 本体豁免）；✅(52ec28c/47f31af) M-F2 ReferenceList docLabel 内联重复（docLabel 收双形状 `doc.id ?? doc.document_id`，ReferenceList 改 import 唯一出处；TDD：document_id 形状用例先 RED 返 `#undefined`，GREEN 后 npm test 33→36）；✅(52ec28c/47f31af) M-F3 handleSend 忽略 emit 载荷（改 `handleSend(text)` 直接用 ChatInput 已 trim 的载荷，数据流单向，失败回填也用载荷）；✅(52ec28c 零代码销账) M5-1 error 帧 detail 空串边界（经核阶段二修复波已闭合：useChat `errored` 标记位 + 空 detail 兜底文案 '流式响应出错，请重试'，且 vitest useChat.test.js 已钉该用例，本项无需改动）；✅(b3a6a95) 计划文失实预期值与 grep 口径统一修订（三类：Task 1/2 Step 的"既有 15/14 PASS"→实数 10/15；Task 3 全量行判据升格 + 127→128→129/2/1 实数链；Task 5/6 静态把关两条命令口径改为可满足——颜色 0 命中与 `sendChat(` 调用面边界，并给 :27、"前端没有测试框架"、阶段三候选四处补交付注记）。M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
+✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；✅(5e1c9de) G-4 颜色 tokens 化（variables.css 外字面量 11→0；新增 --on-brand/--shadow-btn-hover/--focus-ring，白底复用 --panel-bg；**17/11 双度量就此废弃**，唯一口径判据 = `grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'` 期望 0 命中，variables.css 本体豁免）；✅(52ec28c/47f31af) M-F2 ReferenceList docLabel 内联重复（docLabel 收双形状 `doc.id ?? doc.document_id`，ReferenceList 改 import 唯一出处；TDD：document_id 形状用例先 RED 返 `#undefined`，GREEN 后 npm test 33→36）；✅(52ec28c/47f31af) M-F3 handleSend 忽略 emit 载荷（改 `handleSend(text)` 直接用 ChatInput 已 trim 的载荷，数据流单向，失败回填也用载荷）；✅(52ec28c 零代码销账) M5-1 error 帧 detail 空串边界（经核阶段二修复波已闭合：useChat `errored` 标记位 + 空 detail 兜底文案 '流式响应出错，请重试'，且 vitest useChat.test.js 已钉该用例，本项无需改动）；✅(b3a6a95) 计划文失实预期值与 grep 口径统一修订（三类：Task 1/2 Step 的"既有 15/14 PASS"→实数 10/15；Task 3 全量行判据升格 + 127→128→129/2/1 实数链；Task 5/6 静态把关两条命令口径改为可满足——颜色 0 命中与 `sendChat(` 调用面边界，并给 :27、"前端没有测试框架"、阶段三候选四处补交付注记）；✅(afa9158) M2-7/M-b 生产流式路径 StorageError 可达（`database.save_chat_history` 把裸 sqlalchemy 异常包成 `StorageError("保存对话历史失败，请稍后重试")`，rollback 与 `__cause__` 链都留；流式给策展 error 帧、非流由中央映射给 500 同文案。单测先 RED=RuntimeError 非 StorageError，全量门 136→137）；✅(e1a3034/见下"阶段三收尾"节) 桌面宽屏浏览器回归清单已实跑（Edge headless 1280×800 / 1920×1080 / 1024×768 三档 × 八判据全 PASS，零代码缺陷；顺带 375 档与 pending 双态交互复验）。
 
 ### 收口判定
 后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。✅(b3a6a95) 两处均已收口：颜色判据改 G-4 唯一口径（`grep -v styles/variables.css` 后 0 命中，旧命令恒返 17 已废弃）；`sendChat\b` → `sendChat(` 带调用面边界（旧写法撞 `api/chat.js` 的"非流版 sendChat 已删除"史注，致"退出码 1"永不可满足；改后实测 ①②③ 退出码全 1）。
@@ -122,8 +122,40 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 
 ### 终审遗留（阶段三入口项/记档）
 - ✅(9160196) 前端无测试运行器，SSE 客户端契约仅靠 git-ignored 探针背书——阶段三若动 useChat 需先落 in-repo 回归（终审 Out-of-Scope ①）。→ vitest+jsdom+@vue/test-utils 落地，33 条：client 六出口/useChat 状态机/ChatInput 双态，变异抽检钉活。
-- M-b StorageError 分支生产不可达（改名或随 M2-7 包裹）；✅(ec65329) M-e 50 项上界不防超长整数溢出 String(500)（计划级缺口，加 ge/digit 界）；M-g 无心跳帧/无 X-Accel-Buffering（上网关日补）；M-j 422 英文 msg 透传进中文 UI（计划授权"detail 照旧"，记档）；✅(547a79f) 断流证明链自动化为 @pytest.mark.live 脚本测试（终审建议 3）；mode 判定三处复制可提 `mode_of()` 共享（建议 4）；✅(822437b) 停止生成按钮**不可盲用 removeTurn**——done 前已落库窗口期撤泡会显示丢失已持久化轮次，停止后应重取历史（建议 2，重要设计告诫。→ 已按 handleStop=abort+restore 重拉落地）。
+- ✅(afa9158) M-b StorageError 分支生产不可达 → 随 M2-7 在 `save_chat_history` 包裹收口；✅(ec65329) M-e 50 项上界不防超长整数溢出 String(500)（计划级缺口，加 ge/digit 界）；✅(e1a3034) M-g **拆两半处置**：`X-Accel-Buffering: no` 已随头断言落地（顺带闭 M2-3 Cache-Control 无断言），**心跳帧按裁定不做**——只在网关有 idle 超时时才有意义，为不存在的环境加复杂度违反 YAGNI，代码注释已记此由；✅(5d8d15f) M-j 422 英文 msg 进中文 UI → 前端唯一文案出口 `detailFromText` 冠"请求参数不合法："引导句、英文原文照抄在后（后端契约与 curl 消费者不动；翻译会漂、丢弃等于藏 bug）；✅(5bf4bd2) mode 判定三处复制 → `schemas.chat.mode_of()` 收成唯一判据（非流/流式按 mode 分支，历史行沿用）；✅(547a79f) 断流证明链自动化为 @pytest.mark.live 脚本测试（终审建议 3）；✅(822437b) 停止生成按钮**不可盲用 removeTurn**——done 前已落库窗口期撤泡会显示丢失已持久化轮次，停止后应重取历史（建议 2，重要设计告诫。→ 已按 handleStop=abort+restore 重拉落地）。
 - 数据面：修复波零落库（探针全 stub fetch）；`-m migration` 只读校验。
 
 ### 分支终态
 HEAD=19981a9；后端默认门 127 passed/1 deselected + migration 显式 1 passed；前端 build exit 0；工作区干净。模型说明沿用：全部派发继承会话模型。
+
+## 阶段三收尾（2026-10-03）：入口项清零 + 桌面宽屏回归实跑
+
+清单来源：阶段二 Task 5 视口 542 deviation 欠下的"宽屏没实跑过"这笔账。工具链：Edge headless
+（`puppeteer-core` 走 `--no-save`）+ vite :5173 + **复用现存 uvicorn :8000**（不新起第二实例，1455 红线不触），
+长历史会话 `feec926f-6ddb-44a3-9025-4543faa63ceb`。八判据 × 三档全 PASS，**零代码缺陷**：
+
+| 判据 | 1280×800 | 1920×1080 | 1024×768 |
+|---|---|---|---|
+| `.app-shell` 行模板已中和（单行有界） | 768px | 1048px | 736px |
+| `.chat-messages` 有界滚动 client/scroll | 538/14491 | 818/14491 | 506/17950 |
+| 滚到底（scrollTop+client ≥ scroll−2px） | ✓ | ✓ | ✓ |
+| 页面不滚（scrollY / scrollingElement 高） | 0 / 800 | 0 / 1080 | 0 / 768 |
+| 无横向溢出（scrollWidth−innerWidth） | 0 | 0 | 0 |
+| 历史恢复：`.message` 数 == `GET /api/history` 长度 | 12 == 12 | 12 == 12 | 12 == 12 |
+| 侧栏常驻 / toggle 隐藏（rect 宽） | 320 / 0 | 320 / 0 | 320 / 0 |
+| 发送键在视口内 bottom、前景色 token 生效 | 772≤800、rgb(255,255,255) | 1052≤1080 | 740≤768 |
+
+交互与移动端复验（同一探针，1280×800 / 375×800）：
+- 新会话 `02307b8c…` 发一条：pending 期只有"⏹ 停止生成"且 textarea 禁用；error 帧到 → 横幅"⚠️ 大模型调用失败，请稍后重试"+关闭按钮、停止键消失、气泡撤到只剩空态占位（`.message` 计 1 = MessageList 的"暂无消息"占位，不是残留半截），`GET /api/history` 该会话 **0 行**——"宁可不写"守住了。
+- 文档卡勾选可逆：点一次 `.doc-card-checked` = 1，再点 = 0。
+- 375×800 不回归：toggle 在 top 10 可见，点开 `.panel-open` 浮层 560px 全在视口（top 56 / bottom 616），`.chat-main` 行高 743 未被压，msgs 513 有界，scrollY 恒 0。
+- 探针坑（记给下一次）：`toggle.click()` 后必须等两帧再量——Vue 未重渲染 + `display:none` 的 rect 全零，首版量到 panelH=0 是假阴性。
+
+**证据边界（别夸大）**：`X-Accel-Buffering: no` 目前只有 TestClient 断言。现存 :8000 实例跑的是本批改动前的代码且无 --reload，
+活服务复验要等它自然重启；本轮不新起实例（[[env-second-uvicorn-1455]]）。同理，配额未充值前逐字流的观感无法实跑，只有帧序断言背书。
+
+**阶段三终态**：候选与终审遗留入口项**全部处置完毕**（13 项交付：822437b / 547a79f / ec65329 / 9160196 / 51e7ca7 / 5e1c9de / 52ec28c / b3a6a95 / 5bf4bd2 / afa9158 / e1a3034 / 5d8d15f + 本节的宽屏回归实跑）。
+其中 M-g 的**心跳帧按裁定不做**（无网关即无 idle 超时，为不存在的环境加复杂度）。其余各 Task 行里的 `minor (deferred)`
+（M2-1~M2-6、M2-8、M6-1、M6-2 等）仍是 parked 账，不在阶段三清单，动它们要单独立项。
+门禁基线：后端默认 `pytest -q` **138 passed / 2 skipped / 1 deselected**（+ `-m migration` 显式 1 passed）；
+前端 `npm test` **37 passed**；`npm run build` exit 0；颜色字面量口径判据 0 命中；四条静态把关退出码全 1。
