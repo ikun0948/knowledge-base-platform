@@ -4,9 +4,10 @@ import { listDocuments, uploadDocument } from '../api/documents.js'
 
 const UPLOAD_STATUS = { pending: 'pending', uploading: 'uploading', ok: 'ok', fail: 'fail' }
 
-// 坑 5：同名文档必须靠 id 区分，这个格式是界面上唯一的出处
+// 坑 5：同名文档必须靠 id 区分，这个格式是界面上唯一的出处（M-F2 收口：ReferenceList 也走这里）。
+// 两种入参形状：文档行用 id，后端引用的 Reference 用 document_id。
 export function docLabel(doc) {
-  return `${doc.filename}(#${doc.id})`
+  return `${doc.filename}(#${doc.id ?? doc.document_id})`
 }
 
 export function useDocuments() {
