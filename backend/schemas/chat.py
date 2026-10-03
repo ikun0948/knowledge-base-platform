@@ -22,10 +22,19 @@ class ChatResponse(BaseModel):
     mode: Literal["rag", "normal"]
 
 
+def mode_of(document_ids) -> Literal["rag", "normal"]:
+    """走了检索链还是纯对话链，唯一判据：有没有带文档。
+
+    入参有三种形状——请求里的 list[int]、历史行里的 "1,2" 字符串、历史行的 None，
+    全部按真假收敛，所以这里不做类型解析（阶段三建议 4：三处派生收成一处）。
+    """
+    return "rag" if document_ids else "normal"
+
+
 class HistoryMessage(BaseModel):
     role: str
     content: str
     references: list[Reference] | None = None
     created_at: datetime | None = None
-    # 由行的 document_ids 派生（api/history.py），不给 chat_history 加列——L-4 的最小闭法
+    # 由 mode_of(行的 document_ids) 派生（api/history.py），不给 chat_history 加列——L-4 的最小闭法
     mode: Literal["rag", "normal"] | None = None

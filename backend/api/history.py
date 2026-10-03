@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 
 from deps import get_db
-from schemas.chat import HistoryMessage
+from schemas.chat import HistoryMessage, mode_of
 from schemas.common import Reference
 
 router = APIRouter(prefix="/api/history")
@@ -30,7 +30,7 @@ def get_history(
 ):
     messages: list[HistoryMessage] = []
     for row in db.get_chat_history(session_id, limit=limit):
-        mode = "rag" if row.document_ids else "normal"
+        mode = mode_of(row.document_ids)
         messages.append(HistoryMessage(role="user", content=row.user_message,
                                        references=None, created_at=row.created_at))
         messages.append(HistoryMessage(role="assistant", content=row.assistant_message,
