@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from fastapi.testclient import TestClient
 
 from exceptions import LLMError, RetrievalError, StorageError, UnsupportedDocumentType
+from core.database import DatabaseManager
 from main import STATUS_BY_ERROR, create_app
 
 
@@ -111,3 +112,37 @@ def test_unhandled_exception_is_a_generic_500_that_leaks_nothing():
     assert res.json() == {"detail": "服务器内部错误"}
     assert secret not in res.text
     assert "OperationalError" not in res.text
+
+
+class _BoomSession:
+    """只演"提交炸"的假 session：save_chat_history 用到的接口全在这里。"""
+
+    def __init__(self):
+        self.rolled_back = False
+        self.closed = False
+
+    def add(self, obj):
+        pass
+
+    def commit(self):
+        raise RuntimeError("OperationalError: MySQL server has gone away")
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_save_chat_history_wraps_db_failure_into_curated_storage_error():
+    """M2-7/M-b：写历史失败在生产路径曾是裸 sqlalchemy 异常，流式端点只能兜成"服务器内部错误"，
+    策展文案（含"请稍后重试"这种可行动指引）永远不可达。这里在数据层收口成 StorageError。"""
+    mgr = object.__new__(DatabaseManager)  # 绕开 __init__ 的真 MySQL 连接
+    session = _BoomSession()
+    mgr.get_session = lambda: session
+    with pytest.raises(StorageError) as exc:
+        mgr.save_chat_history("s1", "问", "答")
+    assert "保存对话历史失败" in str(exc.value)
+    assert session.rolled_back is True, "策展文案不能吃回滚"
+    assert session.closed is True
+    assert isinstance(exc.value.__cause__, RuntimeError), "原异常留在链上供日志排错"

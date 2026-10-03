@@ -5,6 +5,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 
+from exceptions import StorageError
+
 logger = logging.getLogger("kb.database")
 
 Base = declarative_base()
@@ -250,7 +252,9 @@ class DatabaseManager:
             session.commit()
         except Exception as e:
             session.rollback()
-            raise e
+            # M2-7/M-b：裸 sqlalchemy 异常直上会让流式端点只能兜成"服务器内部错误"，
+            # 策展文案永远不可达；这里收成领域异常，回滚与异常链都不丢
+            raise StorageError("保存对话历史失败，请稍后重试") from e
         finally:
             session.close()
 
