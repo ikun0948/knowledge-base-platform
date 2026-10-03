@@ -121,8 +121,8 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 "计划文三处预期值已修正后入库"不实：仅 :726 带零-failed 软化，:203/:500 旧值未改文。Pre-flight 表已改口径；阶段三写计划前统一修订计划文 + 颜色 glob 口径（M6-3/G-4）。
 
 ### 终审遗留（阶段三入口项/记档）
-- 前端无测试运行器，SSE 客户端契约仅靠 git-ignored 探针背书——阶段三若动 useChat 需先落 in-repo 回归（终审 Out-of-Scope ①）。
-- M-b StorageError 分支生产不可达（改名或随 M2-7 包裹）；M-e 50 项上界不防超长整数溢出 String(500)（计划级缺口，加 ge/digit 界）；M-g 无心跳帧/无 X-Accel-Buffering（上网关日补）；M-j 422 英文 msg 透传进中文 UI（计划授权"detail 照旧"，记档）；断流证明链自动化为 @pytest.mark.live 脚本测试（终审建议 3）；mode 判定三处复制可提 `mode_of()` 共享（建议 4）；停止生成按钮**不可盲用 removeTurn**——done 前已落库窗口期撤泡会显示丢失已持久化轮次，停止后应重取历史（建议 2，重要设计告诫）。
+- ✅(9160196) 前端无测试运行器，SSE 客户端契约仅靠 git-ignored 探针背书——阶段三若动 useChat 需先落 in-repo 回归（终审 Out-of-Scope ①）。→ vitest+jsdom+@vue/test-utils 落地，33 条：client 六出口/useChat 状态机/ChatInput 双态，变异抽检钉活。
+- M-b StorageError 分支生产不可达（改名或随 M2-7 包裹）；✅(ec65329) M-e 50 项上界不防超长整数溢出 String(500)（计划级缺口，加 ge/digit 界）；M-g 无心跳帧/无 X-Accel-Buffering（上网关日补）；M-j 422 英文 msg 透传进中文 UI（计划授权"detail 照旧"，记档）；✅(547a79f) 断流证明链自动化为 @pytest.mark.live 脚本测试（终审建议 3）；mode 判定三处复制可提 `mode_of()` 共享（建议 4）；✅(822437b) 停止生成按钮**不可盲用 removeTurn**——done 前已落库窗口期撤泡会显示丢失已持久化轮次，停止后应重取历史（建议 2，重要设计告诫。→ 已按 handleStop=abort+restore 重拉落地）。
 - 数据面：修复波零落库（探针全 stub fetch）；`-m migration` 只读校验。
 
 ### 分支终态
