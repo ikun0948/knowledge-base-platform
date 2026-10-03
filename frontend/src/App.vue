@@ -68,6 +68,12 @@ function dismissError() {
 
 <template>
   <div class="app-shell" :class="{ 'panel-open': panelOpen }">
+    <!-- DOM 首位是 panel-toggle（L-1 根治）：≤768 单栏 grid 按文档顺序排轨，
+         按钮排第 1 行 auto 才保证长历史下不滚动就在首屏；桌面它 display:none 不占轨，两栏照旧 -->
+    <button class="btn btn-ghost btn-small panel-toggle" type="button" @click="panelOpen = !panelOpen">
+      {{ panelOpen ? '收起文档面板' : '展开文档面板' }}
+    </button>
+
     <aside class="side-panel">
       <DocumentPanel
         :documents="documents"
@@ -106,9 +112,5 @@ function dismissError() {
         </div>
       </div>
     </main>
-
-    <button class="btn btn-ghost btn-small panel-toggle" type="button" @click="panelOpen = !panelOpen">
-      {{ panelOpen ? '收起文档面板' : '展开文档面板' }}
-    </button>
   </div>
 </template>
