@@ -13,7 +13,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 | T4↔T5 | T4 保留 sendChat（构建不炸）；T5 与调用方切换同提交删除 | 一致 |
 | T5↔T6 | T5 git rm typewriter；T6 grep 零残留 + 构建冒烟 | 一致 |
 | T2/T4 环境 | 编辑后端文件触发现存 uvicorn --reload 重启（同进程位，不是第二实例）；计划已写"瞬时 502 等 3 秒" | 合规（1455 红线不触） |
-| 测试数 | 基线 87（实测 grep 计数）；T1+7、T2+9、T3+4 → T3 末 107 | 修正口径见裁定：仅计划文 Task 3 行（:726）带"零 failed 为判据记实数"的软化；:203/:500 的"既有 PASS"旧值**未改文**，终审 M-i 已证实，整体降级为参考值，阶段三写计划前统一修订 |
+| 测试数 | 基线 87（实测 grep 计数）；T1+7、T2+9、T3+4 → T3 末 107 | ✅(b3a6a95) 阶段三已统一修订计划文：:203 改实数 10、:500 改实数 15、:726 把"参考值"升为正式判据（零 failed + 记实数）并补记 127→128→129/2/1 实数链；"预测数一律参考值"自此不再依赖口头软化 |
 
 裁定：扫描无阻断冲突；无 plan-vs-rubric 缺陷（无空断言、无逻辑块复制）。
 
@@ -98,13 +98,13 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 会话 `0a6e5ed2…`（pre-2026-09-19 老 rag 行）刷新后按设计显示"💬 自由对话"（mode 派生 normal），非缺陷；Task 3 显式测试已钉住该记账面，阶段三若有历史迁移再收。
 
 ### 阶段三候选（备查，本阶段不做）
-✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；✅(5e1c9de) G-4 颜色 tokens 化（variables.css 外字面量 11→0；新增 --on-brand/--shadow-btn-hover/--focus-ring，白底复用 --panel-bg；**17/11 双度量就此废弃**，唯一口径判据 = `grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'` 期望 0 命中，variables.css 本体豁免）；✅(52ec28c/47f31af) M-F2 ReferenceList docLabel 内联重复（docLabel 收双形状 `doc.id ?? doc.document_id`，ReferenceList 改 import 唯一出处；TDD：document_id 形状用例先 RED 返 `#undefined`，GREEN 后 npm test 33→36）；✅(52ec28c/47f31af) M-F3 handleSend 忽略 emit 载荷（改 `handleSend(text)` 直接用 ChatInput 已 trim 的载荷，数据流单向，失败回填也用载荷）；✅(52ec28c 零代码销账) M5-1 error 帧 detail 空串边界（经核阶段二修复波已闭合：useChat `errored` 标记位 + 空 detail 兜底文案 '流式响应出错，请重试'，且 vitest useChat.test.js 已钉该用例，本项无需改动）。M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
+✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；✅(5e1c9de) G-4 颜色 tokens 化（variables.css 外字面量 11→0；新增 --on-brand/--shadow-btn-hover/--focus-ring，白底复用 --panel-bg；**17/11 双度量就此废弃**，唯一口径判据 = `grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'` 期望 0 命中，variables.css 本体豁免）；✅(52ec28c/47f31af) M-F2 ReferenceList docLabel 内联重复（docLabel 收双形状 `doc.id ?? doc.document_id`，ReferenceList 改 import 唯一出处；TDD：document_id 形状用例先 RED 返 `#undefined`，GREEN 后 npm test 33→36）；✅(52ec28c/47f31af) M-F3 handleSend 忽略 emit 载荷（改 `handleSend(text)` 直接用 ChatInput 已 trim 的载荷，数据流单向，失败回填也用载荷）；✅(52ec28c 零代码销账) M5-1 error 帧 detail 空串边界（经核阶段二修复波已闭合：useChat `errored` 标记位 + 空 detail 兜底文案 '流式响应出错，请重试'，且 vitest useChat.test.js 已钉该用例，本项无需改动）；✅(b3a6a95) 计划文失实预期值与 grep 口径统一修订（三类：Task 1/2 Step 的"既有 15/14 PASS"→实数 10/15；Task 3 全量行判据升格 + 127→128→129/2/1 实数链；Task 5/6 静态把关两条命令口径改为可满足——颜色 0 命中与 `sendChat(` 调用面边界，并给 :27、"前端没有测试框架"、阶段三候选四处补交付注记）。M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
 
 ### 收口判定
-后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。
+后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。✅(b3a6a95) 两处均已收口：颜色判据改 G-4 唯一口径（`grep -v styles/variables.css` 后 0 命中，旧命令恒返 17 已废弃）；`sendChat\b` → `sendChat(` 带调用面边界（旧写法撞 `api/chat.js` 的"非流版 sendChat 已删除"史注，致"退出码 1"永不可满足；改后实测 ①②③ 退出码全 1）。
 - Task 6: complete (commit c4bc753 test 重钉 + 本 docs 收口台账；全链路终验通过)
 - Task 6 review: Approved（零 Critical/零 Important；评审独立复跑 test_chroma_data 1 passed，实证重钉与 live 快照全等；代码域 grep 门禁经评审核实确实 exit 1）
-- Task 6 minor(deferred): M6-1 全量 1 warning=SQLAlchemy declarative_base 弃用（预存在，未进阶段三清单，本行补记移交）；M6-2 报告/台账"line 39-44"叙述随重钉漂移（实际断言在 :63-68）；M6-3 台账颜色行 17/11 表述偏压缩（报告正文已展开）。
+- Task 6 minor(deferred): M6-1 全量 1 warning=SQLAlchemy declarative_base 弃用（预存在，未进阶段三清单，本行补记移交）；M6-2 报告/台账"line 39-44"叙述随重钉漂移（实际断言在 :63-68）；M6-3 台账颜色行 17/11 表述偏压缩（报告正文已展开）。✅(b3a6a95) 就此消解——17/11 双度量已废弃，唯一口径 = Task 6 Step 3 那条命令 0 命中。
 
 ## 全分支终审与修复波（2026-10-02）
 
@@ -118,7 +118,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 复审 **All ADDRESSED，零新 Critical/Important**。新 Minor 两条入册：① 命令行显式 `-m` 会整体覆盖 addopts（阶段一文档门禁 `-m "not live"` 仍会跑搬家守卫——非回归，预存在行为，阶段三知会）；② I-2 注释措辞 nit（同上）。
 
 ### 终审 M-i 修正（本台账原文失实，已改）
-"计划文三处预期值已修正后入库"不实：仅 :726 带零-failed 软化，:203/:500 旧值未改文。Pre-flight 表已改口径；阶段三写计划前统一修订计划文 + 颜色 glob 口径（M6-3/G-4）。
+"计划文三处预期值已修正后入库"不实：仅 :726 带零-failed 软化，:203/:500 旧值未改文。Pre-flight 表已改口径；阶段三写计划前统一修订计划文 + 颜色 glob 口径（M6-3/G-4）。✅(b3a6a95) 已兑现，实际修订范围：:203→10、:500→15、:726 判据升格为"零 failed + 记实数"并补 127→128→129/2/1 链；Task 6 Step 3 第四条颜色命令替换为 G-4 唯一口径（旧式 `grep -rEoh ... src/styles/*.css` 恒返 17——把 variables.css 本体算进去了，17/11 双度量废弃）；`sendChat\b`→`sendChat(`；另订正"全局约束·CSS 纪律"的 11 处豁免与"前端没有测试框架"两句的时效、Task 5 Step 4 与 Task 6 Step 3 两处 `sendChat\b`、文末"阶段三候选"四项交付注记（修订一律以 `> 2026-10-03 阶段三修订` 引用块留痕，不抹原文）。
 
 ### 终审遗留（阶段三入口项/记档）
 - ✅(9160196) 前端无测试运行器，SSE 客户端契约仅靠 git-ignored 探针背书——阶段三若动 useChat 需先落 in-repo 回归（终审 Out-of-Scope ①）。→ vitest+jsdom+@vue/test-utils 落地，33 条：client 六出口/useChat 状态机/ChatInput 双态，变异抽检钉活。
