@@ -45,8 +45,9 @@ async function handleClear() {
   clearing.value = false
 }
 
-async function handleSend() {
-  const text = question.value.trim()
+// M-F3：直接用 ChatInput emit 的载荷（已是 trim 后的文本），不再回头重读 question——
+// 载荷与 modelValue 当前等值，接线后数据流单向：输入框把"要发的话"交给 App。
+async function handleSend(text) {
   if (!text || pending.value) return
   question.value = ''
   const ok = await send({ session_id: sessionId.value, question: text, document_ids: selectedIds.value })

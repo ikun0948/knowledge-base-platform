@@ -1,4 +1,6 @@
 <script setup>
+import { docLabel } from '../composables/useDocuments.js'
+
 const props = defineProps({
   references: { type: Array, required: true },
 })
@@ -11,7 +13,7 @@ const props = defineProps({
       :key="`${reference.document_id}-${reference.parent_id}-${i}`"
       class="reference-item"
     >
-      <span class="reference-source">📎 {{ reference.filename }}(#{{ reference.document_id }})</span>
+      <span class="reference-source">📎 {{ docLabel(reference) }}</span>
       <span class="reference-snippet pre-wrap">{{ reference.snippet }}</span>
     </li>
   </ul>
