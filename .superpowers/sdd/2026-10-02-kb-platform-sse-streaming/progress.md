@@ -98,7 +98,7 @@ Global Constraints 来源：计划文头 + spec 6.4/6.3/11 节；spec 可达（d
 - 会话 `0a6e5ed2…`（pre-2026-09-19 老 rag 行）刷新后按设计显示"💬 自由对话"（mode 派生 normal），非缺陷；Task 3 显式测试已钉住该记账面，阶段三若有历史迁移再收。
 
 ### 阶段三候选（备查，本阶段不做）
-✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；G-4 颜色 tokens 化（含把颜色判据命令的 glob 口径统一，消除 17/11 歧义）；M-F2 ReferenceList docLabel 内联重复；M-F3 handleSend 忽略 emit 载荷；M5-1 error 帧 detail 空串静默当成功的边界加固；M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
+✅(51e7ca7) L-1/L-2/L-3 移动端适配（≤768 行高中和 + 侧栏 fixed 浮层 + toggle 移 DOM 首位；Edge headless 375×800 RED/GREEN 量化互证：toggle 25370→10、侧栏 2px→560px、msgs 有界 513<25120 文档 scrollTop 恒 0；宽屏 1280 不回归。附带收益：量测改用 puppeteer-core+Edge --no-save，绕开 in-app 浏览器无 surface 与 754px 上限）。剩余：✅(822437b) 停止生成按钮（已交付，见终审遗留节销账行）；✅(5e1c9de) G-4 颜色 tokens 化（variables.css 外字面量 11→0；新增 --on-brand/--shadow-btn-hover/--focus-ring，白底复用 --panel-bg；**17/11 双度量就此废弃**，唯一口径判据 = `grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'` 期望 0 命中，variables.css 本体豁免）；M-F2 ReferenceList docLabel 内联重复；M-F3 handleSend 忽略 emit 载荷；M5-1 error 帧 detail 空串静默当成功的边界加固；M2-7 生产流式路径 StorageError 不可达（database.save_chat_history 包裹候选，涉非流 500 语义）；桌面宽屏浏览器回归（阶段二零改 CSS，补 Task 5 视口 542 deviation 的宽屏手测清单）。
 
 ### 收口判定
 后端 128 全绿 + 回退 200 + 上界 422 零帧 + 断流不落 + typewriter 彻底移除 + 构建 exit 0 + dist 不入库 + CSS 零改动 → 阶段二 SSE 流式 **可交付**。遗留两处为台账/命令口径层面（颜色度量、sendChat 无边界 grep），非代码缺陷。
