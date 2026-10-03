@@ -56,9 +56,16 @@ function frame(event, data) {
 }
 
 describe('detailFromText', () => {
-  it('字符串 detail 原样、422 数组 detail 用中文分号拼接', () => {
+  it('字符串 detail 原样、422 数组 detail 冠中文引导句并保留原文', () => {
     expect(detailFromText(JSON.stringify({ detail: '文件类型不支持' }), 415)).toBe('文件类型不支持')
-    expect(detailFromText(JSON.stringify({ detail: [{ msg: 'a' }, { msg: 'b' }] }), 422)).toBe('a；b')
+    // M-j：pydantic 的 msg 是英文，界面不能整句外语；但原文是唯一的排错线索，翻译/丢弃都不干
+    expect(detailFromText(JSON.stringify({ detail: [{ msg: 'a' }, { msg: 'b' }] }), 422))
+      .toBe('请求参数不合法：a；b')
+  })
+
+  it('422 数组里缺 msg 的项降级为 JSON 文本，不让 undefined 混进中文句', () => {
+    expect(detailFromText(JSON.stringify({ detail: [{ type: 'too_short', loc: ['body', 'x'] }] }), 422))
+      .toBe('请求参数不合法：{"type":"too_short","loc":["body","x"]}')
   })
 
   it('非 JSON 响应体（反代 HTML 错误页）回退到 HTTP 状态码', () => {

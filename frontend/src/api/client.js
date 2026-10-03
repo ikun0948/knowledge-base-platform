@@ -13,8 +13,8 @@ export function detailFromText(text, status) {
   const detail = body?.detail
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
-    // FastAPI 的参数校验把 detail 组成数组（422），领域异常 handler 给的是字符串
-    return detail.map((item) => item?.msg ?? JSON.stringify(item)).join('；')
+    // 数组 detail 来自参数校验（msg 是英文）：冠一句中文，原文照抄在后——翻译会漂、丢弃等于藏 bug（M-j）
+    return `请求参数不合法：${detail.map((item) => item?.msg ?? JSON.stringify(item)).join('；')}`
   }
   return `HTTP ${status}`
 }
