@@ -3,7 +3,7 @@ const props = defineProps({
   modelValue: { type: String, required: true },
   pending: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update:modelValue', 'send'])
+const emit = defineEmits(['update:modelValue', 'send', 'stop'])
 
 function onInput(event) {
   emit('update:modelValue', event.target.value)
@@ -34,8 +34,7 @@ function onKeydown(event) {
       @input="onInput"
       @keydown="onKeydown"
     ></textarea>
-    <button class="btn" type="button" :disabled="props.pending || !props.modelValue.trim()" @click="submit">
-      {{ props.pending ? '🤔 思考中…' : '发送' }}
-    </button>
+    <button v-if="props.pending" class="btn btn-stop" type="button" @click="emit('stop')">⏹ 停止生成</button>
+    <button v-else class="btn" type="button" :disabled="!props.modelValue.trim()" @click="submit">发送</button>
   </div>
 </template>
