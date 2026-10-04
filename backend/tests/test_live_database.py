@@ -111,3 +111,46 @@ def test_emoji_survives_the_history_round_trip(db):
     finally:
         db.delete_chat_history("probe-emoji")
     assert db.get_chat_history("probe-emoji") == []
+
+
+def test_deleting_a_parent_chunk_takes_its_children_and_hides_the_document(db):
+    """删块这条路在真库上的四条判据，fake 一条都给不出：ORM cascade、重算的计数、归零隐存、联合定位。
+
+    cascade 只在 `session.delete(ORM对象)` 这条路上生效，写成 `delete(synchronize_session=...)`
+    的批量删就带不走子行——那种写法在 fake 上照样"过"，因为 fake 根本没有第二张表。
+    """
+    doc_id = db.save_document(filename="probe-parent.txt", file_path="", content="正文",
+                              chunk_count=3)
+    parents = [type("D", (), {"page_content": f"父{i}",
+                              "metadata": {"parent_id": f"probe_p_{i}"}})() for i in (0, 1)]
+    children = [
+        type("D", (), {"page_content": "子0", "metadata": {"parent_id": "probe_p_0", "child_id": "probe_c_0"}})(),
+        type("D", (), {"page_content": "子1", "metadata": {"parent_id": "probe_p_0", "child_id": "probe_c_1"}})(),
+        type("D", (), {"page_content": "子2", "metadata": {"parent_id": "probe_p_1", "child_id": "probe_c_2"}})(),
+    ]
+    db.save_chunks(doc_id, parents, children, ["vp0", "vp1"], ["vc0", "vc1", "vc2"])
+    try:
+        plan = db.plan_chunk_deletion(doc_id, "probe_p_0")
+        # 向量 id 必须在删行之前交出去，而子块的 vector_id 只能从关系里捞
+        assert plan["parent_vector_id"] == "vp0"
+        assert sorted(plan["child_vector_ids"]) == ["vc0", "vc1"]
+
+        assert db.delete_parent_chunk(doc_id, "probe_p_0") == {
+            "deleted_children": 2, "chunk_count": 1, "document_hidden": False}
+        # 重算而非 chunk_count - 2：库里历史漂移时减法会算出负数，重算顺手把它修回来
+        assert db.get_document(doc_id).chunk_count == 1
+        assert db.get_document(doc_id).is_active is True
+
+        assert db.delete_parent_chunk(doc_id, "probe_p_1") == {
+            "deleted_children": 1, "chunk_count": 0, "document_hidden": True}
+        assert db.get_document(doc_id).is_active is False
+        # 列表与计数都读 is_active：0 块的文档留在列表里是个选了就报错的死条目
+        assert doc_id not in [d.id for d in db.get_all_documents()]
+
+        # 联合定位：parent_id 单独不是钥匙——跨文档与已删的都得是 None，端点才能只回一个 404
+        assert db.plan_chunk_deletion(doc_id, "probe_p_0") is None
+        assert db.plan_chunk_deletion(10 ** 9, "probe_p_1") is None
+        assert db.delete_parent_chunk(doc_id, "probe_p_0") is None
+    finally:
+        db.delete_document(doc_id)
+    assert db.get_document(doc_id) is None

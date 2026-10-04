@@ -88,3 +88,31 @@ def list_documents(db=Depends(get_db)):
         DocumentOut(id=d.id, filename=d.filename, chunk_count=d.chunk_count, created_at=d.created_at)
         for d in db.get_all_documents()
     ]
+
+
+@router.delete("/{document_id}/chunks/{parent_id}", response_model=DocumentOut)
+def delete_parent_chunk(document_id: int, parent_id: str,
+                        db=Depends(get_db), vector_store=Depends(get_vector_store)):
+    """删一个父块连带它的子块。顺序不能反：先清向量，后删关系库的行。
+
+    反过来的坏法不可自愈——行一旦没了，重试时 (document_id, parent_id) 就查不到块，
+    那批还留在两个集合里的向量永远丢了把手：子块照旧被召回，父块却取不出来，
+    整轮问答空转到"未在选中的文档里找到相关内容"。
+    向量先删则任何一步失败都能重试：按 id 删已经不存在的向量是无害的 no-op，行还在原处。
+    """
+    plan = db.plan_chunk_deletion(document_id, parent_id)
+    if plan is None:
+        # 不存在、已删过、或属于另一篇文档，都只说"没有"：不区分它们是 404 该有的样子
+        raise HTTPException(status_code=404, detail="文档块不存在或已被删除")
+
+    try:
+        vector_store.delete_by_ids([plan["parent_vector_id"]], plan["child_vector_ids"])
+    except Exception as exc:
+        logger.exception("父块向量删除失败，关系库未改动: doc=%s parent=%s", document_id, parent_id)
+        raise StorageError("文档块删除未完成，请重试") from exc
+
+    db.delete_parent_chunk(document_id, parent_id)
+
+    saved = db.get_document(document_id)
+    return DocumentOut(id=saved.id, filename=saved.filename,
+                       chunk_count=saved.chunk_count, created_at=saved.created_at)

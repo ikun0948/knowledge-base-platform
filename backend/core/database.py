@@ -207,6 +207,61 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def _find_parent_chunk(self, session, document_id, parent_id):
+        """删块唯一的定位钥匙是 (document_id, parent_id) 这一对。
+
+        parent_id 由清洗后的文件名拼出来，同名文档（不同 id）能造出同样的字符串，
+        单靠它查就会把别人的块删掉。
+        """
+        return session.query(ParentChunk).filter(
+            ParentChunk.document_id == document_id,
+            ParentChunk.parent_id == parent_id,
+        ).first()
+
+    def plan_chunk_deletion(self, document_id, parent_id):
+        """只读一步：把父块与其子块的 vector_id 交出去，好让端点先清向量再动行。"""
+        session = self.get_session()
+        try:
+            chunk = self._find_parent_chunk(session, document_id, parent_id)
+            if chunk is None:
+                return None
+            return {
+                "document_id": document_id,
+                "parent_id": parent_id,
+                "parent_vector_id": chunk.vector_id,
+                "child_vector_ids": [child.vector_id for child in chunk.child_chunks],
+            }
+        finally:
+            session.close()
+
+    def delete_parent_chunk(self, document_id, parent_id):
+        """删父块行（cascade 带走子块），按剩余子块重算 chunk_count，归零则隐存文档。"""
+        session = self.get_session()
+        try:
+            chunk = self._find_parent_chunk(session, document_id, parent_id)
+            if chunk is None:
+                return None
+            deleted_children = len(chunk.child_chunks)
+            # 必须是 session.delete(ORM对象)：cascade="all, delete-orphan" 挂在 relationship 上，
+            # 只有走对象才生效；query.delete() 那种批量写法会把孤儿子行留在库里。
+            session.delete(chunk)
+
+            remaining = session.query(ChildChunk).filter(
+                ChildChunk.document_id == document_id).count()
+            doc = session.get(Document, document_id)
+            # 重算而不是 chunk_count -= deleted_children：库里计数一旦漂过，减法会把它带进负数，
+            # 重算顺手把已经不存在的事实修正掉。
+            doc.chunk_count = remaining
+            doc.is_active = remaining > 0
+            session.commit()
+            return {"deleted_children": deleted_children, "chunk_count": remaining,
+                    "document_hidden": remaining == 0}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def count_documents(self) -> int:
         session = self.get_session()
         try:

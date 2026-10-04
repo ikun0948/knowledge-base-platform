@@ -375,3 +375,124 @@ def test_partial_vector_add_is_swept_by_document_id_first():
     assert store.calls == [("sweep", 42), ("delete_ids", [], [])]
     assert db.deleted_docs == [42]
     assert db.chunks_saved is False
+
+
+# --- 删除父块：向量先行、行在后 ---
+
+PLAN = {"parent_vector_id": "pv0", "child_vector_ids": ["cv0", "cv1"]}
+
+
+class ChunkDB(RecordingDB):
+    """只提供删除块这条路要的两个方法，并把调用与向量操作写进同一条 log 对账顺序。"""
+
+    def __init__(self, plan=PLAN, remaining_children=1, log=None):
+        super().__init__()
+        # 传 None == 库里查不到这个块（含"存在但不属于这篇文档"，端点只该知道 404）
+        self.plan = plan
+        self.remaining_children = remaining_children
+        self.log = log if log is not None else []
+        self.plan_calls = []
+        self.chunk_deletes = []
+
+    def plan_chunk_deletion(self, document_id, parent_id):
+        self.plan_calls.append((document_id, parent_id))
+        self.log.append(("plan", document_id, parent_id))
+        if self.plan is None:
+            return None
+        return dict(self.plan, document_id=document_id, parent_id=parent_id)
+
+    def delete_parent_chunk(self, document_id, parent_id):
+        self.chunk_deletes.append((document_id, parent_id))
+        self.log.append(("rows", document_id, parent_id))
+        return {"deleted_children": 2, "chunk_count": self.remaining_children,
+                "document_hidden": self.remaining_children == 0}
+
+    def get_document(self, doc_id):
+        return type("Doc", (), {"id": doc_id, "filename": "a.txt",
+                                "chunk_count": self.remaining_children,
+                                "created_at": datetime(2026, 9, 30, 12, 0)})()
+
+
+class LoggedVectorStore(FakeVectorStore):
+    def __init__(self, log, error=None):
+        super().__init__()
+        self.log = log
+        self.error = error
+
+    def delete_by_ids(self, parent_ids, child_ids):
+        self.log.append(("vectors", list(parent_ids), list(child_ids)))
+        if self.error:
+            raise self.error
+        super().delete_by_ids(parent_ids, child_ids)
+
+
+def test_parent_chunk_delete_removes_vectors_before_rows():
+    """本功能唯一真正的设计主张：先删向量、后删行。
+
+    反过来的坏法是致命的——行没了，重试时按 (document_id, parent_id) 查不到块，
+    404 就是那批幽灵向量永远的把手：子块仍能召回却取不到父块，整轮空返回且不可自愈。
+    向量先删则任何一步失败都还能重试（按 id 删不存在的向量是 no-op）。
+    """
+    log = []
+    db = ChunkDB(log=log)
+    store = LoggedVectorStore(log)
+    client = make_client(db, vector_store=store)
+
+    res = client.delete("/api/documents/42/chunks/a.txt_parent_0")
+
+    assert res.status_code == 200, res.text
+    assert log == [("plan", 42, "a.txt_parent_0"),
+                   ("vectors", ["pv0"], ["cv0", "cv1"]),
+                   ("rows", 42, "a.txt_parent_0")]
+    assert res.json() == {"id": 42, "filename": "a.txt", "chunk_count": 1,
+                          "created_at": "2026-09-30T12:00:00"}
+
+
+def test_missing_chunk_is_404_and_touches_nothing():
+    """查不到就一步都不能走：detail 也得是策展那句，不能被路由缺失的 "Not Found" 顶包。"""
+    log = []
+    db = ChunkDB(plan=None, log=log)
+    store = LoggedVectorStore(log)
+    client = make_client(db, vector_store=store)
+
+    res = client.delete("/api/documents/42/chunks/a.txt_parent_9")
+
+    assert res.status_code == 404
+    assert res.json() == {"detail": "文档块不存在或已被删除"}
+    assert log == [("plan", 42, "a.txt_parent_9")]
+    assert store.deleted == []
+    assert db.chunk_deletes == []
+
+
+def test_vector_failure_on_chunk_delete_returns_500_and_leaves_rows_intact():
+    """向量这一步炸了，行必须原样留着——那是"重试一次就干净"的前提，文案要能行动。"""
+    log = []
+    db = ChunkDB(log=log)
+    store = LoggedVectorStore(log, error=RuntimeError("chroma 不可用"))
+    client = make_client(db, vector_store=store)
+
+    res = client.delete("/api/documents/42/chunks/a.txt_parent_0")
+
+    assert res.status_code == 500
+    assert res.json() == {"detail": "文档块删除未完成，请重试"}
+    assert db.chunk_deletes == []
+    assert ("rows", 42, "a.txt_parent_0") not in log
+
+
+def test_parent_id_reaches_storage_verbatim_through_the_path():
+    """parent_id 是 f"{filename}_parent_{i}"，中文和空格都在文件名里：路径参数不能被 URL 编码咬坏。
+
+    清洗后的文件名不含 "/"（_safe_filename 走 basename），所以放进路径段是安全的，
+    但这层假设一旦破了，坏法是"删不到东西还回 200"，比报错更难查。
+    """
+    from urllib.parse import quote
+
+    db = ChunkDB()
+    client = make_client(db)
+    target = "手册 上.pdf_parent_0"
+
+    res = client.delete(f"/api/documents/42/chunks/{quote(target)}")
+
+    assert res.status_code == 200, res.text
+    assert db.plan_calls == [(42, target)]
+    assert db.chunk_deletes == [(42, target)]
