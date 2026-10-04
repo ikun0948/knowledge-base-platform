@@ -168,3 +168,41 @@ describe('useChat.restore / clear', () => {
     expect(chat.error.value).toBe('HTTP 500')
   })
 })
+
+describe('useChat.markChunkDeleted', () => {
+  // 删的是后端那块内容，界面上只是把"这一轮用过它"的事实标灰：条目必须留着。
+  function seed() {
+    const chat = useChat()
+    chat.messages.value = [
+      { key: 'a', role: 'assistant', content: '', references: [
+        { document_id: 3, parent_id: 'p0', filename: '甲.txt' },
+        { document_id: 3, parent_id: 'p1', filename: '甲.txt' },
+      ] },
+      { key: 'b', role: 'assistant', content: '', references: [
+        { document_id: 3, parent_id: 'p0', filename: '甲.txt' },
+        { document_id: 7, parent_id: 'p0', filename: '乙.pdf' },
+      ] },
+    ]
+    return chat
+  }
+
+  it('跨轮引用同一块时一起标灰', () => {
+    const chat = seed()
+    chat.markChunkDeleted(3, 'p0')
+    expect(chat.messages.value[0].references.map((r) => r.deleted)).toEqual([true, undefined])
+    expect(chat.messages.value[1].references.map((r) => r.deleted)).toEqual([true, undefined])
+  })
+
+  it('parent_id 相同但文档不同：不能顺着 parent_id 误标别人的块', () => {
+    const chat = seed()
+    chat.markChunkDeleted(3, 'p0')
+    expect(chat.messages.value[1].references[1].deleted).toBeUndefined()
+  })
+
+  it('界面上没有这个块：一条都不改（历史恢复后引用形状不同也只能是空操作）', () => {
+    const chat = seed()
+    chat.markChunkDeleted(9, 'p9')
+    const flags = chat.messages.value.flatMap((m) => m.references.map((r) => r.deleted))
+    expect(flags).toEqual([undefined, undefined, undefined, undefined])
+  })
+})

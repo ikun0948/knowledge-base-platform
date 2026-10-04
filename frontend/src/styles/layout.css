@@ -216,6 +216,9 @@
 }
 .reference-item { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-muted); }
 .reference-source { font-weight: 600; }
+/* 删掉的块仍然留在历史里，压暗 + 换成文案是为了让"当时的答案用过它"这件事不消失 */
+.reference-deleted { opacity: 0.6; }
+.chunk-delete { align-self: flex-start; }
 
 .chat-input {
   display: flex;

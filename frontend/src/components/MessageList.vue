@@ -7,6 +7,8 @@ const props = defineProps({
   messages: { type: Array, required: true },
   hasDocuments: { type: Boolean, required: true },
 })
+// 第二跳转发：ReferenceList → MessageBubble → 这里 → App.vue（动作要碰 API 与文档列表，只有 App 够得着）
+const emit = defineEmits(['remove-chunk'])
 
 const listEl = ref(null)
 
@@ -46,6 +48,11 @@ watch(
       </div>
     </div>
 
-    <MessageBubble v-for="message in props.messages" :key="message.key" :message="message" />
+    <MessageBubble
+      v-for="message in props.messages"
+      :key="message.key"
+      :message="message"
+      @remove-chunk="emit('remove-chunk', $event)"
+    />
   </section>
 </template>

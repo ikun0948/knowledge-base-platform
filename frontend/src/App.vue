@@ -6,6 +6,7 @@ import ChatInput from './components/ChatInput.vue'
 import DocumentPanel from './components/DocumentPanel.vue'
 import MessageList from './components/MessageList.vue'
 import StatusBar from './components/StatusBar.vue'
+import { deleteChunk } from './api/documents.js'
 import { useChat } from './composables/useChat.js'
 import { useDocuments } from './composables/useDocuments.js'
 import { useSession } from './composables/useSession.js'
@@ -16,7 +17,7 @@ const {
   documents, selectedIds, queue, listError, docCount,
   refresh, toggleSelect, enqueue, retry, dismiss,
 } = useDocuments()
-const { messages, pending, error, restore, send, clear, abortStream } = useChat()
+const { messages, pending, error, restore, send, clear, abortStream, markChunkDeleted } = useChat()
 
 const question = ref('')
 const clearing = ref(false)
@@ -43,6 +44,23 @@ async function handleClear() {
     question.value = ''
   }
   clearing.value = false
+}
+
+// 删块是不可逆的（向量库删完就没了），所以同样的原生 confirm 门禁不能省。
+async function handleRemoveChunk({ document_id: documentId, parent_id: parentId }) {
+  const ok = window.confirm(
+    `确认删除文档块「${parentId}」？会连同它名下的子块一起从向量库移除，不可恢复。`,
+  )
+  if (!ok) return
+  try {
+    await deleteChunk(documentId, parentId)
+    // 先标界面再刷列表：引用条目是"那一轮用过什么"的凭据，不能因为刷列表而消失
+    markChunkDeleted(documentId, parentId)
+    // chunk_count 归零时后端会隐存文档，selectedIds 的失效项由 refresh 自己摘
+    await refresh()
+  } catch (err) {
+    error.value = err.message
+  }
 }
 
 // M-F3：直接用 ChatInput emit 的载荷（已是 trim 后的文本），不再回头重读 question——
@@ -108,7 +126,11 @@ function dismissError() {
             <span>⚠️ {{ error }}</span>
             <button class="btn btn-ghost btn-small" type="button" @click="dismissError">关闭</button>
           </p>
-          <MessageList :messages="messages" :has-documents="documents.length > 0" />
+          <MessageList
+            :messages="messages"
+            :has-documents="documents.length > 0"
+            @remove-chunk="handleRemoveChunk"
+          />
           <ChatInput v-model="question" :pending="pending" @send="handleSend" @stop="handleStop" />
         </div>
       </div>

@@ -151,5 +151,17 @@ export function useChat() {
     }
   }
 
-  return { messages, pending, error, restore, send, clear, abortStream }
+  function markChunkDeleted(documentId, parentId) {
+    // 整屏扫而不是只改当前气泡：同一个块会被多轮答案引用，只灰一处看起来像"删了一半"。
+    // 条目本身必须留着——它是"那一轮用过什么"的凭据，抹掉等于篡改已经落库的历史。
+    for (const message of messages.value) {
+      for (const reference of message.references) {
+        if (reference.document_id === documentId && reference.parent_id === parentId) {
+          reference.deleted = true
+        }
+      }
+    }
+  }
+
+  return { messages, pending, error, restore, send, clear, abortStream, markChunkDeleted }
 }

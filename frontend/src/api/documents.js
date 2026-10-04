@@ -4,6 +4,14 @@ export function listDocuments() {
   return request('/api/documents')
 }
 
+// parent_id 形如 "手册 上.pdf_parent_0"：中文和空格是文件名本身带进来的，
+// 不编码就会拼出非法请求行，坏法还是"404 块不存在"而不是报错。
+export function deleteChunk(documentId, parentId) {
+  return request(`/api/documents/${documentId}/chunks/${encodeURIComponent(parentId)}`, {
+    method: 'DELETE',
+  })
+}
+
 // 上传选 XMLHttpRequest 不选 fetch：fetch 没有上传方向的事件（ReadableStream 管的是读响应），
 // 而 spec 6.2 要求每个文件独立的进度；阶段二的 SSE 才回到 fetch + ReadableStream，两者不冲突。
 export function uploadDocument(file, { onProgress } = {}) {
