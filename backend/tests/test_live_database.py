@@ -342,3 +342,63 @@ def test_identifier_unique_on_real_mysql(db):
     finally:
         _drop_probe_account(db, user.id)
     assert db.get_user_by_id(user.id) is None
+
+
+@pytest.mark.live
+def test_migration_columns_are_present_and_the_second_pass_is_quiet(db):
+    """`ADD COLUMN` 的真语义只有真库能证，而这条判据钉的是"第二遍零 ALTER"。
+
+    这里绝不主动触发第一遍：测试不许改共享库的结构（基线判据靠它）。列的存在本身就是
+    证据——它只可能由 lifespan 那次 run_migrations 补出来。索引同理：spec 2.2 要的
+    `idx_documents_user_id` 只有迁移会去建，`SHOW INDEX` 的行数在两次 ensure_indexes
+    前后相等是它幂等的证据，也是全计划里唯一直接查已部署 schema（而非 ORM 元数据）的索引判据。
+    """
+    from sqlalchemy import text
+
+    from core import migrations
+
+    with db.engine.connect() as conn:
+        assert migrations.column_exists(conn, "documents", "user_id"), (
+            "documents.user_id 不存在：服务没重启过，或迁移没接进 lifespan"
+        )
+        before = len(conn.execute(text("SHOW COLUMNS FROM documents")).fetchall())
+        assert migrations.ensure_columns(conn) == []
+        assert migrations.ensure_columns(conn) == []
+        after = len(conn.execute(text("SHOW COLUMNS FROM documents")).fetchall())
+
+        assert migrations.index_exists(conn, "documents", "idx_documents_user_id"), (
+            "idx_documents_user_id 不存在：ensure_indexes 没进 run_migrations，"
+            "或者它压根没跑起来"
+        )
+        index_before = len(conn.execute(text("SHOW INDEX FROM documents")).fetchall())
+        assert migrations.ensure_indexes(conn) == []
+        assert migrations.ensure_indexes(conn) == []
+        index_after = len(conn.execute(text("SHOW INDEX FROM documents")).fetchall())
+    assert after == before, "两次 ensure_columns 之间列数变了：幂等破了"
+    assert index_after == index_before, "两次 ensure_indexes 之间索引行数变了：幂等破了"
+
+
+@pytest.mark.live
+def test_default_user_exists_and_owns_the_baseline_documents(db):
+    """spec 7.3 的第 5 条判据（旧数据归位 SQL 直查）搬进自动化：基线 13 行全归 default。
+
+    13 是 documents 的**物理行数**（4 篇活 + 9 篇删块删到 is_active=0 的隐存行），不是
+    `/api/health` 那个活文档计数——归户 SQL 是 `WHERE user_id IS NULL`，隐存行同样要归户。
+
+    这条不成立就说明 lifespan 那次 run_migrations 没跑成——手动起服务时最容易漏。
+    """
+    from sqlalchemy import text
+
+    from core.migrations import DEFAULT_IDENTIFIER
+
+    with db.engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT id FROM users WHERE identifier = :i"), {"i": DEFAULT_IDENTIFIER}).fetchall()
+        assert row, "默认用户行没建出来：迁移没跑或跑在 create_all 之前"
+        default_id = row[0][0]
+        owned = conn.execute(text(
+            "SELECT COUNT(*) FROM documents WHERE user_id = :u"), {"u": default_id}).fetchone()[0]
+        unowned = conn.execute(text(
+            "SELECT COUNT(*) FROM documents WHERE user_id IS NULL")).fetchone()[0]
+    assert unowned == 0, f"还有 {unowned} 篇文档无主，归户那步没做完"
+    assert owned == 13, f"基线 13 行应全归 default，实得 {owned}"

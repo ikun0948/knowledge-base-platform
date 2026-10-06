@@ -12,6 +12,7 @@ from api.history import router as history_router
 from config.config import Config
 from core.database import DatabaseManager
 from core.document_processor import DocumentProcessor
+from core.migrations import run_migrations
 from core.rag_system import RAGSystem
 from core.vector_store import VectorStore
 from deps import get_config, get_db, get_vector_store
@@ -47,6 +48,12 @@ async def lifespan(app: FastAPI):
     app.state.db = DatabaseManager(config)
     app.state.doc_processor = DocumentProcessor(config)
     app.state.vector_store = VectorStore(config)
+    # 迁移挂在 lifespan 而不是 DatabaseManager.init_database：
+    # ① test_observability.py 钉死了 init 只发 engine + create_all 两次调用；
+    # ② 补向量戳需要 vector_store 那个 Chroma client，它在 db 之后才构造。
+    # 每次开机重跑，靠幂等把三处不同进度的库收拢（core/migrations.py 顶部）。
+    run_migrations(app.state.db.engine, app.state.vector_store.chroma_client,
+                   config.DEFAULT_USER_PASSWORD)
     app.state.rag_system = RAGSystem(config, app.state.db, app.state.vector_store)
     logger.info("后端初始化完成，chroma=%s", config.CHROMA_PERSIST_DIR)
     yield
