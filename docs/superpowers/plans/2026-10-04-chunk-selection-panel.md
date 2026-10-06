@@ -881,17 +881,28 @@ Run: `cd frontend && npm test` → Expected: documents-api 6 passed。
 
 `frontend/tests/useChat.test.js`：全文 `document_ids:` → `parent_ids:`，值 `[1]` → `['甲.txt_parent_0']`，并在第一个用例后追加：
 
+> 批量换键的口径：本文件里有 **2 处 `document_ids: [1]`**（载荷）和 **9 处 `document_ids: []`**（载荷），
+> 都要换；但引用对象里的 **`document_id:`（单数，如 `{ document_id: 1, filename: '甲.txt' }`）一个都不能动**——
+> 那是后端 Reference 的字段。用 `document_ids:` 整串做替换才不会误伤。
+> 追加的用例别照抄下游模板里的 `setStream(chat, [])`：本仓这个文件的流桩叫 `scriptEvents`，
+> 而且每条用例要自己 `const chat = useChat()`。
+
 ```js
-  it('载荷里的池子字段叫 parent_ids：后端那份 ChatRequest 只认这个名字', async () => {
-    setStream(chat, [])
-    await chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲_p_0'] })
+  // 后端那份 ChatRequest 只认 parent_ids；多余字段被 Pydantic 静默丢掉，
+  // 坏法是"每次对话都走普通链、引用条永远空"，不是 422 也不是报错。
+  it('载荷里的池子字段叫 parent_ids', async () => {
+    scriptEvents([['token', { text: 'x' }], DONE])
+    const chat = useChat()
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'] })
     expect(sendChatStream.mock.calls[0][0]).toEqual({
-      session_id: 's1', question: 'q', parent_ids: ['甲_p_0'],
+      session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'],
     })
   })
 ```
 
-Run: `cd frontend && npm test` → Expected: 该条 FAIL（useChat 仍解构 `document_ids` → 载荷里是 `document_ids: undefined`）。
+Run: `cd frontend && npm test` → Expected: 该条 FAIL。实测红因是"缺字段"而不是"多字段"：
+`toEqual` 忽略值为 `undefined` 的属性，所以旧的 `document_ids: undefined` 不会出现在 received 里，
+received 只有 `{ session_id, question }`——判据靠 expected 里那个真值 `parent_ids` 撑住。
 
 - [ ] **Step 4: 改 `useChat.js`**
 
@@ -1024,7 +1035,9 @@ describe('useChunkSelection', () => {
 })
 ```
 
-Run: `cd frontend && npm test` → Expected: FAIL — 找不到 `useChunkSelection.js`。
+Run: `cd frontend && npm test` → Expected: FAIL，但红在"文件级"而不是"用例级"：模块缺失时 vitest 整个文件加载失败、
+一条都不收集，实测汇总 `Test Files  1 failed | 5 passed (6)` + `Tests  50 passed (50)`。
+别把 50 全绿看成"新测试没写进去"——看的是那 1 个 failed 文件。
 
 - [ ] **Step 6: 实现 `useChunkSelection.js`**
 
@@ -1126,12 +1139,13 @@ export function useChunkSelection() {
 }
 ```
 
-Run: `cd frontend && npm test` → Expected: useChunkSelection 10 passed。
+Run: `cd frontend && npm test` → Expected: useChunkSelection 10 passed（实测全量 `Tests  60 passed (60)`，6 个文件）。
 
 - [ ] **Step 7: 跑前端门禁并提交**
 
 Run: `cd frontend && npm test && npm run build`
-Expected: 测试零 failed（实数比 45 多）、build exit 0。
+Expected: 测试零 failed、build exit 0。实测数：**45 → 60 passed**（新增 15 条 = listChunks 4 + useChat 载荷键 1 + useChunkSelection 10），
+build 产物 `78.56 kB` 的入口 js 正常 exit 0（`useChunkSelection.js` 此刻还没有组件引用它，不在打包图里，属预期）。
 
 ```bash
 git add frontend/src/api/documents.js frontend/src/composables/useChat.js \
