@@ -122,28 +122,7 @@
   .chat-messages { padding: 12px; }
 }
 
-/* ---- 文档区（Task 4）：.doc-card 从 app.py 搬，margin/padding 的侧栏居中hack 改成随栏宽 ---- */
-.doc-list { display: flex; flex-direction: column; gap: 8px; }
-.doc-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  box-sizing: border-box;
-  max-width: 100%;
-  padding: 8px 12px;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  cursor: pointer;
-}
-.doc-card:hover,
-.doc-card-checked {
-  border-color: var(--brand-1);
-  box-shadow: var(--shadow-card-hover);
-}
-.doc-name { font-weight: 600; }
-.doc-meta { font-size: 12px; color: var(--text-muted); }
-
+/* ---- 上传区（Task 4）：文档卡片列表随"块级选择面板"退役，勾选语义已由 .chunk-* 接手 ---- */
 .uploader { display: flex; flex-direction: column; gap: 8px; }
 .uploader-label { display: inline-flex; align-items: center; justify-content: center; }
 .file-input { display: none; }
@@ -219,6 +198,73 @@
 /* 删掉的块仍然留在历史里，压暗 + 换成文案是为了让"当时的答案用过它"这件事不消失 */
 .reference-deleted { opacity: 0.6; }
 .chunk-delete { align-self: flex-start; }
+
+/* ---- 块级选择（2026-10-04）：面板里的已选卡片 + 候选池弹窗 ---- */
+.picker-open { margin: 4px 0 10px; align-self: flex-start; }
+.chunk-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
+.chunk-card {
+  position: relative; display: flex; gap: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--panel-bg); box-shadow: var(--shadow-bubble);
+}
+.chunk-card-selected { border-color: var(--brand-1); }
+.chunk-card-body {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 12px; border: 0; background: none; text-align: left;
+  font: inherit; color: var(--text-main); cursor: pointer;
+}
+.chunk-title { font-weight: 600; word-break: break-all; }
+.chunk-snippet { font-size: 12px; color: var(--text-muted); }
+.chunk-meta { font-size: 11px; color: var(--text-muted); word-break: break-all; }
+.chunk-badge {
+  margin-left: 6px; padding: 0 6px; border-radius: var(--radius-pill);
+  background: var(--status-rag-bg); color: var(--status-rag-fg); font-size: 11px; font-weight: 400;
+}
+/* ✕ 是"取消选择"（本地、不发请求）；引用条上的 🗑 才是删数据，两者文案必须不同 */
+.chunk-remove {
+  align-self: flex-start; flex: 0 0 auto; margin: 6px 6px 0 0;
+  width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 50%; background: var(--fail-bg); color: var(--fail-fg);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+
+.picker-backdrop {
+  position: fixed; inset: 0; z-index: 4;   /* 高于 ≤768 侧栏浮层的 3，否则窄屏下弹窗被盖住点不到 */
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg);
+}
+.picker-modal {
+  width: min(92vw, 560px); max-height: 82vh; overflow: hidden;
+  display: flex; flex-direction: column; gap: 10px; padding: 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--panel-bg); box-shadow: var(--shadow-panel);
+}
+.picker-header { display: flex; align-items: center; justify-content: space-between; }
+.picker-title { margin: 0; font-size: 16px; }
+.picker-close {
+  width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--page-bg); color: var(--text-muted); cursor: pointer;
+}
+.picker-search { display: flex; gap: 8px; }
+.picker-input {
+  flex: 1; min-width: 0; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--panel-bg); color: var(--text-main);
+}
+.picker-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.picker-tab {
+  padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--panel-bg); color: var(--text-muted); font-size: 13px; cursor: pointer;
+}
+.picker-tab-active { background: var(--grad-brand); color: var(--on-brand); border-color: transparent; }
+.picker-error { font-size: 13px; color: var(--fail-fg); }
+.picker-hint { font-size: 13px; color: var(--text-muted); }
+/* 有界滚动：弹窗结果区不随内容长高（L-2 同族要求，长列表撑破视口是老病根） */
+.picker-results {
+  flex: 1; margin: 0; padding: 0 2px 0 0; overflow-y: auto; max-height: 60vh;
+  display: flex; flex-direction: column; gap: 8px; list-style: none;
+}
+.picker-results li { display: flex; }   /* 卡片随栏宽：li 默认 block 会把 flex 卡片挤成内容宽 */
 
 .chat-input {
   display: flex;

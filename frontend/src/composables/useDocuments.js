@@ -12,7 +12,6 @@ export function docLabel(doc) {
 
 export function useDocuments() {
   const documents = ref([])
-  const selectedIds = ref([])
   const queue = ref([])
   const listError = ref('')
   let running = false
@@ -23,18 +22,9 @@ export function useDocuments() {
     try {
       documents.value = await listDocuments()
       listError.value = ''
-      // 勾过的文档不在列表里了就要撤勾：留着会让 document_ids 带上后端不认的 id，问答直接 502
-      const alive = new Set(documents.value.map((doc) => doc.id))
-      selectedIds.value = selectedIds.value.filter((id) => alive.has(id))
     } catch (err) {
       listError.value = err.message
     }
-  }
-
-  function toggleSelect(id) {
-    selectedIds.value = selectedIds.value.includes(id)
-      ? selectedIds.value.filter((x) => x !== id)
-      : [...selectedIds.value, id]
   }
 
   function enqueue(files) {
@@ -93,12 +83,10 @@ export function useDocuments() {
 
   return {
     documents,
-    selectedIds,
     queue,
     listError,
     docCount,
     refresh,
-    toggleSelect,
     enqueue,
     retry,
     dismiss,

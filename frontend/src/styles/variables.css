@@ -32,7 +32,8 @@
   --radius-bubble: 18px;
   --radius-pill: 20px;
   --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.1);
-  --shadow-card-hover: 0 2px 8px rgba(102, 126, 234, 0.1);
+  /* 弹窗遮罩：压在 ≤768 侧栏浮层（z-index 3）之上，底色只能是黑色透明度 */
+  --overlay-bg: rgba(0, 0, 0, 0.45);
   --shadow-bubble: 0 1px 2px rgba(0, 0, 0, 0.1);
   --shadow-btn-hover: 0 4px 12px rgba(102, 126, 234, 0.3);
   /* focus 光圈只收颜色不收 2px solid——宽度与样式是使用处的语义，不是 token 的 */
