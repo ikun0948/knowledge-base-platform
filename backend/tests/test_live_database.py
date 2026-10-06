@@ -5,6 +5,7 @@
 """
 import json
 import time
+import uuid
 from datetime import timedelta
 
 import pytest
@@ -154,3 +155,107 @@ def test_deleting_a_parent_chunk_takes_its_children_and_hides_the_document(db):
     finally:
         db.delete_document(doc_id)
     assert db.get_document(doc_id) is None
+
+
+def probe(db, filename, blocks):
+    """造一篇探针文档：blocks 是 {parent_id: 子块数}，返回 doc_id。
+
+    parent_id 由调用方带上本次运行的唯一 tag——这些测试连的是共享真库，
+    不加隔离的话断言会吃到基线那 11 个块。调用方负责 finally 里 delete_document。
+    """
+    doc_id = db.save_document(filename=filename, file_path="", content="正文",
+                              chunk_count=sum(blocks.values()))
+    parent_docs = [type("D", (), {"page_content": f"{p} 的正文", "metadata": {"parent_id": p}})()
+                   for p in blocks]
+    child_docs = [
+        type("D", (), {"page_content": f"{p} 的子块 {i}",
+                       "metadata": {"parent_id": p, "child_id": f"c_{p}_{i}"}})()
+        for p, n in blocks.items() for i in range(n)
+    ]
+    db.save_chunks(doc_id, parent_docs, child_docs,
+                   [f"vp_{p}" for p in blocks],
+                   [f"vc_{c.metadata['child_id']}" for c in child_docs])
+    return doc_id
+
+
+def new_tag():
+    return f"probe{uuid.uuid4().hex[:8]}"
+
+
+def test_search_parent_chunks_matches_filename_and_content_without_touching_wildcards(db):
+    """候选池的 SQL 语义只在真 MySQL 上有牙齿：fake 里没有第二张表，通配符也从不生效。"""
+    tag = new_tag()
+    doc_a = probe(db, f"{tag}甲.txt", {f"{tag}甲_p_0": 2})
+    doc_b = probe(db, f"{tag}乙.pdf", {f"{tag}乙_p_0": 1, f"{tag}乙_p_1": 1})
+    try:
+        by_filename = db.search_parent_chunks(query=f"{tag}甲")
+        assert [r.parent_id for r in by_filename] == [f"{tag}甲_p_0"]
+        assert by_filename[0].filename == f"{tag}甲.txt"
+        assert by_filename[0].child_count == 2      # GROUP BY 的聚合，不是 documents.chunk_count 那个手写数
+
+        # 只出现在父块正文里的串：证明搜的是 content，不只是文件名
+        assert [r.parent_id for r in db.search_parent_chunks(query=f"{tag}乙_p_1")] == [f"{tag}乙_p_1"]
+        assert db.search_parent_chunks(query=f"{tag}查无此词") == []
+
+        # 转义的两条活体判据：不转义时 % 会命中这批探针块、_ 会顶掉文件名里那个真实的点
+        assert db.search_parent_chunks(query=f"{tag}%") == []
+        assert db.search_parent_chunks(query=f"{tag}甲_txt") == []
+
+        assert [r.parent_id for r in db.search_parent_chunks(query=tag, suffix="pdf")] == [
+            f"{tag}乙_p_0", f"{tag}乙_p_1"]
+        assert [r.parent_id for r in db.search_parent_chunks(query=tag, suffix="txt")] == [f"{tag}甲_p_0"]
+
+        # 排序钉 document_id（创建顺序）：created_at 同批相同，用它排会漂
+        assert [r.parent_id for r in db.search_parent_chunks(query=tag)] == [
+            f"{tag}甲_p_0", f"{tag}乙_p_0", f"{tag}乙_p_1"]
+        assert list(db.search_parent_chunks(query=tag, limit=2)) == list(db.search_parent_chunks(query=tag))[:2]
+    finally:
+        db.delete_document(doc_a)
+        db.delete_document(doc_b)
+
+
+def test_search_parent_chunks_batch_mode_ignores_query_and_survives_commas_in_ids(db):
+    """hydrate 的通路：批量点查优先于 query/suffix/limit，且含逗号的 parent_id 原样往返。
+
+    parent_id 由清洗后的文件名拼出，逗号是合法字符——所以契约用重复键而不是逗号拼接。
+    """
+    tag = new_tag()
+    weird = f"{tag},带逗号.txt"
+    doc_a = probe(db, weird, {f"{weird}_p_0": 1})
+    doc_b = probe(db, f"{tag}丙.txt", {f"{tag}丙_p_0": 1})
+    try:
+        rows = db.search_parent_chunks(query="不存在这个词", suffix="pdf",
+                                       parent_ids=[f"{weird}_p_0", f"{tag}丙_p_0"])
+        assert sorted(r.parent_id for r in rows) == sorted([f"{weird}_p_0", f"{tag}丙_p_0"])
+        # 未知 id 静默少返回：前端 hydrate 拿"少返回"当剪死 id 的唯一信号
+        assert db.search_parent_chunks(parent_ids=[f"{tag}早就没了_p_9"]) == []
+        # 重复入参只出一行（GROUP BY 挡住 fan-out）
+        dup = db.search_parent_chunks(parent_ids=[f"{tag}丙_p_0", f"{tag}丙_p_0"])
+        assert [r.parent_id for r in dup] == [f"{tag}丙_p_0"]
+        # 批量模式不吃 limit：limit=1 仍应把两个 id 都问回来
+        assert len(db.search_parent_chunks(parent_ids=[f"{weird}_p_0", f"{tag}丙_p_0"], limit=1)) == 2
+    finally:
+        db.delete_document(doc_a)
+        db.delete_document(doc_b)
+
+
+def test_search_parent_chunks_excludes_hidden_documents(db):
+    """chunk_count 归零而隐存的文档不该再往弹窗里供块——选了也召回不到，是死条目。"""
+    tag = new_tag()
+    doc_id = probe(db, f"{tag}丁.txt", {f"{tag}丁_p_0": 1, f"{tag}丁_p_1": 1})
+    try:
+        assert len(db.search_parent_chunks(query=tag)) == 2
+        db.delete_parent_chunk(doc_id, f"{tag}丁_p_0")
+        assert len(db.search_parent_chunks(query=tag)) == 1
+        db.delete_parent_chunk(doc_id, f"{tag}丁_p_1")     # 归零 → is_active=False
+        assert db.search_parent_chunks(query=tag) == []
+    finally:
+        db.delete_document(doc_id)
+
+
+def test_search_parent_chunks_returns_the_baseline_pool_readable(db):
+    """spec 3.4 的基线 smoke：这台机器上候选池有的可返回，且字段齐得够前端渲染。
+    钉"非空 + 字段形状"，不钉条数——条数是要随上传变的（migration 门才管那个）。"""
+    rows = db.search_parent_chunks(limit=200)
+    assert rows, "基线库里应有 11 个父块"
+    assert all(r.parent_id and r.filename and r.child_count >= 1 for r in rows)

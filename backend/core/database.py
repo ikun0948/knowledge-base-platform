@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
+from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -10,6 +10,16 @@ from exceptions import StorageError
 logger = logging.getLogger("kb.database")
 
 Base = declarative_base()
+
+
+def _escape_like(raw: str) -> str:
+    r"""挡掉 LIKE 的三个元字符。
+
+    参数绑定挡住的是 SQL 注入，挡不住通配符语义：搜索框里的 `%` 是用户真想搜的那个字符，
+    不是"任意串"。反斜杠必须最先替换，否则它会把随后补上的转义符再转义一遍。
+    """
+    return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 # 定义一个创建documents表的类
 class Document(Base):
@@ -217,6 +227,50 @@ class DatabaseManager:
             ParentChunk.document_id == document_id,
             ParentChunk.parent_id == parent_id,
         ).first()
+
+    def search_parent_chunks(self, query="", suffix="", parent_ids=(), limit=50):
+        """父块候选池：模糊搜文件名/块内文本，或按 parent_id 批量点查（后者优先）。
+
+        三条不能反的规矩：
+        * 只连 is_active 的文档——删块把 chunk_count 打到 0 的文档已隐存，
+          它的残块摆进弹窗就是"选了也召回不到"的死条目。
+        * 子块数用 outerjoin + GROUP BY 一次聚合。写成 len(chunk.child_chunks) 是 N+1，
+          几百个块时弹窗会转圈。
+        * 批量模式不吃 limit：hydrate 最多问 50 个 id，limit 插手会把选中项截没。
+        """
+        session = self.get_session()
+        try:
+            stmt = (
+                session.query(
+                    ParentChunk.parent_id,
+                    ParentChunk.document_id,
+                    ParentChunk.content,
+                    Document.filename,
+                    func.count(ChildChunk.id).label("child_count"),
+                )
+                .join(Document, Document.id == ParentChunk.document_id)
+                .outerjoin(ChildChunk, ChildChunk.parent_chunk_id == ParentChunk.id)
+                .filter(Document.is_active == True)
+            )
+            ids = list(dict.fromkeys(parent_ids))
+            if ids:
+                stmt = stmt.filter(ParentChunk.parent_id.in_(ids))
+            else:
+                if query:
+                    pattern = f"%{_escape_like(query)}%"
+                    stmt = stmt.filter(
+                        Document.filename.like(pattern, escape="\\")
+                        | ParentChunk.content.like(pattern, escape="\\")
+                    )
+                if suffix:
+                    stmt = stmt.filter(Document.filename.ilike(f"%.{suffix.lower()}", escape="\\"))
+            # group_by 必须在 limit 之前：Query 在已带 LIMIT 的语句上调它会直接抛 InvalidRequestError
+            stmt = stmt.group_by(ParentChunk.id).order_by(
+                ParentChunk.document_id.asc(), ParentChunk.parent_id.asc()
+            )
+            return stmt.all() if ids else stmt.limit(limit).all()
+        finally:
+            session.close()
 
     def plan_chunk_deletion(self, document_id, parent_id):
         """只读一步：把父块与其子块的 vector_id 交出去，好让端点先清向量再动行。"""

@@ -1,11 +1,15 @@
 import logging
 import os
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import Field
 
 from deps import get_db, get_doc_processor, get_vector_store
 from exceptions import StorageError, UnsupportedDocumentType
-from schemas.documents import DocumentOut
+from schemas.common import snippet_of
+from schemas.documents import ChunkOut, DocumentOut
 
 router = APIRouter(prefix="/api/documents")
 logger = logging.getLogger("kb.api.documents")
@@ -21,6 +25,13 @@ def _safe_filename(raw: str) -> str:
     """去掉任何路径成分：客户端可以塞 "a/../../b.txt"，也可以塞反斜杠版本。"""
     # os.path.basename 只认本平台那个分隔符，反斜杠先归一，Linux 部署面上才不会整串进库
     return os.path.basename(raw.replace("\\", "/"))
+
+
+def _suffix_of(filename: str) -> str:
+    """后缀取最后一个点之后并小写。rpartition 在没点时返回 ('', '', filename)，
+    这时必须给空串——否则 README 会被判成"后缀=README"。"""
+    _, dot, ext = filename.rpartition(".")
+    return ext.lower() if dot else ""
 
 
 @router.post("", status_code=201, response_model=DocumentOut)
@@ -87,6 +98,38 @@ def list_documents(db=Depends(get_db)):
     return [
         DocumentOut(id=d.id, filename=d.filename, chunk_count=d.chunk_count, created_at=d.created_at)
         for d in db.get_all_documents()
+    ]
+
+
+@router.get("/chunks", response_model=list[ChunkOut])
+def list_chunks(
+    query: str = Query("", max_length=100),
+    suffix: Literal["", "pdf", "docx", "txt"] = Query(""),
+    parent_ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Query(
+        default=[], max_length=50),
+    limit: int = Query(50, ge=1, le=200),
+    db=Depends(get_db),
+):
+    """父块候选池。三种模式同一条路由：模糊搜（query+suffix）、批量点查（parent_ids，优先）、
+    全量前 N（都不给）。拆成两条路由的话，前端 hydrate 与弹窗搜索会各自演化出一套过滤规则。
+
+    注册位置钉在 /{document_id} 之前：FastAPI 按注册顺序匹配，将来加按 id 取文档的路由时
+    写反了就会让 /chunks 变成"文档不存在"的 404。
+    """
+    rows = db.search_parent_chunks(
+        query=query, suffix=suffix,
+        parent_ids=list(dict.fromkeys(parent_ids)), limit=limit,
+    )
+    return [
+        ChunkOut(
+            parent_id=r.parent_id,
+            document_id=r.document_id,
+            filename=r.filename,
+            suffix=_suffix_of(r.filename),
+            snippet=snippet_of(r.content),
+            child_count=r.child_count,
+        )
+        for r in rows
     ]
 
 

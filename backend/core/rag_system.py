@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 
 from exceptions import LLMError, RetrievalError
-from schemas.common import SNIPPET_LIMIT, Reference
+from schemas.common import Reference, snippet_of
 
 logger = logging.getLogger("kb.rag")
 
@@ -124,15 +124,12 @@ class RAGSystem:
         )
         references = []
         for doc in compressed_docs:
-            text = " ".join(doc.page_content.split())
-            if len(text) > SNIPPET_LIMIT:
-                text = text[:SNIPPET_LIMIT] + "..."
             document_id = int(doc.metadata["document_id"])
             references.append(Reference(
                 document_id=document_id,
                 parent_id=doc.metadata.get("parent_id", ""),
                 filename=filenames.get(document_id, ""),
-                snippet=text,
+                snippet=snippet_of(doc.page_content),
             ))
         return references
 
