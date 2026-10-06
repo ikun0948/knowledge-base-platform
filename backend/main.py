@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.auth import router as auth_router
 from api.chat import router as chat_router
 from api.documents import router as documents_router
 from api.history import router as history_router
@@ -15,6 +16,7 @@ from core.rag_system import RAGSystem
 from core.vector_store import VectorStore
 from deps import get_config, get_db, get_vector_store
 from exceptions import (
+    AuthError,
     LLMError,
     RetrievalError,
     StorageError,
@@ -29,6 +31,7 @@ STATUS_BY_ERROR = {
     StorageError: 500,
     RetrievalError: 502,
     LLMError: 502,
+    AuthError: 401,
 }
 
 
@@ -56,7 +59,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -85,6 +88,7 @@ def create_app() -> FastAPI:
             "vector_counts": vector_store.collection_counts(),
         }
 
+    app.include_router(auth_router)
     app.include_router(documents_router)
     app.include_router(chat_router)
     app.include_router(history_router)

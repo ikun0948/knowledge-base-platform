@@ -16,3 +16,8 @@ class RetrievalError(KnowledgeBaseError):
 
 class LLMError(KnowledgeBaseError):
     """502：大模型调用失败。"""
+
+
+class AuthError(KnowledgeBaseError):
+    """401：缺令牌、坏令牌、过期令牌。三种情况共用一句文案——
+    区分它们等于向外人承认"这个账号存在，只是你的票不对"（spec 3.5）。"""

@@ -8,13 +8,13 @@ import pytest
 from fastapi import APIRouter, Depends
 from fastapi.testclient import TestClient
 
-from exceptions import LLMError, RetrievalError, StorageError, UnsupportedDocumentType
+from exceptions import AuthError, LLMError, RetrievalError, StorageError, UnsupportedDocumentType
 from core.database import DatabaseManager
 from main import STATUS_BY_ERROR, create_app
 
 
 def unsupported_type_dep():
-    """四个探针依赖：线上这些异常来自 core 层，测试用 dependency_overrides 换成同款。"""
+    """五个探针依赖：线上这些异常来自 core 层，测试用 dependency_overrides 换成同款。"""
 
 
 def storage_dep():
@@ -26,6 +26,10 @@ def retrieval_dep():
 
 
 def llm_dep():
+    """见 unsupported_type_dep。"""
+
+
+def auth_dep():
     """见 unsupported_type_dep。"""
 
 
@@ -57,6 +61,11 @@ def probe_llm(_=Depends(llm_dep)):
     return {"unreachable": True}
 
 
+@probe_router.get("/auth")
+def probe_auth(_=Depends(auth_dep)):
+    return {"unreachable": True}
+
+
 @probe_router.get("/unhandled")
 def probe_unhandled(_=Depends(unhandled_dep)):
     return {"unreachable": True}
@@ -74,6 +83,7 @@ CENTRAL_MAP = [
     (storage_dep, "/api/probe/storage", StorageError("文档入库失败，已回滚"), 500),
     (retrieval_dep, "/api/probe/retrieval", RetrievalError("检索或上下文压缩失败，请稍后重试"), 502),
     (llm_dep, "/api/probe/llm", LLMError("大模型调用失败，请稍后重试"), 502),
+    (auth_dep, "/api/probe/auth", AuthError("未登录或登录已过期"), 401),
 ]
 
 
@@ -98,7 +108,7 @@ def test_central_map_pins_the_status_number_of_every_domain_error(dep, path, err
 def test_central_map_covers_every_domain_error_class():
     """漏一格就等于漏一类：没进表的异常会退化成兜底 500，语义静默改变。"""
     assert set(STATUS_BY_ERROR) == {
-        UnsupportedDocumentType, StorageError, RetrievalError, LLMError
+        UnsupportedDocumentType, StorageError, RetrievalError, LLMError, AuthError
     }
 
 

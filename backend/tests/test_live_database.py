@@ -6,7 +6,7 @@
 import json
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from config.config import Config
@@ -276,3 +276,69 @@ def test_document_ids_for_parents_reverse_lookup_is_ordered_deduped_and_silent_o
     finally:
         db.delete_document(doc_a)
         db.delete_document(doc_b)
+
+
+def _drop_probe_account(db, user_id):
+    """删掉探针账号：先 auth_tokens 再 users（前者对后者有外键）。
+
+    生产代码里没有 delete_user——Task 2 用不上，为一条测试加一个只给测试用的删除口是 YAGNI，
+    所以清理留在测试侧：这两张表没有基线计数钉着，但探针名带 uuid，不清就每轮长一对
+    永远没人再查的孤儿行，共享库里攒的是垃圾而不是证据。
+    """
+    from core.database import AuthToken, User
+
+    session = db.get_session()
+    try:
+        session.query(AuthToken).filter(AuthToken.user_id == user_id).delete()
+        session.query(User).filter(User.id == user_id).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_account_methods_round_trip_on_real_mysql(db):
+    """join + expires_at 那两条 SQL 语义 fake 给不出证据：这里钉真库上的成功与过期。"""
+    from core.security import hash_password, hash_token, new_token
+
+    tag = f"probe-{new_tag()}"
+    user = db.create_user(identifier=f"{tag}@local", identifier_type="email",
+                          nickname="探针", password_hash=hash_password("probe-pass"))
+    token = new_token()
+    try:
+        db.create_token(user_id=user.id, token_hash=hash_token(token),
+                        expires_at=datetime.now() + timedelta(days=1))
+        assert db.get_user_by_token(hash_token(token)).id == user.id
+        assert db.count_users() >= 1
+
+        expired = f"{tag}-expired"
+        db.create_token(user_id=user.id, token_hash=expired,
+                        expires_at=datetime.now() - timedelta(seconds=1))
+        assert db.get_user_by_token(expired) is None, "过期令牌仍能换回用户：expires_at 那道滤条件没生效"
+
+        assert db.delete_token(hash_token(token)) == 1
+        assert db.get_user_by_token(hash_token(token)) is None
+        assert db.delete_token(hash_token(token)) == 0, "重复登出不该报第二行"
+    finally:
+        _drop_probe_account(db, user.id)
+    assert db.get_user_by_id(user.id) is None, "探针账号没清干净：共享库残留"
+
+
+def test_identifier_unique_on_real_mysql(db):
+    """`users.identifier` 的 unique 是 DDL 层事实，只有真库能证。"""
+    from sqlalchemy.exc import IntegrityError
+
+    from core.security import hash_password
+
+    tag = f"dup-{new_tag()}"
+    user = db.create_user(identifier=f"{tag}@local", identifier_type="email",
+                          nickname="甲", password_hash=hash_password("probe-pass"))
+    try:
+        with pytest.raises(IntegrityError):
+            db.create_user(identifier=f"{tag}@local", identifier_type="email",
+                           nickname="乙", password_hash=hash_password("probe-pass"))
+        # 不补一次空 rollback：create_user 自己的 except 已经 rollback、finally 已经 close，
+        # 再 get_session() 只会漏一条没人 close 的连接
+        assert db.get_user_by_identifier(f"{tag}@local").nickname == "甲", "第二行撞库了？unique 没挡住"
+    finally:
+        _drop_probe_account(db, user.id)
+    assert db.get_user_by_id(user.id) is None
