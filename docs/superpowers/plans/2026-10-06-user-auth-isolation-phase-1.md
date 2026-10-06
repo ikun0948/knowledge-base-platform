@@ -31,6 +31,8 @@
 
 > **2026-10-06 修订（Task 1 执行期回写，两条门禁口径）**
 > ① 上面"后端门禁基线 **176 passed / 0 skipped**"那一格**要求 `:8000` 上有一份活着的 uvicorn**——`test_live_stream.py:34` 与 `:64` 那两条在没有服务时是 `skip` 而不是 `fail`。Task 1–7 按纪律既不起第二个实例也不重启现有服务，所以这几轮的硬口径统一改成：**`0 failed` 为硬性，允许正好 2 条 `skip`，且必须正好是 `test_live_stream.py:34` 与 `:64`**（本机无服务实测基线 = **174 passed / 2 skipped / 1 deselected**）。`0 skipped` 那条硬要求仍然只在 Task 8 生效——那里会重启服务，跑的是改造后的代码。
+
+> **2026-10-06 修订（Task 5 之后：那两条 skip 别再按行号认）**：上面按 `test_live_stream.py:34` / `:64` 点名是错的口径——**行号会被它上方的改动推着走**，Task 5 在文件里插了 `login_token()` helper，两条当场变成 `:53` / `:87`。此后一律按**函数名**认这两条 skip：`test_client_disconnect_mid_stream_leaves_no_rows` 与 `test_full_stream_persists_one_turn_and_frames_are_ordered`（二者都吃 `server` 夹具，无服务时在夹具里 skip）。另记一笔给 Task 8：这两条在**服务活着**的前提下还可能各自再 skip 一次（`test_live_stream.py:73` / `:106`，大模型不可用时报错帧）——那一轮"0 skipped"若被这两条打破，先查 LLM 可用性再查代码。
 > ② `pytest -m` 的表达式会**覆盖** `addopts` 里那条 `not migration`，不是追加。于是 `python -m pytest -m "not live" -q` 会把 `@pytest.mark.migration` 的计数钉（11/22）拖进来越界失败，撞出一个与本轮无关的红。要排除 live 就写全：`python -m pytest -m "not live and not migration" -q`。
 
 > **2026-10-07 修订（基线重钉：全计划的 9 / 11 / 22 作废，改用下面这组实数）**
@@ -2171,6 +2173,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): d
 - Modify: `backend/tests/test_api_chat.py`、`backend/tests/test_api_history.py`（`make_client` 各加两格覆盖）
 - Modify: `backend/tests/test_ownership_isolation.py`（401 参数化 4 → 8；新增问答越权两条）
 - Modify: `backend/tests/test_live_stream.py`（两条真 HTTP 流式测在头里带一枚真令牌）
+- Modify: `backend/deps.py`（**原清单漏了这一格**：Step 5 交接的 ② 要求把 `get_current_user` 拆成"先取令牌再查库"，Task 4 已把这条记为 out-of-scope、落点定在本 Task；对应地要删掉测试假库里那枚 `get_user_by_token` 绕行桩）
 
 **Interfaces:**
 - Consumes：`deps.get_current_user`（Task 2）、`DatabaseManager.owned_parent_ids`（Task 4）。
@@ -2244,6 +2247,8 @@ def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
     assert res.status_code == 404
     assert res.json() == {"detail": "文档块不存在或已被删除"}
 ```
+
+> **2026-10-06 修订（上面这段代码在 Task 5 执行期改了一处，属计划代码缺陷）**：八条清单里有三条是 GET，而 httpx 的 `client.get()` **没有 `json=` 形参**——`getattr(client, method)(path, json=payload)` 对 GET 当场 `TypeError`。落地写法：**`client.request(method.upper(), path, json=payload)`**（`payload=None` 时 httpx 不带体，语义不变）。这不是风格差异，是照抄就跑不起来。
 
 > Task 4 里那个 `make_client` 名字在本 Task 之后要同时服务 documents 与 chat/history 两组路径，改成 **`make_isolation_client(db=None, user=FakeUser(user_id=OWNER), rag=None, gate=True)`**：`db` 缺省时给一个 `OwnerAwareDB()`，`rag` 缺省时给 `FakeRAG()`，并多覆盖 `get_rag_system` 与 `get_config` 两格（后者是给 `test_health_stays_open` 用的：`FakeConfig` 里那个 `CHROMA_PERSIST_DIR` 足够 health 拼出响应）。改名与补格都发生在 **Step 5**——Step 1 先按新名字写判据，这样红因始终是"东西不存在"，而不是"测试写了一半"。
 
