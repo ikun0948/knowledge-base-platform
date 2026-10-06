@@ -5,45 +5,35 @@ import chromadb
 import pytest
 from config.config import BASE_DIR, Config
 
-# 计数为 2026-10-02 阶段二收口实测，后续再上传文档需重钉（/api/health 实测 vector_counts：parent 11 / child 22）
-PARENT_COUNT = 11
-CHILD_COUNT = 22
+# 计数为 2026-10-07 重钉：旧基线（parent 11 / child 22）作废——用户在界面上把 9 篇里 8 篇的
+# 块删到 chunk_count 归零，只剩 deepseek简介.docx 那一份活着；随后用真 HTTP 通路（POST
+# /api/documents，同一份 uvicorn 进程）补传 baseline-a/b/c.txt 三篇小文档重建基线。
+# 复测两处一致：Chroma 目录副本的集合计数、MySQL 的 parent_chunks/child_chunks 都是 4 / 10。
+PARENT_COUNT = 4
+CHILD_COUNT = 10
 
-# 计数看不出"掉一行又补一行"，身份基线才证明活下来的是这几条（迁移后的库实测）
+# 计数看不出"掉一行又补一行"，身份基线才证明活下来的是这几条。
+# 下面两个列表按 uuid 排序，归属读不出来，这里给出 vector_id 直查的对应关系：
+#   deepseek简介.docx  父 e3985550；子 42d647ea / 7ab5915f / b2e1cbda / c276a890 / ee6ccabc
+#   baseline-a.txt     父 9a7d9885；子 05d825a4
+#   baseline-b.txt     父 8fcccd10；子 1b3360dd / 5443f45c / 9a17c1f4
+#   baseline-c.txt     父 17ed6521；子 772ed645
+# deepseek简介.docx 那一份穿过那轮删除，一条没变。
 PARENT_IDS = [
-    "25887e7e-5037-4122-af35-05e2d6654a85",
-    "38405ea7-c51a-46fc-b183-75318d7c9df5",
-    "84c49843-2275-446e-9b5e-f2e8ba206dde",
-    "88630281-e5bb-4ca4-a3db-a74ad11213b3",
-    "a2f65fd9-9084-40a1-a1fe-924123e5572d",
-    "a677b2f1-63b5-4836-aae5-c86355093902",
-    "ab6f0cd8-cc3c-4152-8e45-fb5a226974cb",
-    "b4202f9e-0d57-4732-8720-03682f62d98f",
-    "d2b9aa72-3872-4622-b7a2-c6bf079d9140",
+    "17ed6521-8b52-40bf-aae5-5d508b027b41",
+    "8fcccd10-dcca-4136-b09d-ed22751a5563",
+    "9a7d9885-fa18-44ce-abd6-067d93a013b0",
     "e3985550-9937-42d9-a13a-acb7c75ca1ed",
-    "f71513ce-f195-4207-91c5-93582e8f313e",
 ]
 CHILD_IDS = [
-    "104f3cf3-3afb-4934-a550-2a09dfd2dd41",
-    "254f10c6-e3f3-4038-a302-7c86d29343e9",
-    "25f4772e-4222-41b1-9ea8-5387edf22b0f",
-    "25f47999-686d-41f4-be92-57cd3ff84b2f",
-    "427ffbba-7eaa-4779-96b8-e9174dd08cfc",
-    "4298d3b2-09b5-43cf-94c6-75e2b45fcecd",
+    "05d825a4-420a-42f6-8ac3-00a84361ceb0",
+    "1b3360dd-54c7-4e4f-bf08-7c64340ffd82",
     "42d647ea-3be1-4d21-a5c5-ea0d760477af",
-    "5211c213-c4f8-4394-bdda-a55fb726a794",
-    "53d4991a-82f1-4e39-99d7-9ae241a7f1cc",
-    "584148b1-9a83-4336-bdcc-a491f2ea08c9",
-    "6ec23d05-567b-4e05-92b2-8cb2e5b8d1fc",
-    "70238de6-d1e2-4114-8c36-04b9552a8d22",
-    "768c84d1-312e-4828-9a13-ccc275744a1a",
-    "770d63d5-685b-4256-9916-1c19c1ba6cb3",
+    "5443f45c-6305-400c-afcc-323b8224fab4",
+    "772ed645-d49f-4421-ae74-ac491a744b97",
     "7ab5915f-b357-4544-8f43-09d7366e1aaf",
-    "9443a1c3-f431-40ed-9706-fc6dd1d0cc03",
-    "9d47d4af-40dd-42ed-ba3f-6d79fa1f88a5",
-    "b0735ff9-4bfb-463b-aca8-c8fe18a97b69",
+    "9a17c1f4-aacc-4c5a-9846-543383632100",
     "b2e1cbda-1235-486e-94c5-bc76a077f393",
-    "b3b50c5e-eba2-4ea5-a44a-e52d21d60037",
     "c276a890-fb5a-4bbd-8323-611e9ac238d3",
     "ee6ccabc-d25a-49af-b843-f1ced132a151",
 ]
