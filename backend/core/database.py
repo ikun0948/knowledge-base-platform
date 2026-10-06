@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -442,13 +442,20 @@ class DatabaseManager:
     # ---------- 账号与会话（spec 3.1/3.2）----------
 
     def create_user(self, identifier, identifier_type, nickname, password_hash, avatar="auto"):
-        """返回 detached 的 User（只有普通列，不碰 relationship，关掉 session 后仍可读）。"""
+        """返回可直读的 User 实例（会话已关掉之后仍然可读）。
+
+        commit() 会把实例属性全部标记过期（sessionmaker 默认 expire_on_commit=True），
+        finally 里的 close() 再把对象摘出会话——此时读 user.id 就是 DetachedInstanceError。
+        所以 commit 之后立刻 refresh()：属性在会话还开着的时候重新灌满，返回的实例
+        只剩普通列可读（它没有 relationship，也不去碰 relationship）。
+        """
         session = self.get_session()
         try:
             user = User(identifier=identifier, identifier_type=identifier_type,
                         nickname=nickname, avatar=avatar, password_hash=password_hash)
             session.add(user)
             session.commit()
+            session.refresh(user)
             return user
         except Exception:
             session.rollback()
@@ -478,11 +485,16 @@ class DatabaseManager:
             session.close()
 
     def create_token(self, user_id, token_hash, expires_at):
+        """返回可直读的 AuthToken 实例：commit() 让属性过期，所以 refresh() 必须在 close() 之前。
+
+        与 create_user 同一件事——调用方（Task 2 的 /login）拿到的行要能读 row.id。
+        """
         session = self.get_session()
         try:
             row = AuthToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at)
             session.add(row)
             session.commit()
+            session.refresh(row)
             return row
         except Exception:
             session.rollback()

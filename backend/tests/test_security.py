@@ -4,6 +4,9 @@
 还剩多少防线"的那条线，值得单独钉住，而不是混在端点测里靠 mock 演一遍。
 """
 import time
+from types import SimpleNamespace
+
+from sqlalchemy import create_engine
 
 from core.security import hash_password, hash_token, new_token, verify_password
 
@@ -43,7 +46,8 @@ def test_token_is_url_safe_and_stored_only_as_sha256_hex():
     assert digest == hash_token(token)  # 同输入同输出：查表靠的就是这一点
 
 
-from core.database import AuthToken, Document, User
+from core import database
+from core.database import AuthToken, DatabaseManager, Document, User
 
 
 def test_documents_user_column_is_a_nullable_foreign_key():
@@ -66,3 +70,36 @@ def test_users_and_tokens_shapes():
     assert token.c.expires_at.nullable is False
     assert [fk.target_fullname for fk in token.c.user_id.foreign_keys] == ["users.id"]
     assert "idx_tokens_user_id" in {ix.name for ix in token.indexes}
+
+
+CFG = SimpleNamespace(MYSQL_USER="u", MYSQL_PASSWORD="p", MYSQL_HOST="localhost",
+                      MYSQL_PORT=3306, MYSQL_DATABASE="mydb")
+
+
+def test_create_user_returns_a_row_readable_after_the_session_closes(monkeypatch, tmp_path):
+    """返回的行必须读得出 id：Task 2 的 /register 要在会话之外把它拼进响应。
+
+    这个 bug 与用哪个库无关：sessionmaker 默认 expire_on_commit=True，commit() 把实例属性
+    全标记成过期，方法里 finally 的 close() 再把对象摘出会话——此后读 user.id 就是
+    DetachedInstanceError。修法是在会话还开着的时候 refresh()。这条用例就是那层门：
+    谁哪天把 refresh() 删了，这里立刻红。
+    sqlite 只建 users 表：users/auth_tokens 都是普通列，而 documents.content 是 MySQL 方言的
+    MEDIUMTEXT，sqlite 编译不出来，所以绕开 Base.metadata.create_all。
+    """
+    engine = create_engine(f"sqlite:///{(tmp_path / 'users.db').as_posix()}")
+    monkeypatch.setattr(database, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(database.Base.metadata, "create_all",
+                        lambda bind: User.__table__.create(bind))
+    db = DatabaseManager(CFG)  # 走真构造：sessionmaker 保持 expire_on_commit 默认值
+
+    stored = hash_password("pw")
+    user = db.create_user("a@b.com", "email", "小A", stored)
+
+    # 三个都是普通列，读它们不需要会话：这里任何一项抛 DetachedInstanceError 都算红
+    assert user.id is not None
+    assert user.identifier == "a@b.com"
+    assert user.nickname == "小A"
+    # id 得是真自增值而不是"过期对象侥幸没炸"：第二条不该和第一条撞车
+    second = db.create_user("c@d.com", "email", "小C", stored)
+    assert second.id != user.id
+    assert db.get_user_by_identifier("a@b.com").id == user.id
