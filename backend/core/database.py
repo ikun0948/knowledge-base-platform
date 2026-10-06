@@ -532,34 +532,4 @@ class DatabaseManager:
         finally:
             session.close()
 
-    # ---------- 迁移用（Task 3 的 core/migrations.py 调这三条）----------
-
-    def assign_unowned_documents(self, user_id) -> int:
-        """只动 user_id IS NULL 的行：跑第二遍就是 0 行，这是整段迁移幂等的支点。"""
-        session = self.get_session()
-        try:
-            n = session.query(Document).filter(Document.user_id.is_(None)).update(
-                {Document.user_id: user_id}, synchronize_session=False)
-            session.commit()
-            return n
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def vector_ids_for_user(self, user_id):
-        """按归属取两份 vector_id 清单——Chroma 的 id 就存这两列里（2026-10-04 live 验过）。"""
-        session = self.get_session()
-        try:
-            parents = session.query(ParentChunk.vector_id).join(
-                Document, Document.id == ParentChunk.document_id).filter(
-                Document.user_id == user_id, ParentChunk.vector_id.isnot(None)).all()
-            children = session.query(ChildChunk.vector_id).join(
-                Document, Document.id == ChildChunk.document_id).filter(
-                Document.user_id == user_id, ChildChunk.vector_id.isnot(None)).all()
-            return {"parent": [r[0] for r in parents], "child": [r[0] for r in children]}
-        finally:
-            session.close()
-
 

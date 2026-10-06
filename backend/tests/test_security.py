@@ -1,9 +1,13 @@
 """口令哈希与会话令牌的四条纪律：可验回、盐随机、时序恒定、库里不留原文。
 
-这一段完全不碰 MySQL 也不碰 HTTP——pbkdf2 的迭代数与令牌的形状是"数据泄露后
-还剩多少防线"的那条线，值得单独钉住，而不是混在端点测里靠 mock 演一遍。
+这一段不碰 HTTP，也不连真实 MySQL：表形状读的是 ORM 元数据，账号/会话那几条确实要建
+引擎，但那是 monkeypatch 喂进 DatabaseManager 的 sqlite 临时库——documents.content 是
+MySQL 方言的 MEDIUMTEXT，sqlite 编译不出来，所以逐表 create 而不走 create_all。
+pbkdf2 的迭代数与令牌的形状是"数据泄露后还剩多少防线"的那条线，值得单独钉住，
+而不是混在端点测里靠 mock 演一遍。
 """
 import time
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
@@ -46,6 +50,30 @@ def test_token_is_url_safe_and_stored_only_as_sha256_hex():
     assert digest == hash_token(token)  # 同输入同输出：查表靠的就是这一点
 
 
+def test_new_token_is_exactly_43_characters():
+    """令牌长度是 43，不是"至少 32"：secrets.token_urlsafe(32) = 32 字节 → 43 个字符。
+
+    只写 len(token) >= 32 的话，改成 token_urlsafe(24) 照样绿，而熵实打实地少了 8 字节——
+    令牌就是凭证原文，长度是它唯一的暴力上界（spec 4 节）。
+    """
+    assert len(new_token()) == 43
+
+
+def test_stored_hash_keeps_its_documented_shape():
+    """存储格式 pbkdf2_sha256$390000$<salt 32 位 hex>$<digest 64 位 hex> 本身就是契约。
+
+    只断言"能验回"拦不住格式漂移：verify_password 的盐是从存储串里解出来的，
+    把 hash_password 的盐长改短之后新行照样自洽、套件全绿，可这条串已经不是
+    文档里那条串了——形状要有独立的钉子，才有人会在改成 48 位 hex 时看见红。
+    """
+    fields = hash_password("shape-probe").split("$")
+    assert len(fields) == 4
+    assert fields[0] == "pbkdf2_sha256"
+    assert int(fields[1]) == 390000
+    assert len(fields[2]) == 32  # 16 字节的盐，hex 后 32 字符
+    assert len(fields[3]) == 64  # sha256 摘要，hex 后 64 字符
+
+
 from core import database
 from core.database import AuthToken, DatabaseManager, Document, User
 
@@ -55,6 +83,8 @@ def test_documents_user_column_is_a_nullable_foreign_key():
     column = Document.__table__.c.user_id
     assert column.nullable is True
     assert [fk.target_fullname for fk in column.foreign_keys] == ["users.id"]
+    # 这条钉的是 ORM 元数据（建表蓝图），不是已部署库的 schema：真库上有没有这个索引
+    # 由迁移/DDL 决定，这里变绿不代表线上那条索引存在。
     assert "idx_documents_user_id" in {ix.name for ix in Document.__table__.indexes}
 
 
@@ -103,3 +133,30 @@ def test_create_user_returns_a_row_readable_after_the_session_closes(monkeypatch
     second = db.create_user("c@d.com", "email", "小C", stored)
     assert second.id != user.id
     assert db.get_user_by_identifier("a@b.com").id == user.id
+
+
+def test_create_token_returns_a_row_readable_after_the_session_closes(monkeypatch, tmp_path):
+    """令牌行也要在会话之外读得出 id：Task 2 的 /login 就靠它拼响应。
+
+    与上一条同一个前提（expire_on_commit=True + finally close() → DetachedInstanceError），
+    只不过对象换成了 auth_tokens 那一行。round 1 只给 users 建了门，create_token 里的
+    refresh() 当时没有任何测试覆盖——删了它整套件仍全绿，这条就是补上的那层门。
+    这里两张表都建：auth_tokens.user_id 指向 users.id，令牌只存哈希、原文不进库。
+    """
+    engine = create_engine(f"sqlite:///{(tmp_path / 'tokens.db').as_posix()}")
+    monkeypatch.setattr(database, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(
+        database.Base.metadata, "create_all",
+        lambda bind: [table.create(bind) for table in (User.__table__, AuthToken.__table__)])
+    db = DatabaseManager(CFG)  # 走真构造：sessionmaker 保持 expire_on_commit 默认值
+
+    user = db.create_user("t@b.com", "email", "小T", hash_password("pw"))
+    digest = hash_token(new_token())
+    row = db.create_token(user.id, digest, datetime.now() + timedelta(days=7))
+
+    # 三个都是普通列：close() 之后任何一项抛 DetachedInstanceError 都算红
+    assert row.id is not None
+    assert row.token_hash == digest
+    assert row.user_id == user.id
+    second = db.create_token(user.id, hash_token(new_token()), datetime.now() + timedelta(days=7))
+    assert second.id != row.id
