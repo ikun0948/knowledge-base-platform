@@ -1,4 +1,4 @@
-import { detailFromText, request } from './client.js'
+import { authHeaders, detailFromText, request } from './client.js'
 
 export function listDocuments() {
   return request('/api/documents')
@@ -33,6 +33,10 @@ export function uploadDocument(file, { onProgress } = {}) {
     form.append('file', file) // 字段名是后端 File(...) 定的：单数 file
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/documents')
+    // 这条出口不经过 request/postStream，令牌只能在这儿手动挂上去（setRequestHeader 必须在
+    // open 之后、send 之前，早于 open 会被浏览器静默忽略）。没令牌就不加头，理由见 authHeaders。
+    const auth = authHeaders()
+    if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization)
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100))
     }

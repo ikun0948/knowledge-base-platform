@@ -1,5 +1,20 @@
 // 全项目唯一的网络出口：组件层永远看不到 fetch 与 Response（spec 六节"不加响应壳"）
 
+// 令牌是全项目唯一的"我是谁"证据，而出口有三条（request / postStream / 上传的 XHR）。
+// 做成模块级变量而不是让每个调用方自己传：传漏一次的表征是一整片 401，
+// 而 401 在前端只有一句"未登录或登录已过期"，看的人只会去怀疑令牌过期了。
+let authToken = ''
+
+export function setAuthToken(token) {
+  authToken = token || ''
+}
+
+export function authHeaders(extra = {}) {
+  // 没令牌时一个键都不加：加了 `Authorization: Bearer ` 空值反而会让后端把坏格式判成缺凭证，
+  // 两种成因共用一句文案是设计（spec 3.5），但请求本身没必要长得像攻击载荷。
+  return authToken ? { Authorization: `Bearer ${authToken}`, ...extra } : { ...extra }
+}
+
 // 独立成纯函数是因为上传走 XHR（见 documents.js），它手上没有 Response 只有文本，
 // 但错误规则必须和 fetch 那条完全一致，否则同一个 415 在两个入口显示两种文案。
 export function detailFromText(text, status) {
@@ -25,11 +40,11 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
   try {
     res = await fetch(path, {
       method,
-      headers: {
+      headers: authHeaders({
         Accept: 'application/json',
         ...(isJson ? { 'Content-Type': 'application/json' } : {}),
         ...headers,
-      },
+      }),
       body: isJson ? JSON.stringify(body) : undefined,
       signal,
     })
@@ -38,6 +53,9 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
     throw new Error('无法连接后端，请确认 uvicorn 已在 :8000 运行')
   }
   if (!res.ok) throw new Error(detailFromText(await res.text(), res.status))
+  // 204 No Content 没有响应体：res.json() 会在空文本上抛 SyntaxError，
+  // 把"操作成功"变成一条报错。登出、后面的删档类端点都走这一格。
+  if (res.status === 204) return null
   return res.json()
 }
 
@@ -50,7 +68,7 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
   try {
     res = await fetch(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      headers: authHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
       body: JSON.stringify(payload),
       signal,
     })

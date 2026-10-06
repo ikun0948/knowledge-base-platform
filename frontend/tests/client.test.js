@@ -1,9 +1,9 @@
 // client.js 的 SSE 契约回归：终审指出这块行为只靠浏览器手测背书，CI 完全接不住。
 // 这里把 postStream 的每条出口（正常收流 / 非流响应 / HTTP 失败 / 读中断 / 主动取消 / 坏帧）
 // 都钉成断言——桩掉 fetch，不需要真服务。
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { detailFromText, postStream, request } from '../src/api/client.js'
+import { detailFromText, postStream, request, setAuthToken } from '../src/api/client.js'
 
 function fakeReader(chunks, { failAt = -1, err } = {}) {
   let i = 0
@@ -41,6 +41,8 @@ function jsonResponse(body, status = 200, contentType = 'application/json') {
     status,
     headers: { get: () => contentType },
     text: async () => text,
+    // 补 json()：既有测只走 request 的非 2xx 出口（读 text），成功出口读不到这里。
+    json: async () => JSON.parse(text),
     body: null,
   }
 }
@@ -49,6 +51,14 @@ function stubFetch(r) {
   // streamResponse 返回 {res, state}，jsonResponse 直接是 res——两种形状都收
   const res = r && r.res !== undefined ? r.res : r
   global.fetch = vi.fn(async () => res)
+}
+
+function stubFetchWithCalls(r) {
+  // stubFetch 只换实现、不留参数，而"三条出口有没有带上 Bearer 头"必须看到实发的 headers
+  const res = r && r.res !== undefined ? r.res : r
+  const calls = []
+  global.fetch = vi.fn(async (path, opts) => { calls.push([path, opts]); return res })
+  return calls
 }
 
 function frame(event, data) {
@@ -187,5 +197,44 @@ describe('postStream：失败出口', () => {
     await expect(
       postStream('/api/chat/stream', {}, () => { throw bug }),
     ).rejects.toBe(bug)
+  })
+})
+
+describe('Authorization 注入：三条出口一条都不能漏', () => {
+  // 漏一条的表征是"登录了但那个功能 401"，而 401 在前端只回一句"未登录或登录已过期"，
+  // 看的人第一反应是令牌过期了——真正的原因却是某个出口忘了带头。
+  afterEach(() => setAuthToken(''))
+
+  it('request 带上 Bearer 头', async () => {
+    const calls = stubFetchWithCalls(jsonResponse({ ok: true }))
+    setAuthToken('tok-abc')
+    await request('/api/documents')
+    expect(calls[0][1].headers.Authorization).toBe('Bearer tok-abc')
+  })
+
+  it('postStream 带上 Bearer 头（这里的 headers 原先是硬编码的）', async () => {
+    const calls = []
+    const { res } = streamResponse([frame('done', {})])
+    global.fetch = vi.fn(async (path, opts) => { calls.push([path, opts]); return res })
+    setAuthToken('tok-stream')
+    await postStream('/api/chat/stream', {}, () => {})
+    expect(calls[0][1].headers.Authorization).toBe('Bearer tok-stream')
+  })
+
+  it('没有令牌时一个 Authorization 头都不发', async () => {
+    const calls = stubFetchWithCalls(jsonResponse({ ok: true }))
+    setAuthToken('')
+    await request('/api/documents')
+    expect('Authorization' in calls[0][1].headers).toBe(false)
+  })
+
+  it('204 无响应体不走进 res.json()', async () => {
+    // 登出端点回 204：空文本过 JSON.parse 会抛 SyntaxError，
+    // 于是"登出成功"在界面上变成一条红色报错——这是这条判据唯一要防的事。
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 204, headers: { get: () => null },
+      text: async () => '', json: async () => { throw new SyntaxError('Unexpected end of input') },
+    }))
+    await expect(request('/api/auth/logout', { method: 'POST' })).resolves.toBeNull()
   })
 })

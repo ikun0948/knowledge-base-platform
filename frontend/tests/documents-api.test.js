@@ -3,7 +3,8 @@
 // 只能靠编码送进路径段。写错的坏法不是报错而是 404——"块不存在"，比崩还难查。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteChunk, listChunks } from '../src/api/documents.js'
+import { deleteChunk, listChunks, uploadDocument } from '../src/api/documents.js'
+import { setAuthToken } from '../src/api/client.js'
 
 function stubFetch() {
   const calls = []
@@ -82,4 +83,23 @@ describe('listChunks（Task 1 契约的前端出口）', () => {
     await listChunks({ limit: 50 })
     expect(calls[1][0]).not.toContain('limit=')
   })
+})
+
+// 放在文件末尾：这条会改写 global.XMLHttpRequest 并留下一个令牌，同文件里它之后不该再有测。
+it('上传用 XHR 也带上 Bearer 头——它是全项目唯一不走 client.js 的出口', async () => {
+  const headers = {}
+  global.XMLHttpRequest = class {
+    constructor() { this.upload = {} }
+    open() {}
+    setRequestHeader(k, v) { headers[k] = v }
+    send() {
+      this.status = 201
+      this.responseText = JSON.stringify({ id: 1, filename: 'a.txt', chunk_count: 1,
+                                           created_at: '2026-10-06T12:00:00' })
+      this.onload()
+    }
+  }
+  setAuthToken('tok-xhr')
+  await uploadDocument(new File(['x'], 'a.txt'))
+  expect(headers.Authorization).toBe('Bearer tok-xhr')
 })
