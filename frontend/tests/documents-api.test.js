@@ -85,7 +85,8 @@ describe('listChunks（Task 1 契约的前端出口）', () => {
   })
 })
 
-// 放在文件末尾：这条会改写 global.XMLHttpRequest 并留下一个令牌，同文件里它之后不该再有测。
+// 这条会改写 global.XMLHttpRequest 并设置模块级令牌，结尾自己拆桩（见下），
+// 所以它排在哪都无害——不再靠"排在文件最末尾"来防继承。
 it('上传用 XHR 也带上 Bearer 头——它是全项目唯一不走 client.js 的出口', async () => {
   const headers = {}
   global.XMLHttpRequest = class {
@@ -102,4 +103,8 @@ it('上传用 XHR 也带上 Bearer 头——它是全项目唯一不走 client.j
   setAuthToken('tok-xhr')
   await uploadDocument(new File(['x'], 'a.txt'))
   expect(headers.Authorization).toBe('Bearer tok-xhr')
+  // 收口：令牌与全局桩件都还原。今天只靠这条测排在文件末尾才无害，
+  // 一旦有人在本文件后面追加测，没还原就会让它看到上一个账号的令牌。
+  setAuthToken('')
+  delete global.XMLHttpRequest
 })

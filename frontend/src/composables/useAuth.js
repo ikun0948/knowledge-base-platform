@@ -36,7 +36,10 @@ export function useAuth() {
     // 返回真表示"确认已登录"，App.vue 只有在这个前提下才去跑 refresh/hydrate/restore。
     const token = readToken()
     if (!token) {
-      setAuthToken('')
+      // 走完整的 clearAuth() 而不是只 setAuthToken('')：手上那枚形状不合格的值（DevTools 里手敲的、
+      // 上个版本残留的 UUID）留在 localStorage 里就是永久的残留，模块级 user 也该跟着落回未登录，
+      // 否则"没令牌"这条分支只清了网络层、没清账号态。返回值仍是布尔 false（clearAuth 回 undefined）。
+      clearAuth()
       return false
     }
     setAuthToken(token)
@@ -80,6 +83,13 @@ export function useAuth() {
   async function signOut() {
     try {
       await apiLogout()   // 204：request 那层的空响应体处理让它回 null，不是报错
+    } catch {
+      // 后端删不掉令牌也算本地退出，这里没有要渲染的消息：登出不像登录有 authError 这条文案出口，
+      // 401（票早过期）与 502（uvicorn 重启时代理回空体）都是用户点退出时的常态路径。
+      // 上抛的代价由 Task 7 付：handleSignOut 在 `await signOut()` 之后才 clearSession()、
+      // 才清 documents/queue/messages/clearSelection()，一抛就全跳过，而 v-if 因为 finally
+      // 跑过照样翻回登录页——留下无人察觉的跨用户残留。
+      // 注意分工：finally 保证清理一定发生，catch 保证不打断调用方；两者缺一不可。
     } finally {
       // 后端删不掉也算本地退出：令牌可能已经过期、服务可能正在重启，
       // 而这些都不该成为"我点了退出却还留在这个账号里"的理由。

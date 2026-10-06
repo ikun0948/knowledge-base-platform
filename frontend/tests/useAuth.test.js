@@ -28,6 +28,8 @@ describe('useAuth', () => {
     const { bootstrap } = useAuth()
     await expect(bootstrap()).resolves.toBe(false)
     expect(getMe).not.toHaveBeenCalled()
+    // 不只是"当没有"，还要把这枚不合格的值删掉：只 setAuthToken('') 的话它永远留在机器上。
+    expect(localStorage.getItem('auth_token')).toBe(null)
   })
 
   it('登录写入令牌、置好用户，并把后端铸造的 session_id 交回调用方', async () => {
@@ -63,10 +65,7 @@ describe('useAuth', () => {
     logout.mockRejectedValue(new Error('HTTP 502'))
     const { bootstrap, signOut, isLoggedIn } = useAuth()
     await bootstrap()
-    // 与 brief 的一行差异：这里改成断言"错误原样上抛"。signOut 内部是 try/finally 没有 catch
-    // （与 signIn/signUp 同一口径：吞不吞错归调用方），所以裸 await 会让这条测红在抛出本身、
-    // 而不是红在"本地没退干净"。真正要钉的两条判据在下面，且它们只在 finally 跑过时才成立。
-    await expect(signOut()).rejects.toThrow('HTTP 502')
+    await signOut()
     expect(isLoggedIn.value).toBe(false)
     expect(localStorage.getItem('auth_token')).toBe(null)
   })

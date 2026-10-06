@@ -210,6 +210,10 @@ describe('Authorization 注入：三条出口一条都不能漏', () => {
     setAuthToken('tok-abc')
     await request('/api/documents')
     expect(calls[0][1].headers.Authorization).toBe('Bearer tok-abc')
+    // 这一组的既有判据只读 Authorization，而本 Task 重写的是整行 headers：
+    // 丢 Content-Type 的表征是 POST /api/auth/login 撞 422，正是"登录了但登录用不了"。
+    await request('/api/auth/login', { method: 'POST', body: { identifier: 'a@b.com', password: 'hunter2-pass' } })
+    expect(calls[1][1].headers['Content-Type']).toBe('application/json')
   })
 
   it('postStream 带上 Bearer 头（这里的 headers 原先是硬编码的）', async () => {
@@ -219,6 +223,9 @@ describe('Authorization 注入：三条出口一条都不能漏', () => {
     setAuthToken('tok-stream')
     await postStream('/api/chat/stream', {}, () => {})
     expect(calls[0][1].headers.Authorization).toBe('Bearer tok-stream')
+    // 这行的 headers 原先是硬编码字面量，重写时除了令牌还有 Accept：
+    // 丢了它后端仍回 SSE，但 client.js 的内容类型闸门会判"响应不是 SSE 事件流"。
+    expect(calls[0][1].headers['Accept']).toBe('text/event-stream')
   })
 
   it('没有令牌时一个 Authorization 头都不发', async () => {
