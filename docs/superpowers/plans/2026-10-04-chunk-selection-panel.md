@@ -275,7 +275,7 @@ def test_search_parent_chunks_returns_the_baseline_pool_readable(db):
 - [ ] **Step 8: 跑它确认红**
 
 Run: `cd backend && python -m pytest tests/test_live_database.py -q -k search_parent_chunks`
-Expected: 3 条全 FAIL — `AttributeError: 'DatabaseManager' object has no attribute 'search_parent_chunks'`。
+Expected: 4 条全 FAIL — `AttributeError: 'DatabaseManager' object has no attribute 'search_parent_chunks'`。
 
 - [ ] **Step 9: 实现 `search_parent_chunks`**
 
@@ -318,10 +318,11 @@ Expected: 3 条全 FAIL — `AttributeError: 'DatabaseManager' object has no att
                     )
                 if suffix:
                     stmt = stmt.filter(Document.filename.ilike(f"%.{suffix.lower()}", escape="\\"))
-                stmt = stmt.limit(limit)
-            return stmt.group_by(ParentChunk.id).order_by(
+            # group_by 必须在 limit 之前：Query 在已带 LIMIT 的语句上调它会直接抛 InvalidRequestError
+            stmt = stmt.group_by(ParentChunk.id).order_by(
                 ParentChunk.document_id.asc(), ParentChunk.parent_id.asc()
-            ).all()
+            )
+            return stmt.all() if ids else stmt.limit(limit).all()
         finally:
             session.close()
 ```
@@ -405,17 +406,25 @@ def test_chunks_endpoint_rejects_bad_params_with_422(params, field):
 
 
 def test_chunks_route_wins_over_a_future_path_param_route():
-    """/chunks 必须在 GET /{document_id} 之前注册；今天后者还不存在，这条钉住顺序别被改乱。"""
-    paths = [r.path for r in make_client(ChunkSearchDB()).app.routes if r.path.startswith("/api/documents")]
-    assert paths.index("/api/documents/chunks") < len(paths)
-    assert not any(p == "/api/documents/{document_id}" for p in paths), \
-        "新增按 id 取文档的路由时，必须把 /chunks 注册在它前面（spec 二节事实 7）"
+    """FastAPI 按注册顺序匹配，/chunks 必须排在任何 /{...} 动态路由之前。
+
+    今天 GET /{document_id} 还不存在，这条钉的是"将来加它时别插到 /chunks 前面"——
+    写反了 /chunks 就变成文档不存在那个 404。
+    读 documents_router.routes 而不是 app.routes：这个 FastAPI 版本把 include_router
+    记成没有 .path 的 _IncludedRouter，展开后的顺序拿不到。
+    """
+    paths = [r.path for r in documents_router.routes]
+    assert "/api/documents/chunks" in paths
+    chunk_index = paths.index("/api/documents/chunks")
+    assert all(chunk_index < paths.index(p) for p in paths if "{" in p)
 ```
+
+文件顶部 import 段同步加一行 `from api.documents import router as documents_router`——漏了它 Step 12 红的是 `NameError`，不是"端点不存在"。
 
 - [ ] **Step 12: 跑它确认红**
 
 Run: `cd backend && python -m pytest tests/test_chunk_search.py -q`
-Expected: 前 4 条 PASS（纯函数已实现），端点用例 FAIL — 404/`ImportError: cannot import name '_suffix_of'`。
+Expected: 前 4 条 PASS（纯函数已实现），端点 11 条全 FAIL — 路由不存在，TestClient 拿到 404 后断言炸。
 
 - [ ] **Step 13: 实现 `ChunkOut` 与端点**
 
@@ -476,12 +485,12 @@ def list_chunks(
 - [ ] **Step 14: 跑端点测试确认绿**
 
 Run: `cd backend && python -m pytest tests/test_chunk_search.py -q`
-Expected: `13 passed`（4 纯函数 + 1 默认转发 + 1 参数透传 + 1 去重 + 7 个 422 参数化 + 1 路由顺序；实数以命令行为准，报出实际数字）。
+Expected: `15 passed`（4 纯函数 + 1 默认转发 + 1 参数透传 + 1 去重 + 7 个 422 参数化 + 1 路由顺序）。
 
 - [ ] **Step 15: 跑后端默认门禁**
 
 Run: `cd backend && python -m pytest -q`
-Expected: 零 failed，条数 ≥ 146（本 Task 净增 `test_chunk_search.py` 的 13 条 + live 的 3 条）。**把实数记进 ledger。**
+Expected: 零 failed。默认组基线 146 → 本 Task 净增 `test_chunk_search.py` 的 15 条，实测 `163 passed, 2 skipped, 1 deselected`；另 live 组净增 4 条（`tests/test_live_database.py` 11 passed）。**把实数记进 ledger。**
 
 - [ ] **Step 16: 提交**
 
