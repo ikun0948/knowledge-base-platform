@@ -1,9 +1,9 @@
-// api/documents.js 的删除块出口。这里唯一会咬人的是 parent_id：
+// api/documents.js 的两个块级出口：删除块与候选池查询。这里唯一会咬人的是 parent_id：
 // 它是 f"{文件名}_parent_{i}"，中文和空格都来自文件名本身、没被 _safe_filename 洗掉，
 // 只能靠编码送进路径段。写错的坏法不是报错而是 404——"块不存在"，比崩还难查。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteChunk } from '../src/api/documents.js'
+import { deleteChunk, listChunks } from '../src/api/documents.js'
 
 function stubFetch() {
   const calls = []
@@ -45,5 +45,41 @@ describe('deleteChunk', () => {
     await expect(deleteChunk(42, 'a.txt_parent_0')).resolves.toEqual({
       id: 42, filename: '手册 上.pdf', chunk_count: 1, created_at: '2026-09-30T12:00:00',
     })
+  })
+})
+
+describe('listChunks（Task 1 契约的前端出口）', () => {
+  it('空入参打裸路径，不拼一串无意义的问号', async () => {
+    const calls = stubFetch()
+    await listChunks()
+    expect(calls[0][0]).toBe('/api/documents/chunks')
+  })
+
+  it('中文关键词与后缀都进 query', async () => {
+    const calls = stubFetch()
+    await listChunks({ query: '手册 上', suffix: 'pdf' })
+    const params = new URLSearchParams(calls[0][0].split('?')[1])
+    // 比解析后的原文，不比编码串：URLSearchParams 把空格编成 +，
+    // 拿 decodeURIComponent 反解会得到"手册 +上"，那是判据写错不是实现错
+    expect(params.get('query')).toBe('手册 上')
+    expect(params.get('suffix')).toBe('pdf')
+  })
+
+  // 这一条是"选中项刷新后蒸发"的唯一防线：parent_id 由清洗后的文件名拼出，
+  // 逗号是合法字符。逗号拼接会把一个真 id 拆成两个假 id，后端只会静默少返回。
+  it('parent_ids 用重复键而不是逗号拼接，含逗号的 id 原样往返', async () => {
+    const calls = stubFetch()
+    const ids = ['手册,第一版.txt_parent_0', 'b.txt_parent_1']
+    await listChunks({ parentIds: ids })
+    const params = new URLSearchParams(calls[0][0].split('?')[1])
+    expect(params.getAll('parent_ids')).toEqual(ids)
+  })
+
+  it('limit 只在非默认值时才出现在 query 里', async () => {
+    const calls = stubFetch()
+    await listChunks({ limit: 200 })
+    expect(calls[0][0]).toContain('limit=200')
+    await listChunks({ limit: 50 })
+    expect(calls[1][0]).not.toContain('limit=')
   })
 })

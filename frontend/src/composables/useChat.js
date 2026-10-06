@@ -55,7 +55,7 @@ export function useChat() {
     }
   }
 
-  async function send({ session_id, question, document_ids }) {
+  async function send({ session_id, question, parent_ids }) {
     if (pending.value || !question.trim()) return false
     error.value = ''
     // 阶段二 pending 覆盖整条流：没有停止生成按钮时，中途放手会让界面挂着一条
@@ -77,7 +77,7 @@ export function useChat() {
     let errorText = ''
     try {
       await sendChatStream(
-        { session_id, question, document_ids },
+        { session_id, question, parent_ids },
         (event, data) => {
           switch (event) {
             case 'meta':

@@ -33,7 +33,7 @@ describe('useChat.send：收流结局', () => {
       DONE,
     ])
     const chat = useChat()
-    await expect(chat.send({ session_id: 's1', question: 'q', document_ids: [1] })).resolves.toBe(true)
+    await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'] })).resolves.toBe(true)
     expect(chat.messages.value).toHaveLength(2)
     const [user, assistant] = chat.messages.value
     expect([user.role, user.content, user.streaming]).toEqual(['user', 'q', false])
@@ -45,10 +45,21 @@ describe('useChat.send：收流结局', () => {
     expect(chat.error.value).toBe('')
   })
 
+  // 后端那份 ChatRequest 只认 parent_ids；多余字段被 Pydantic 静默丢掉，
+  // 坏法是"每次对话都走普通链、引用条永远空"，不是 422 也不是报错。
+  it('载荷里的池子字段叫 parent_ids', async () => {
+    scriptEvents([['token', { text: 'x' }], DONE])
+    const chat = useChat()
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'] })
+    expect(sendChatStream.mock.calls[0][0]).toEqual({
+      session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'],
+    })
+  })
+
   it('done 前干净 EOF：撤两条 + “意外中断”，这一轮后端没落库就不能留在界面', async () => {
     scriptEvents([['meta', { mode: 'normal', session_id: 's1' }], ['token', { text: '半截' }]])
     const chat = useChat()
-    await expect(chat.send({ session_id: 's1', question: 'q', document_ids: [] })).resolves.toBe(false)
+    await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: [] })).resolves.toBe(false)
     expect(chat.messages.value).toEqual([])
     expect(chat.error.value).toBe('流式响应意外中断，请重试')
   })
@@ -56,7 +67,7 @@ describe('useChat.send：收流结局', () => {
   it('error 帧带 detail：撤两条 + 原样横幅（此时流是正常关闭的，不走 catch）', async () => {
     scriptEvents([['meta', { mode: 'rag', session_id: 's1' }], ['error', { detail: '大模型不可用' }], DONE])
     const chat = useChat()
-    await expect(chat.send({ session_id: 's1', question: 'q', document_ids: [1] })).resolves.toBe(false)
+    await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'] })).resolves.toBe(false)
     expect(chat.messages.value).toEqual([])
     expect(chat.error.value).toBe('大模型不可用')
   })
@@ -64,7 +75,7 @@ describe('useChat.send：收流结局', () => {
   it('error 帧 detail 为空串：真值判断会把它当成功，兜底文案必须顶上', async () => {
     scriptEvents([['error', { detail: '' }]])
     const chat = useChat()
-    await chat.send({ session_id: 's1', question: 'q', document_ids: [] })
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: [] })
     expect(chat.error.value).toBe('流式响应出错，请重试')
   })
 
@@ -73,7 +84,7 @@ describe('useChat.send：收流结局', () => {
       throw new Error('流式响应中断，请重试')
     })
     const chat = useChat()
-    await expect(chat.send({ session_id: 's1', question: 'q', document_ids: [] })).resolves.toBe(false)
+    await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: [] })).resolves.toBe(false)
     expect(chat.messages.value).toEqual([])
     expect(chat.error.value).toBe('流式响应中断，请重试')
   })
@@ -91,7 +102,7 @@ describe('useChat：取消与门禁', () => {
       })
     }))
     const chat = useChat()
-    const sending = chat.send({ session_id: 's1', question: 'q', document_ids: [] })
+    const sending = chat.send({ session_id: 's1', question: 'q', parent_ids: [] })
     await flush()
     expect(chat.pending.value).toBe(true)
     chat.abortStream()
@@ -109,10 +120,10 @@ describe('useChat：取消与门禁', () => {
       await new Promise((r) => { release = r })
     })
     const chat = useChat()
-    const sending = chat.send({ session_id: 's1', question: 'q1', document_ids: [] })
+    const sending = chat.send({ session_id: 's1', question: 'q1', parent_ids: [] })
     await flush()
     expect(chat.pending.value).toBe(true)
-    await expect(chat.send({ session_id: 's1', question: 'q2', document_ids: [] })).resolves.toBe(false)
+    await expect(chat.send({ session_id: 's1', question: 'q2', parent_ids: [] })).resolves.toBe(false)
     release()
     await sending
     expect(sendChatStream).toHaveBeenCalledTimes(1)
@@ -120,7 +131,7 @@ describe('useChat：取消与门禁', () => {
 
   it('空白问题不发流', async () => {
     const chat = useChat()
-    await expect(chat.send({ session_id: 's1', question: '   ', document_ids: [] })).resolves.toBe(false)
+    await expect(chat.send({ session_id: 's1', question: '   ', parent_ids: [] })).resolves.toBe(false)
     expect(sendChatStream).not.toHaveBeenCalled()
   })
 })
@@ -153,7 +164,7 @@ describe('useChat.restore / clear', () => {
     clearHistory.mockResolvedValue({ deleted: 2 })
     const chat = useChat()
     scriptEvents([['token', { text: 'x' }], DONE])
-    await chat.send({ session_id: 's1', question: 'q', document_ids: [] })
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: [] })
     await expect(chat.clear('s1')).resolves.toBe(true)
     expect(chat.messages.value).toEqual([])
   })
@@ -162,7 +173,7 @@ describe('useChat.restore / clear', () => {
     clearHistory.mockRejectedValue(new Error('HTTP 500'))
     const chat = useChat()
     scriptEvents([['token', { text: 'x' }], DONE])
-    await chat.send({ session_id: 's1', question: 'q', document_ids: [] })
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: [] })
     await expect(chat.clear('s1')).resolves.toBe(false)
     expect(chat.messages.value).toHaveLength(2)
     expect(chat.error.value).toBe('HTTP 500')

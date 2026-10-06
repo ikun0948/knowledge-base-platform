@@ -4,6 +4,19 @@ export function listDocuments() {
   return request('/api/documents')
 }
 
+// 候选池一次问三条：模糊搜（query+suffix）、批量点查（parentIds，后端优先认它）、默认前 50。
+// parentIds 用重复键 append：一个真 id 里可以含逗号，逗号拼接会被后端拆成两个假 id，
+// 坏法是"刷新后选中项凭空少几个"而不是报错——比崩难查。
+export function listChunks({ query = '', suffix = '', parentIds = [], limit = 50 } = {}) {
+  const params = new URLSearchParams()
+  if (query) params.set('query', query)
+  if (suffix) params.set('suffix', suffix)
+  for (const id of parentIds) params.append('parent_ids', id)
+  if (limit !== 50) params.set('limit', String(limit))
+  const qs = params.toString()
+  return request(`/api/documents/chunks${qs ? `?${qs}` : ''}`)
+}
+
 // parent_id 形如 "手册 上.pdf_parent_0"：中文和空格是文件名本身带进来的，
 // 不编码就会拼出非法请求行，坏法还是"404 块不存在"而不是报错。
 export function deleteChunk(documentId, parentId) {
