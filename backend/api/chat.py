@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from deps import get_rag_system
+from deps import get_current_user, get_db, get_rag_system
 from exceptions import LLMError, RetrievalError, StorageError
 from schemas.chat import ChatRequest, ChatResponse, mode_of
 
@@ -12,11 +12,31 @@ router = APIRouter(prefix="/api/chat")
 logger = logging.getLogger("kb.api.chat")
 
 
+def _require_owned_parents(db, parent_ids, user) -> list[str]:
+    """问答允许池过白名单：别人的 parent_id 与不存在的 parent_id 一样，都是 404。
+
+    放在端点而不是 RAGSystem：链子只管问答，"能不能问这几个块"是门口的事（spec 3.4 同款分工）。
+    也比在链子里查更便宜——越权请求一次都不该打到 embedding 与 LLM 上。
+
+    返回值这一期**不往链子里传**：`RAGSystem` 四个方法的签名保持不变，端点仍把原始 parent_ids 递给它。
+    这不是遗漏——校验已经发生，把收窄后的集合再传一遍只是少一次无谓比较，
+    而那件事得和阶段二的 `chat_history.user_id`、RAGSystem 重接一起改才划算（spec 2.2 勘误）。
+    """
+    if not parent_ids:
+        return []
+    owned = db.owned_parent_ids(parent_ids, user_id=user.id)
+    if len(owned) != len(list(dict.fromkeys(parent_ids))):
+        raise HTTPException(status_code=404, detail="文档块不存在或已被删除")
+    return owned
+
+
 @router.post("", response_model=ChatResponse)
-def chat(payload: ChatRequest, rag=Depends(get_rag_system)):
+def chat(payload: ChatRequest, db=Depends(get_db), rag=Depends(get_rag_system),
+         user=Depends(get_current_user)):
     """parent_ids 为空即普通对话，用 mode 回传实际走了哪条链（spec 6.2）。"""
     mode = mode_of(payload.parent_ids)
     if mode == "rag":
+        _require_owned_parents(db, payload.parent_ids, user)   # ← 在碰 rag 之前
         try:
             answer, references = rag.chat_with_documents(
                 payload.question, payload.parent_ids, payload.session_id
@@ -42,12 +62,16 @@ def _sse(event: str, data) -> str:
 
 
 @router.post("/stream")
-def chat_stream(payload: ChatRequest, rag=Depends(get_rag_system)):
+def chat_stream(payload: ChatRequest, db=Depends(get_db), rag=Depends(get_rag_system),
+                user=Depends(get_current_user)):
     """SSE 流式版问答（spec 6.4 帧表逐字）。meta 发出后状态码已定格 200：
     之后的失败一律降级为 error 帧，前端读 detail，HTTP 语义让位于流协议。
     /api/chat 原样保留——spec 十一节的回退路径。"""
     mode = mode_of(payload.parent_ids)
     if mode == "rag":
+        # ← 必须在 frames() 之外：流一旦开播状态码就锁死在 200，越权只能落进 error 帧，
+        #   而那不再是"这个请求不该发生"的 HTTP 语义。
+        _require_owned_parents(db, payload.parent_ids, user)
         events = rag.chat_with_documents_stream(
             payload.question, payload.parent_ids, payload.session_id
         )

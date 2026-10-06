@@ -41,7 +41,13 @@ def get_current_user(request: Request, db=Depends(get_db)):
     库里只存哈希（spec 4 节），所以这里必须先把原文算一遍再查；任一步查不到
     都只说"未登录或登录已过期"，登出与过期因此在响应上不可分辨。
     """
-    user = db.get_user_by_token(hash_token(bearer_token(request)))
+    # 先取令牌、后碰库，两行的顺序是判据不是风格：CPython 对
+    # `db.get_user_by_token(hash_token(bearer_token(request)))` 这种写法会先解析
+    # LOAD_METHOD（查 db 上有没有这个方法）再算实参，所以替身缺那一格时，
+    # "没带令牌"的请求炸的是 AttributeError→500 而不是 AuthError→401。
+    # 拆开之后 401 由构造保证：没有令牌时根本走不到库那一步。
+    token = bearer_token(request)
+    user = db.get_user_by_token(hash_token(token))
     if user is None:
         raise AuthError(LOGIN_REQUIRED)
     return user

@@ -2,16 +2,20 @@ import json
 
 from fastapi.testclient import TestClient
 
-from deps import get_rag_system
+from deps import get_db, get_rag_system
 from exceptions import LLMError, RetrievalError, StorageError
-from fakes import FakeRAG
+from fakes import FakeOwnedParentsDB, FakeRAG, FakeUser, with_auth
 from main import create_app
 from schemas.common import Reference
 
 
-def make_client(rag):
+def make_client(rag, db=None, user=None):
     app = create_app()
     app.dependency_overrides[get_rag_system] = lambda: rag
+    # chat 端点现在真的会用到 db（越权白名单），漏这一格那 29 条会一起 500：
+    # app.state.db 在测试里根本不存在
+    app.dependency_overrides[get_db] = lambda: db or FakeOwnedParentsDB()
+    with_auth(app, user or FakeUser())
     return TestClient(app)
 
 
@@ -80,6 +84,18 @@ def test_normal_chain_receives_question_and_session_only():
         "/api/chat", json={"session_id": "s9", "question": "你好", "parent_ids": []}
     )
     assert rag.calls == [("normal", "你好", "s9")]
+
+
+def test_rag_question_passes_the_parent_pool_through_the_whitelist():
+    """白名单确实被调、而且拿到的是这个用户的 id——不传 user.id 的写法在这里必红。
+
+    user_id 显式取 5：`FakeUser()` 的默认是 1，端点若把归属硬编码成 1 就永远测不出来（评审 F12）。
+    """
+    db = FakeOwnedParentsDB()
+    client = make_client(FakeRAG(), db=db, user=FakeUser(user_id=5))
+    client.post("/api/chat", json={"session_id": "s1", "question": "q",
+                                   "parent_ids": ["a.txt_parent_0"]})
+    assert db.calls == [(("a.txt_parent_0",), 5)]
 
 
 def test_reference_serializes_to_exactly_the_spec_fields():

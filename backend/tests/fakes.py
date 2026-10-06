@@ -10,6 +10,27 @@ class FakeDatabase:
         return 1
 
 
+class FakeOwnedParentsDB:
+    """问答测的最小假库：递给它的 parent_id 一律算"属于你"。
+
+    存在的理由是 chat 端点多了一个 db 依赖——那 29 条测不该为此各自造库，
+    而越权那条路径由 test_ownership_isolation.py 用会过滤的假库专门钉。
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def owned_parent_ids(self, parent_ids, *, user_id):
+        self.calls.append((tuple(parent_ids), user_id))
+        return list(dict.fromkeys(parent_ids))
+
+    def get_chat_history(self, session_id, limit=10):
+        return []
+
+    def delete_chat_history(self, session_id):
+        return 0
+
+
 class FakeVectorStore:
     def __init__(self, counts=None):
         self.counts = counts or {"parent": 2, "child": 7}

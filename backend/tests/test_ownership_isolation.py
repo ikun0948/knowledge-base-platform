@@ -9,8 +9,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from deps import get_current_user, get_db, get_doc_processor, get_vector_store
-from fakes import FakeDocProcessor, FakeUser, FakeVectorStore, with_auth
+from deps import (get_config, get_current_user, get_db, get_doc_processor,
+                  get_rag_system, get_vector_store)
+from fakes import (FakeConfig, FakeDocProcessor, FakeRAG, FakeUser,
+                   FakeVectorStore, with_auth)
 from main import create_app
 
 # 刻意不取 1：fakes.FakeUser 的默认 user_id 就是 1，撞上了端点里硬编码 user_id=1
@@ -88,15 +90,14 @@ class OwnerAwareDB:
     def delete_chat_history(self, session_id):
         return 0
 
-    def get_user_by_token(self, token_hash):
-        """gate=False 那一臂走真依赖时，它第一个碰库的就是这一格。
+    def count_documents(self):
+        """/api/health 读的是这一格（main.py:85-96），不是 get_all_documents(user_id=...)。
 
-        Python 先解析 `db.get_user_by_token` 这个属性、再算实参，所以替身缺这一格时，
-        "没带令牌"的判据炸的是 AttributeError（→500）而不是 bearer_token 的 AuthError（→401）：
-        真库有这个方法，替身就得有，缺它测的就不再是那扇门。本条判据里它恒不被调用——
-        没有 Authorization 头时 `bearer_token` 在实参那一层就抛了。
+        Task 4 有意把 count_documents 留在"不加归属"那一侧（它是运维探针的总量口径），
+        这里就得有它——否则 test_health_stays_open 红在 AttributeError，
+        测的不再是"health 没上门"而是"假库缺一格"。
         """
-        return None
+        return len(self.rows)
 
     def delete_document(self, doc_id):
         return 1
@@ -114,12 +115,22 @@ class StampingVectorStore(FakeVectorStore):
         return super().add_documents(parent_docs, child_docs, document_id, user_id=user_id)
 
 
-def make_client(db, user=FakeUser(user_id=OWNER), vector_store=None, gate=True):
+def make_isolation_client(db=None, user=FakeUser(user_id=OWNER), rag=None, gate=True):
+    """隔离判据的公共装配：documents 与 chat/history 与 health 三组路径共用一套替身。
+
+    Task 5 起它多覆盖两格：get_rag_system（问答端点的第一个依赖，缺它 chat 那两条
+    越权判据红在 app.state 上而不是红在白名单上）与 get_config（/api/health 要读
+    CHROMA_PERSIST_DIR）。缺省 db 用会过滤的 OwnerAwareDB，缺省 rag 用 FakeRAG。
+    """
     app = create_app()
+    store = StampingVectorStore()
+    db = db or OwnerAwareDB()
+    rag = rag or FakeRAG()
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_doc_processor] = lambda: FakeDocProcessor()
-    store = vector_store or StampingVectorStore()
     app.dependency_overrides[get_vector_store] = lambda: store
+    app.dependency_overrides[get_rag_system] = lambda: rag
+    app.dependency_overrides[get_config] = lambda: FakeConfig()
     # gate=False 时不覆盖 get_current_user——真依赖会去库里查令牌，这就是 401 判据的走法
     if gate:
         with_auth(app, user)
@@ -128,7 +139,7 @@ def make_client(db, user=FakeUser(user_id=OWNER), vector_store=None, gate=True):
 
 def test_upload_stamps_the_owner_in_database_and_vectors():
     db = OwnerAwareDB()
-    client, store = make_client(db)
+    client, store = make_isolation_client(db)
     res = client.post("/api/documents", files={"file": ("甲.txt", "正文".encode("utf-8"), "text/plain")})
     assert res.status_code == 201
     assert ("save_document", OWNER) in db.calls
@@ -137,14 +148,14 @@ def test_upload_stamps_the_owner_in_database_and_vectors():
 
 def test_list_and_chunks_forward_the_owner():
     db = OwnerAwareDB()
-    client, _ = make_client(db, user=FakeUser(user_id=OWNER))
+    client, _ = make_isolation_client(db, user=FakeUser(user_id=OWNER))
     assert client.get("/api/documents").status_code == 200
     assert client.get("/api/documents/chunks").status_code == 200
     assert ("get_all_documents", OWNER) in db.calls
     assert ("search_parent_chunks", OWNER) in db.calls
 
     other = OwnerAwareDB()
-    client2, _ = make_client(other, user=FakeUser(user_id=INTRUDER))
+    client2, _ = make_isolation_client(other, user=FakeUser(user_id=INTRUDER))
     assert client2.get("/api/documents").json() == []
     assert client2.get("/api/documents/chunks").json() == []
 
@@ -152,7 +163,7 @@ def test_list_and_chunks_forward_the_owner():
 def test_deleting_another_users_chunk_is_404_with_the_existing_line():
     """越权与不存在共用一句文案：区分它们等于承认"这块存在"。"""
     db = OwnerAwareDB()
-    client, _ = make_client(db, user=FakeUser(user_id=INTRUDER))
+    client, _ = make_isolation_client(db, user=FakeUser(user_id=INTRUDER))
     res = client.delete("/api/documents/7/chunks/甲.txt_parent_0")
     assert res.status_code == 404
     assert res.json() == {"detail": "文档块不存在或已被删除"}
@@ -172,7 +183,7 @@ def test_owner_deleting_a_chunk_forwards_the_owner_to_both_remaining_callsites()
     归属参数是必填关键字参数，忘了传就该当场 TypeError，而不是静默少一道主人。
     """
     db = OwnerAwareDB()
-    client, store = make_client(db, user=FakeUser(user_id=OWNER))
+    client, store = make_isolation_client(db, user=FakeUser(user_id=OWNER))
 
     res = client.delete("/api/documents/7/chunks/甲.txt_parent_0")
 
@@ -187,17 +198,67 @@ def test_owner_deleting_a_chunk_forwards_the_owner_to_both_remaining_callsites()
                           "created_at": "2026-10-06T00:00:00"}
 
 
-@pytest.mark.parametrize("method,path", [
+BUSINESS_ENDPOINTS = [
     ("post", "/api/documents"),
     ("get", "/api/documents"),
     ("get", "/api/documents/chunks"),
     ("delete", "/api/documents/7/chunks/x_parent_0"),
-])
-def test_documents_endpoints_reject_a_missing_token(method, path):
-    """spec 3.2 那张清单的前四条。Task 5 会把 chat/history 那四条并进来。"""
-    client, _ = make_client(OwnerAwareDB(), gate=False)
+    ("post", "/api/chat"),
+    ("post", "/api/chat/stream"),
+    ("get", "/api/history/some-session"),
+    ("delete", "/api/history/some-session"),
+]
+
+
+@pytest.mark.parametrize("method,path", BUSINESS_ENDPOINTS,
+                         ids=[f"{m}-{p}" for m, p in BUSINESS_ENDPOINTS])
+def test_every_business_endpoint_rejects_a_missing_token(method, path):
+    """八条一个不漏：这条参数化就是 spec 3.2 那张清单的自动化形态。
+
+    漏一条门的表现是"未登录也能查别人的历史"，而它不会让任何一条现有测变红——
+    所以这里必须按清单数，不能按"改了几个文件"数。
+    """
+    client, _ = make_isolation_client(gate=False)
     # 这一行是本条判据的牙齿：覆盖没撤干净，测的就是替身而不是那扇真门
     assert get_current_user not in client.app.dependency_overrides
-    res = getattr(client, method)(path)
-    assert res.status_code == 401
+    payload = {"session_id": "s1", "question": "q"} if method == "post" else None
+    # 计划的 getattr(client, method)(path, json=...) 在 GET 上会 TypeError：
+    # httpx.Client.get 不收 json 参数（只有 post/put/patch/delete 收）。request() 八个动词同一条路。
+    res = client.request(method.upper(), path, json=payload)
+    assert res.status_code == 401, f"{method.upper()} {path} 没上门"
     assert res.json() == {"detail": "未登录或登录已过期"}
+
+
+def test_health_stays_open():
+    """/api/health 是运维探针，spec 3.2 明写不上门。
+
+    这条看着像"没测东西"，其实测的是"没把门多加到 health 上"——
+    它是项目记忆与现有判据里那条基线计数（活文档 4 / 父块 4 / 子块 10，2026-10-07 重钉）唯一的自动入口。
+    health 依赖 get_config/get_db/get_vector_store 三格，make_isolation_client 全部覆盖，
+    所以这里能硬断言 200，而不是"只要不是 401 就行"。
+    """
+    client, _ = make_isolation_client(gate=False)
+    assert client.get("/api/health").status_code == 200
+
+
+def test_asking_with_a_foreign_parent_id_is_404():
+    db = OwnerAwareDB()
+    client, _ = make_isolation_client(db, user=FakeUser(user_id=INTRUDER))
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["甲.txt_parent_0"]})
+    assert res.status_code == 404
+    assert res.json() == {"detail": "文档块不存在或已被删除"}
+
+
+def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
+    """流式端点必须在 meta 帧**之前**拒：一旦发出 200，HTTP 语义就让位给流协议了。
+
+    这条判据的形状（404 + JSON detail，而不是 error 帧）就是"检查放在 StreamingResponse
+    构造之前"的唯一证据——放错位置照样"能跑"，只是没人能从状态码看出来。
+    """
+    db = OwnerAwareDB()
+    client, _ = make_isolation_client(db, user=FakeUser(user_id=INTRUDER))
+    res = client.post("/api/chat/stream", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["甲.txt_parent_0"]})
+    assert res.status_code == 404
+    assert res.json() == {"detail": "文档块不存在或已被删除"}

@@ -31,6 +31,25 @@ def stream_payload(session_id, question=LONG_QUESTION):
     return {"session_id": session_id, "question": question, "parent_ids": []}
 
 
+def login_token():
+    """真服务上登录一个真账号，拿一枚真令牌。
+
+    口令只从 Config.DEFAULT_USER_PASSWORD 读，**绝不打印**（项目记忆：`.env` 的键值
+    不入日志、不进断言消息）。默认用户不可登录时这条 helper 直接 pytest.skip——
+    那属于"运营者没设口令"的环境差异，不是代码坏了。
+    """
+    from config.config import Config
+    from core.migrations import DEFAULT_IDENTIFIER
+
+    if not Config.DEFAULT_USER_PASSWORD:
+        pytest.skip("DEFAULT_USER_PASSWORD 未设置：默认用户只作归属锚点，无法登录")
+    res = httpx.post(f"{BASE}/api/auth/login",
+                     json={"identifier": DEFAULT_IDENTIFIER,
+                           "password": Config.DEFAULT_USER_PASSWORD}, timeout=30)
+    res.raise_for_status()
+    return res.json()["token"]
+
+
 def test_client_disconnect_mid_stream_leaves_no_rows(server):
     """主判据：收了若干 token 就掐断连接 → 后端生成器被取消，一条都不该落库。
 
@@ -38,11 +57,13 @@ def test_client_disconnect_mid_stream_leaves_no_rows(server):
     token<2 就见到 error 帧 = 大模型不可用（如免费额度耗尽），skip 而不是假绿：
     没在飞行中的生成就没有"断流"可言。
     """
+    token = login_token()          # 业务端点全部要求 Bearer（spec 3.2），先拿一枚真令牌
     sid = probe_session("abort")
     try:
         with httpx.Client(timeout=60) as client:
             with client.stream("POST", f"{BASE}/api/chat/stream",
-                               json=stream_payload(sid)) as res:
+                               json=stream_payload(sid),
+                               headers={"Authorization": f"Bearer {token}"}) as res:
                 assert res.status_code == 200
                 tokens = 0
                 for line in res.iter_lines():
@@ -55,10 +76,12 @@ def test_client_disconnect_mid_stream_leaves_no_rows(server):
             assert tokens >= 2, "流在攒够 token 前就结束了，无法验证断流路径"
             # with 退出即关 socket；给服务端一点时间把断连处理完
             time.sleep(1.0)
-            rows = client.get(f"{BASE}/api/history/{sid}").json()
+            rows = client.get(f"{BASE}/api/history/{sid}",
+                              headers={"Authorization": f"Bearer {token}"}).json()
             assert rows == [], f"断流后竟落了 {len(rows)} 行半截历史"
     finally:
-        httpx.delete(f"{BASE}/api/history/{sid}", timeout=10)
+        httpx.delete(f"{BASE}/api/history/{sid}", timeout=10,
+                     headers={"Authorization": f"Bearer {token}"})
 
 
 def test_full_stream_persists_one_turn_and_frames_are_ordered(server):
@@ -66,12 +89,14 @@ def test_full_stream_persists_one_turn_and_frames_are_ordered(server):
 
     帧序 live 门禁：首个事件 meta，末个事件 done，中间全是 token（normal 模式无 references）。
     """
+    token = login_token()
     sid = probe_session("full")
     events = []
     try:
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{BASE}/api/chat/stream",
-                               json=stream_payload(sid)) as res:
+                               json=stream_payload(sid),
+                               headers={"Authorization": f"Bearer {token}"}) as res:
                 assert res.status_code == 200
                 assert "text/event-stream" in res.headers["content-type"]
                 for line in res.iter_lines():
@@ -82,9 +107,11 @@ def test_full_stream_persists_one_turn_and_frames_are_ordered(server):
             assert events[0] == "meta"
             assert events[-1] == "done"
             assert set(events[1:-1]) == {"token"}, "normal 模式中间帧应全是 token"
-            rows = client.get(f"{BASE}/api/history/{sid}").json()
+            rows = client.get(f"{BASE}/api/history/{sid}",
+                              headers={"Authorization": f"Bearer {token}"}).json()
             assert [r["role"] for r in rows] == ["user", "assistant"]
             assert rows[1]["mode"] == "normal"
             assert rows[1]["content"], "done 帧发出前答案必须已完整落库"
     finally:
-        httpx.delete(f"{BASE}/api/history/{sid}", timeout=10)
+        httpx.delete(f"{BASE}/api/history/{sid}", timeout=10,
+                     headers={"Authorization": f"Bearer {token}"})

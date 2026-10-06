@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from deps import get_db
+from fakes import FakeUser, with_auth
 from main import create_app
 from schemas.common import Reference
 
@@ -33,9 +34,12 @@ class HistoryDB:
         return 2
 
 
-def make_client(db):
+def make_client(db, user=None):
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
+    # 端点上了登录门，这批测就得覆盖它；user 在这一期只被"要不要令牌"读到，
+    # 阶段一没有按 user 过滤历史的判据（见端点 docstring），所以这里没有 user_id 相关的断言。
+    with_auth(app, user or FakeUser())
     return TestClient(app)
 
 
