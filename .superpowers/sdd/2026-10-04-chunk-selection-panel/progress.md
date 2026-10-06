@@ -152,3 +152,56 @@ Task 3 末 `useChat.js` 的 payload 键已是 `parent_ids`，而 `App.vue` 仍�
   ③ 搜索无防抖（体量十几个父块，纯浪费；真要加得先有分页）；④ 弹窗结果不分页，`limit=50` 一次拿满。
 - 顺手记一条环境事实：同一时刻本机只能跑一份 uvicorn（embedding 模型按进程加载，os error 1455），
   所以 Task 5 全程共用 PID 20712 那一个实例。
+
+## 2026-10-06 追加：块级面板四项改造（bounded 路径，不出 spec/计划文）
+
+- 需求四条与定稿口径（用户逐条确认）：① 弹窗结果一排两张、要美观；② 弹窗尺寸固定、
+  切到空分类不许缩，高度按当前值缩 1/5；③ 卡片只显示名字，正文改鼠标悬浮显示；
+  ④ 删除文档块从消息引用条搬进弹窗，每行一个删除按钮。
+  **第 ② 条中途改过一次**：我先按"缩小 5 分之 1"落笔成"放大 2 倍"（164vh），被纠正后
+  按"当前值 → 目标值 + 算式"回读（82vh → 66vh，宽 min(92vw,560px) 不动）才定稿。
+  第 ④ 条用户明确选了"移除消息引用条上的删除入口，删除只留弹窗"。
+- RED（11 条先跑红）：`11 failed / 73 passed (84)`。红全在预期位置——卡片新口径 9 条里的新判据、
+  弹窗删除闭环 5 条（`Cannot call trigger on an empty DOMWrapper` 就是"按钮还不存在"）、
+  引用条退役 2 条（`expected [...] to have a length of +0 but got 1` 就是旧按钮还挂着）。
+- GREEN 实现要点：
+  - `ChunkCard`：卡面 `文件名 #块序号`，序号从 `parent_id` 尾部 `_parent_(\d+)$` 取，取不到就退纯文件名
+    （绝不能显示 `#undefined`）；正文/块 id/子块数搬进 `.chunk-card-body` 的原生 `title`。
+    新增 `deletable`/`deleting` props 与 `.chunk-delete`（`@click.stop`；DOM 里仍必须是第二个孩子才落右上角）。
+  - `ChunkPickerModal`：自己调 `deleteChunk(document_id, parent_id)`，原生 confirm 先于任何请求；
+    成功 → 本地剔行 + `emit('chunk-deleted', 整块)`；失败 → 只写错误位、一行不减；
+    `deletingId` 期间按钮 `disabled`（连点第二下必然 404，界面却会显示"删除失败"而数据早没了）。
+  - **错误位从 v-else-if 链里拆出来**：原写法"删除失败"会把整个结果列表藏掉，行都看不见了还怎么重试。
+  - `App.vue`：`handleRemoveChunk` 与 `deleteChunk` import 退役，改接 `@chunk-deleted`
+    → `markChunkDeleted` + `remove(parentId)` + `refresh()`；三跳 `remove-chunk` 链路
+    （ReferenceList / MessageBubble / MessageList 的 `defineEmits` 与模板监听）全部拆掉，
+    引用条只留 `deleted` 压暗。
+  - CSS：`.picker-results` 换 `repeat(2, minmax(0,1fr))` + `align-content: start`
+    （`1fr` 的最小尺寸是 auto，不写 `minmax(0,…)` 一个长文件名就能把另一列挤出弹窗；
+    不写 `align-content` 则 stretch 把每行拉满固定高度）；`.picker-modal` 由 `max-height: 82vh`
+    改 `height: 66vh; max-height: calc(100dvh - 24px)`；结果区删掉 `max-height: 60vh`，
+    改由 `flex: 1; min-height: 0` 在固定高度里界内有界滚动；≤768 退一列；
+    `.chunk-snippet` / `.chunk-meta` 退役，`.chunk-delete` 定位规则从引用条搬进卡片家族。
+- 门禁实数：frontend **84 passed / 7 files**（75 → 84：新增 11 条、退役 3 条改判 3 条）、
+  `npm run build` exit 0（js 85.42 kB / gzip 33.10 kB，css 10.16 kB / gzip 2.75 kB）、
+  G-4 grep **0 命中**。后端本轮零改动，未重跑 pytest。
+- 浏览器判据 **35 条全 PASS**（Edge headless + `puppeteer-core --no-save`，探针 `probe-chunk-panel.mjs` 跑完即删）：
+  - `ui` 1280×900（回读 1280）**16/16**：弹窗 594px = `round(900×0.66)`、宽 560px；两列网格、
+    首行两卡 `top=292` 相同、`left 377/644`、等宽 257px；卡面 `deepseek简介.docx #0` 不含正文，
+    `.chunk-snippet/.chunk-meta` 节点数 0，title 才带正文+块 id+子块数；12 张卡 12 个 🗑 0 个红叉；
+    **零命中 594→594、切空分类 594→594**（第 ② 条的正身）；面板卡片 0 个删除按钮；零控制台错误。
+  - `chat` 1280×900 **12/12**：选中探针块后面板 `selected=1 removes=1 deletes=0`；引用条 `deletes=0`
+    且这一轮确实引用 `picker-probe.txt(#395)`；弹窗点 🗑 走了原生 confirm（消息原文含"不可恢复"），
+    成功后该行立刻消失且 `.picker-error` 为空；选择池归零；引用条保留并标灰"已删除（之前的答案仍然引用它）"；
+    `/api/health` 回到 **9 / 11 / 22**，`picker-probe.txt` 从文档列表隐存（`is_active=false`）；零控制台错误。
+  - `narrow` 375×800（回读 375）**7/7**：退一列、卡片竖排（`left=32` 相同、`top 275→326`）、
+    高 528px = 66vh、宽 345px = 92vw、弹窗 rect `15→360` 不越界；零控制台错误。
+  - **探针接线新增两条**：① 正文搬进 title 后按可见文本已经找不到 `parent_id`，卡片定位改按 `title` 匹配；
+    ② `parent_id` 全库唯一 ⇒ 同名探针文档**不能重传**（ui 阶段跑完它还在库里），加 `ensureProbe` 先查后传。
+  - 我一度把 `ui` 报成 13/13，回转录核到原始 stdout 才定：**16/16**。判据条数要说就说得实。
+- 本轮写入的 `chat_history`：chat 阶段自起 session 1 轮（探针块问答）。探针文档已删并隐存，基线未动。
+- 清理：`probe-chunk-panel.mjs` 与临时 `_uitail.txt` 已 `rm`；`npm prune` 后 extraneous = 0、
+  `node_modules/@puppeteer` 那个空 scope 目录手动删掉；`package.json` / `package-lock.json` 零 diff。
+- 收尾遗留（本轮新增，不进实现）：① 弹窗删除后引用条的 `deleted` 态仍不持久化（旧遗留①的同一件事，
+  触发点换了不影响结论）；② `#块序号` 只在 `parent_id` 形如 `…_parent_N` 时给出，
+  历史脏数据退成纯文件名后同文档多块会在卡面上撞名（靠 title 才能分辨）。
