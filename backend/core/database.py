@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
+from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -32,6 +32,11 @@ class Document(Base):
     chunk_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
     is_active = Column(Boolean, default=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+
+    __table_args__ = (
+        Index('idx_documents_user_id', 'user_id'),
+    )
 
     # 关联关系 设定一对多表 ParentChunk 关联模型 back_populates 关联字段 cascade级联操作(删除操作)
     parent_chunks = relationship("ParentChunk", back_populates="document", cascade="all, delete-orphan")
@@ -101,6 +106,38 @@ class ChatHistory(Base):
         # 如果需要单独为 created_at 建立索引（例如全局清理旧数据时按时间查询）：
         # Index('ix_chat_history_created_at', 'created_at'),
     )
+
+
+# 账号表：identifier 单列存邮箱或手机号原文，配 identifier_type 说明它是哪一种。
+# 为什么不做 email/phone 两列：两列各 nullable-unique 会让"同一手机号能注册两次"
+# 这类边界要靠额外约束兜，单列 + 类型列天然唯一（spec 2.1）。
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    identifier = Column(String(255), nullable=False, unique=True)
+    identifier_type = Column(String(10), nullable=False)
+    nickname = Column(String(50), nullable=False)
+    # 预设头像标识（'auto' = 昵称首字母），不是图片 URL：本仓没有文件存储层（spec 决策 5）
+    avatar = Column(String(20), nullable=False, default='auto')
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+# 会话表：库里只有令牌哈希，令牌原文只在登录响应里出现一次（spec 4 节）
+class AuthToken(Base):
+    __tablename__ = 'auth_tokens'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.now)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_tokens_user_id', 'user_id'),
+    )
+
 
 class DatabaseManager:
     def __init__(self, config):
@@ -399,6 +436,117 @@ class DatabaseManager:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
+
+    # ---------- 账号与会话（spec 3.1/3.2）----------
+
+    def create_user(self, identifier, identifier_type, nickname, password_hash, avatar="auto"):
+        """返回 detached 的 User（只有普通列，不碰 relationship，关掉 session 后仍可读）。"""
+        session = self.get_session()
+        try:
+            user = User(identifier=identifier, identifier_type=identifier_type,
+                        nickname=nickname, avatar=avatar, password_hash=password_hash)
+            session.add(user)
+            session.commit()
+            return user
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_user_by_identifier(self, identifier):
+        session = self.get_session()
+        try:
+            return session.query(User).filter(User.identifier == identifier).first()
+        finally:
+            session.close()
+
+    def get_user_by_id(self, user_id):
+        session = self.get_session()
+        try:
+            return session.get(User, user_id)
+        finally:
+            session.close()
+
+    def count_users(self) -> int:
+        session = self.get_session()
+        try:
+            return session.query(User).count()
+        finally:
+            session.close()
+
+    def create_token(self, user_id, token_hash, expires_at):
+        session = self.get_session()
+        try:
+            row = AuthToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at)
+            session.add(row)
+            session.commit()
+            return row
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_user_by_token(self, token_hash):
+        """一枚 join 同时验"令牌有效"与"账号还在"。
+
+        过期行不是删除而是查不出来：`expires_at > now()` 让登出之外的第二种失效方式
+        不需要后台清扫（30 天不用完的令牌躺在库里也换不到任何东西）。
+        """
+        session = self.get_session()
+        try:
+            return (session.query(User)
+                    .join(AuthToken, AuthToken.user_id == User.id)
+                    .filter(AuthToken.token_hash == token_hash,
+                            AuthToken.expires_at > datetime.now())
+                    .first())
+        finally:
+            session.close()
+
+    def delete_token(self, token_hash) -> int:
+        """登出 = 删这一行。返回删掉的行数，0 表示"本来就没有"，不是错误。"""
+        session = self.get_session()
+        try:
+            deleted = session.query(AuthToken).filter(
+                AuthToken.token_hash == token_hash).delete()
+            session.commit()
+            return deleted
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    # ---------- 迁移用（Task 3 的 core/migrations.py 调这三条）----------
+
+    def assign_unowned_documents(self, user_id) -> int:
+        """只动 user_id IS NULL 的行：跑第二遍就是 0 行，这是整段迁移幂等的支点。"""
+        session = self.get_session()
+        try:
+            n = session.query(Document).filter(Document.user_id.is_(None)).update(
+                {Document.user_id: user_id}, synchronize_session=False)
+            session.commit()
+            return n
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def vector_ids_for_user(self, user_id):
+        """按归属取两份 vector_id 清单——Chroma 的 id 就存这两列里（2026-10-04 live 验过）。"""
+        session = self.get_session()
+        try:
+            parents = session.query(ParentChunk.vector_id).join(
+                Document, Document.id == ParentChunk.document_id).filter(
+                Document.user_id == user_id, ParentChunk.vector_id.isnot(None)).all()
+            children = session.query(ChildChunk.vector_id).join(
+                Document, Document.id == ChildChunk.document_id).filter(
+                Document.user_id == user_id, ChildChunk.vector_id.isnot(None)).all()
+            return {"parent": [r[0] for r in parents], "child": [r[0] for r in children]}
         finally:
             session.close()
 

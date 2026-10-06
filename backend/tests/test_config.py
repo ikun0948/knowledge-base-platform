@@ -23,13 +23,20 @@ SANCTIONED_ATTRS = {
     "CHUNK_SIZE",
     "CHUNK_OVERLAP",
     "TOP_K",
+    "AUTH_TOKEN_TTL_DAYS",
+    "DEFAULT_USER_PASSWORD",
 }
 
 
+# 真实 backend/.env 的值会顺着父进程漏进子进程：import config.config 时 load_dotenv 把它灌进了
+# 父进程的 os.environ，子进程再继承下来，"缺键走默认"那几条读到的就不是默认值、用例失真。
+# CHROMA_PERSIST_DIR 早就为此剔掉，认证这两个键同理。
+_KEYS_STRIPPED_FROM_CHILD_ENV = {"CHROMA_PERSIST_DIR", "AUTH_TOKEN_TTL_DAYS", "DEFAULT_USER_PASSWORD"}
+
+
 def _child_env(**extra):
-    # 继承的 CHROMA_PERSIST_DIR 会让键完全缺失那条用例失真，子进程里先剔掉
-    env = {k: v for k, v in os.environ.items() if k != "CHROMA_PERSIST_DIR"}
     # 守卫消息含中文，子进程 stderr 编码不固定时断言会误判
+    env = {k: v for k, v in os.environ.items() if k not in _KEYS_STRIPPED_FROM_CHILD_ENV}
     env["PYTHONIOENCODING"] = "utf-8"
     env.update(extra)
     return env
@@ -130,3 +137,24 @@ def test_env_file_and_base_dir_are_exported():
 def test_required_keys_present():
     for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "LOCAL_MODEL_PATH", "MYSQL_DATABASE"):
         assert getattr(Config, key)
+
+
+def test_auth_keys_have_defaults_and_read_the_environment():
+    """令牌寿命与默认用户口令都是调参键：缺配置走默认，不该把服务起不动。"""
+    result = _run_import(BACKEND_DIR, BACKEND_DIR,
+                         "from config.config import Config; "
+                         "print(Config.AUTH_TOKEN_TTL_DAYS, repr(Config.DEFAULT_USER_PASSWORD))",
+                         AUTH_TOKEN_TTL_DAYS="7", DEFAULT_USER_PASSWORD="probe-pass")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "7 'probe-pass'"
+
+
+def test_auth_keys_fall_back_without_the_env_file(tmp_path):
+    """缺键的默认值：30 天寿命 + 空口令（空口令 = 默认用户不可登录，spec 6 步骤 3）。"""
+    dotenv = f"DASHSCOPE_API_KEY=x\nCHROMA_PERSIST_DIR={tmp_path / 'chroma'}\n"
+    result = _run_import_with_env_file(
+        tmp_path, dotenv,
+        "from config.config import Config; "
+        "print(Config.AUTH_TOKEN_TTL_DAYS, repr(Config.DEFAULT_USER_PASSWORD))")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "30 ''"

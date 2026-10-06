@@ -45,3 +45,8 @@ class Config:
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
     TOP_K = int(os.getenv("TOP_K", 5))
+    # —— 认证（spec 2.6）：两个都是调参键，缺配置走默认，不像 CHROMA_PERSIST_DIR 缺键就炸 ——
+    AUTH_TOKEN_TTL_DAYS = int(os.getenv("AUTH_TOKEN_TTL_DAYS", 30))
+    # 默认用户（旧数据归属锚点）的初始口令。留空 = 该账号只作归属、不可登录，
+    # 那 9 篇旧文档在界面上就永远看不见，所以本仓的 backend/.env 里给了真值（spec 6 步骤 3）。
+    DEFAULT_USER_PASSWORD = os.getenv("DEFAULT_USER_PASSWORD", "")
