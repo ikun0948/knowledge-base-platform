@@ -656,6 +656,16 @@ ACCOUNT_TAKEN = "该账号已注册"
 # 迭代数给 1000 就够：这条路径要的是"确实花时间算过"，不是"算满 39 万次"。
 _DUMMY_HASH = "pbkdf2_sha256$1000$" + "0" * 32 + "$" + "0" * 64
 
+> 2026-10-06 修订（Task 2 Step 3：上面那个 `1000` 是计划写错，落地改数不改注释）
+> `verify_password` 的耗时由 **stored 串自己**那段迭代数决定（`core/security.py:30` 是从串里解出来的，
+> 不是读全局常量）。所以垫片给 1000 时："没这个账号"算 1000 轮、"密码错"算 390000 轮，
+> 实测差约 200 倍——注释里那句"耗时上不可分辨"当场是假话，攻击者拿秒表就能枚举账号。
+> **落地改为同价**：`_DUMMY_HASH = f"{ALGORITHM}${PBKDF2_ITERATIONS}${'0'*32}${'0'*64}"`，
+> 从 `core.security` 引常量而不是抄字面量，以后 `PBKDF2_ITERATIONS` 上调时垫片自动跟上。
+> **明确不做**任何 `sleep` / 取平均 / 补齐到某个墙钟值的"抹平"写法：那只是把假安全感写进生产路径，
+> 还多一个随机器负载抖动的判据。代价是未知账号登录多花约 200ms——注册面与登录失败面，不值一提。
+> 由两条测钉住：垫片对任意口令恒 `False`（形状对了但恒真也照样是洞）；四段形状与迭代数和真行逐字段相等。
+
 
 def default_nickname(identifier: str, identifier_type: str) -> str:
     if identifier_type == "email":
@@ -816,6 +826,15 @@ def test_register_nickname_defaults_and_overrides():
 def test_register_rejects_malformed_email(bad):
     client, _ = make_client()
     assert register(client, identifier=bad).status_code == 422
+
+
+> 2026-10-06 修订（Task 2 Step 4：这两格自相矛盾，落地时改上面那格）
+> `test_register_nickname_defaults_and_overrides` 用 `x@y.z` 期望 201，而本格把 `a@b.c` 钉成 422——
+> 同一件事两个结论。`schemas/auth.py:11` 的 `EMAIL_RE` 要求 TLD 至少两个字母（`[A-Za-z]{2,}`），
+> 所以单字母 TLD 一律 422，`x@y.z` 当场红。
+> **改判：把昵称用例换成 `x@y.zz`，不放宽正则。** 理由是那条 `{2,}` 是生产校验，不是为测试设的门槛——
+> 为凑一个测试值把它退成 `{1,}`，等于真实用户能注册出 `a@b.c` 这种过不了任何发信域的邮箱。
+> 实现处已在两格之间留了互指注释；后续 Task 抄这段判据时以 `x@y.zz` 为准。
 
 
 @pytest.mark.parametrize("bad", ["12345678901", "1380000000", "138000000012", "23800000001", "1380000000a"])
