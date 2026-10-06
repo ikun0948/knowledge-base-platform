@@ -76,6 +76,10 @@ parent_chunks / child_chunks  ← 不加列
 
 `parent_chunks` / `child_chunks` **不加归属列**：它们的归属永远能由 `document_id` join `documents.user_id` 得出。冗余一份就要负责两处一致，白担风险。
 
+> **2026-10-06 计划期勘误（列的归属不变，落地阶段改了）**：`chat_history.user_id` 这一列的**写入与读取过滤**归**阶段二**，阶段一只加 `documents.user_id`。原因不是设计变卦，是接线成本：历史行的写入点全在 `RAGSystem` 的四个方法里（`normal_chat` / `chat_with_documents` 及两个流式版），要让它知道 `user_id` 就得给这四个方法加参数、连带改 34 处测试调用点；而阶段二的 `llm_factory` 改造**本来就要把这四个方法连同那 34 处重接一遍**。分两段各动一次，同一个文件动两轮、评审两遍，中间没有换来任何东西。
+>
+> 阶段一期间历史隔离靠什么：`session_id` 由后端在登录时 `uuid4()` 铸造（第 1 节决策 2），不可枚举、不随刷新变，跨用户撞上的概率与"猜中一个 uuid4"同级。阶段一给 `GET/DELETE /api/history/{session_id}` 上的**登录门**已经排除了匿名访问。
+
 ### 2.3 现有单例的拆与留
 
 `app.state` 上 5 个 lifespan 单例（`main.py:42-47`）里：
@@ -107,11 +111,19 @@ def build_compressor(cfg: LLMConfig, model: str): ...   # 内部 temperature 固
   `{"$and": [{"user_id": "<id>"}, {"parent_id": {"$in": [...]}}]}`。
 - 集合名仍是 `parent_document` / `child_document` 两个常量，`collection_counts()` 与 `/api/health` 的语义不变（**全局物理计数**）。
 
+> **2026-10-06 计划期勘误（拆成两段落地）**：**写侧补戳**（`add_documents` 多打一个 `user_id`）+ 迁移补历史戳归**阶段一**；**读侧的 `$and` 过滤**归**阶段二**。
+>
+> 不是漏做：`parent_id` 全库唯一（`database.py:46`），而阶段一的问答入口已经先校验过"这些 `parent_id` 属于当前用户"（第 3.3 节），带 `$in` 的过滤条件本身就只可能命中他自己的子块——读侧 `$and` 在阶段一没有一层是承重墙，纯属纵深。等阶段二 `create_retriever` 因 `llm_factory` 必须改签名时一起加，才是顺路。
+
 ### 2.6 Config 的变动
 
 `Config` 新增一个属性 `AUTH_TOKEN_TTL_DAYS`（`os.getenv(..., "30")`，与 `TOP_K` 同档的调参键）。
 
 `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` / `LLM_MODEL` 三键**降级为迁移种子**：只在首次建默认用户时抄给它，运行期问答链一律不再读（改读用户行）。三属性本身仍留在 `Config` 上，属性集钉（`test_config.py` 的 `SANCTIONED_ATTRS`）只需加 `AUTH_TOKEN_TTL_DAYS` 一项。
+
+> **2026-10-06 计划期勘误（两处更正）**：
+> 1. `SANCTIONED_ATTRS` 要加的是**两项**——`AUTH_TOKEN_TTL_DAYS` 与 `DEFAULT_USER_PASSWORD`（第 6 步默认用户口令来自 `.env`，必须过一个 Config 属性才拿得到，不能就地 `os.getenv`）。那句"只需加一项"写漏了。
+> 2. "三键降级为迁移种子"这件事发生在**阶段二**：阶段一的问答链照旧直接读 `Config`（两处 `ChatOpenAI` 还没拆），所以阶段一结束时它们仍是运行期真值，不是种子。抄送给默认用户（第 6 节步骤 4）也随之归阶段二。
 
 ---
 
@@ -124,7 +136,7 @@ def build_compressor(cfg: LLMConfig, model: str): ...   # 内部 temperature 固
 | `POST /register` | `identifier_type`、`identifier`、`password`、`nickname?` | 201 `{token, user, session_id}` | 一 |
 | `POST /login` | `identifier`、`password` | 200 `{token, user, session_id}` | 一 |
 | `POST /logout` | （当前令牌） | 204 | 一 |
-| `GET /me` | （当前令牌） | `{user, session_id_present}` | 一（api_key_masked 与 models 阶段二补） |
+| `GET /me` | （当前令牌） | `{user}` | 一（api_key_masked 与 models 阶段二补） |
 | `PUT /me` | `nickname` / `avatar` | `{user}` | 二 |
 | `PUT /me/password` | `old_password`、`new_password` | 204 | 二 |
 | `PUT /me/llm` | `api_key`、`base_url` | `{user}` | 二 |
@@ -132,7 +144,11 @@ def build_compressor(cfg: LLMConfig, model: str): ...   # 内部 temperature 固
 
 `user` 的响应形状（`schemas/auth.py` 的 `UserOut`）：`id`、`identifier`、`identifier_type`、`nickname`、`avatar`、`llm_configured: bool`、`llm_base_url`、`api_key_masked: str`、`models: [str]`、`default_model: str|null`。
 
+阶段归属：前五项（`id`/`identifier`/`identifier_type`/`nickname`/`avatar`）是阶段一的形状；后五项要先有 `users.api_key`、`users.base_url` 两列和 `user_models` 表，随阶段二一起加。阶段一不多回空壳字段。
+
 **`api_key_masked` 的口径**：`sk-` 前缀保留 + 尾 4 位，其余一律 `****`。原文**任何端点都不返回**、任何日志都不打印。
+
+> **2026-10-06 计划期勘误**：原表里 `GET /me` 的出参写作 `{user, session_id_present}`，现改为只回 `{user}`。`session_id_present` 没有后端可判定的真相源——对话 id 只存在前端 localStorage（第 5.3 节），库里没有"当前会话"这一行，`GET /me` 无从知道前端手上有没有它；返回一个前端不能用来做任何决定的字段就是死契约。刷新路径照旧：`/me` 只验令牌，id 沿用本地值。
 
 ### 3.2 认证依赖
 
@@ -269,6 +285,11 @@ chat 两个端点在碰 `rag` 之前先 `require_llm_config(user)`：缺 `api_ke
 5. `UPDATE documents SET user_id=<default> WHERE user_id IS NULL`；`chat_history` 同理。
 6. 旧向量补戳：从 `parent_chunks.vector_id` / `child_chunks.vector_id` 读 id 清单（这两列存的就是 Chroma 的 id，2026-10-04 已 live 验过：用它删向量计数如实下降），然后 `collection.update(ids=..., metadatas=[{"user_id": <default>}]*n)`。**只改 metadata，不重新嵌入、不搬家。**
 
+> **2026-10-06 计划期勘误（阶段归属与调用位置）**：
+> - 阶段一实际执行的是 **1、2（只加 `documents.user_id`）、3、5（只 `documents`）、6**；步骤 4（抄三键）与步骤 2/5 的 `chat_history` 部分归阶段二，理由见 2.2 与 2.6 的同一批勘误。
+> - 步骤 6 必须**先 `get` 出现有 metadata 再合并写回**（`{**existing, "user_id": str(uid)}`），并把已有正确 `user_id` 的向量跳过。Chroma 的 `update` 只补提供的键是较新版本的语义，不依赖它——读回来合并写才是最保守的做法，跳过已戳的又让"每次开机都重跑"变成一次只读扫描。
+> - **调用位置钉在 `lifespan`**（`main.py:42-47` 那段里，`VectorStore` 之后、`RAGSystem` 之前），不挂在 `DatabaseManager.init_database` 里：`test_observability.py:50` 钉死了"init 只发 `engine` + `create_all` 两次调用"，把 ALTER 塞进 init 会让那条测试红；更重要的是步骤 6 需要 `vector_store`，而它在 `db` 之后才构造。
+
 **回滚是真回滚**：新列留着不 `DROP`、新表留着不删、向量多出的 `user_id` 键旧代码根本不读。代码退到上一个提交即可运行。默认用户账号留着无害。
 
 `.env.example` 同步加 `DEFAULT_USER_PASSWORD`（附一行中文注释），真实值不入库。
@@ -289,6 +310,13 @@ chat 两个端点在碰 `rag` 之前先 `require_llm_config(user)`：缺 `api_ke
 | `test_config.py::SANCTIONED_ATTRS` | 1 | 加 `AUTH_TOKEN_TTL_DAYS`（外加 `DEFAULT_USER_PASSWORD` 若进 Config） |
 | 坑 9 的两条构造点判据 | 2 | 改写为钉 `llm_factory` 入参（上一轮交付物的直接连带，非回归） |
 | `-m live` 组 | 14 | 改成"先注册 live 用户 → 配 key（值从 `.env` 读，永不打印）→ 再聊" |
+
+> **2026-10-06 计划期更正（这张表按阶段重切，实数已核）**：
+> - **阶段一不碰 `test_rag_system.py`**（那 21 条）、也不碰坑 9 的两条构造点判据——它们都系在 `llm_factory` 上，属阶段二。
+> - 阶段一对 live 组的真改动是另一件事：`test_live_database.py` 的 **32 处** DB 调用点要带 `user_id`（`save_document` / `get_document` / `search_parent_chunks` 等写读都进了归属参数），`test_live_stream.py` 的 **3 条**真 HTTP 流式测要在头里带一枚真令牌（登录 `default@local`，口令取 `Config.DEFAULT_USER_PASSWORD`，永不打印）。
+> - `SANCTIONED_ATTRS` 加 **两项**（`AUTH_TOKEN_TTL_DAYS`、`DEFAULT_USER_PASSWORD`）。
+> - `test_error_model.py::test_central_map_covers_every_domain_error_class` 那条"异常表一格不漏"的钉，阶段一要从 4 项改 5 项（加 `AuthError`）。
+> - `make_client` 的**定义**实测是 **5 处**（`test_api_chat` / `test_api_documents` / `test_api_history` / `test_chunk_search` / `test_health`），其中 `test_health` 那条不需要动（`/api/health` 不上门）；上表原写"6 个"是把 `test_error_model.py` 的 `probe_app()` 数了进去，那个探针路由不依赖 `get_current_user`，同样不用动。
 
 ### 7.2 新增测试
 
@@ -324,11 +352,11 @@ chat 两个端点在碰 `rag` 之前先 `require_llm_config(user)`：缺 `api_ke
 
 ## 8. 分阶段交付
 
-**阶段一（先做，能独立上线）**：`users` / `auth_tokens` 表、`api/auth.py` 的 register/login/logout/me、`get_current_user`、8 个业务端点加门禁与归属过滤、迁移 1-5 步 + 向量补戳、CORS 加 PUT、前端 `useAuth` + `AuthPanel` + `.user-rail`（删 `.session-debug` 与 `.session-chip`）、三条出口的令牌注入、第 7.1 表里那 76 条端点测的 `make_client()` 改造。
+**阶段一（先做，能独立上线）**：`users` / `auth_tokens` 两张表、`core/security.py`（pbkdf2 与不透明令牌）、`api/auth.py` 的 register/login/logout/me、`deps.get_current_user`、`exceptions.AuthError`→401、8 个业务端点加登录门、`documents` 侧的归属列与归属过滤（上传/列表/候选池/删块/问答入参校验）、向量写侧补戳、迁移 1/2/3/5/6（只 `documents.user_id` + 旧向量戳）、CORS 加 `PUT`、前端 `useAuth` + `AuthPanel` + `.user-rail`（删 `.session-debug` 与 `.session-chip`，但"清空即换 id"的动作留在 `handleClear`）、三条出口的令牌注入、第 7.1 表里那 76 条端点测的 `make_client()` 改造与 live 组的 `user_id`/令牌改造。
 
-**阶段二（接着做，依赖阶段一的 user 上下文）**：`user_models` 表与设置类端点（PUT /me、/me/password、/me/llm、名单增删）、`llm_factory` 与两处单例拆除、压缩器搬家、`ChatRequest.model_name` 与 409 门禁、`SettingsModal`、输入框两段式 + 模型下拉、未配 key 的禁用横幅。
+**阶段二（接着做，依赖阶段一的 user 上下文）**：`users.api_key` / `users.base_url` 两列 + `user_models` 表与设置类端点（PUT /me、/me/password、/me/llm、名单增删）、`chat_history.user_id` 列与历史读写过滤（连带 `RAGSystem` 四个方法与 34 处调用点）、迁移步骤 4（把 `.env` 三键抄给默认用户）、`llm_factory` 与两处单例拆除、压缩器搬家、`create_retriever` 的读侧 `$and` 用户过滤、`ChatRequest.model_name` 与 409 门禁、`SettingsModal`、输入框两段式 + 模型下拉、未配 key 的禁用横幅。
 
-拆得开的理由：阶段一交付后"多人各管各的文档"就成立，问答链仍走 `.env` 那套 key（迁移给了默认用户，新用户暂时不能聊）；阶段二才把模型配置交到用户手上。任一段出问题只回退那一段。
+拆得开的理由：阶段一交付后"多人各管各的文档"就成立，问答链仍直读 `.env` 那把平台 key（阶段一的迁移**不**抄 key，见 2.6 勘误），所以**任何**登录用户都能问、也都花在同一把 key 的额度上；阶段二才把模型配置交到用户手上。任一段出问题只回退那一段。
 
 **两段各自的能力边界（验收时别判错）**：
 
