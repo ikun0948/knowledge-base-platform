@@ -2444,6 +2444,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): c
 - Create: `frontend/src/api/auth.js`、`frontend/src/composables/useAuth.js`
 - Create: `frontend/tests/useAuth.test.js`
 - Modify: `frontend/tests/client.test.js`（Authorization 三条出口各一条 + 204 一条）、`frontend/tests/documents-api.test.js`（XHR 那条）
+- Create: `frontend/tests/api-auth.test.js` — **2026-10-07 修订新增**（Task 6 评审指出 `api/auth.js` 零直接覆盖：`useAuth.test.js` 把整个模块 mock 掉了，所以"昵称留空就连键都不发"这条**承重**行为没人钉。它承重是因为 `backend/schemas/auth.py:37` 给 `nickname` 设了 `min_length=1`，前端多发一个 `''` 就是建号 422。两条就够：留空时请求体里**没有** `nickname` 键、填了就原样送到 `identifier_type` 这套 snake_case 契约里。）
 
 **Interfaces:**
 - Consumes：Task 2 的四个 `/api/auth/*` 端点（出参 `{token, user, session_id}` / `{user}`）。
@@ -2726,6 +2727,14 @@ export function useAuth() {
 
 > 三个返回值要分清：`user`/`authError`/`authBusy` 是**模块级**的同一个对象（组件之间必须同步），`bootstrap/signUp/...` 是无状态的方法。这是"没有 Pinia 的手工单例"，也是本仓既有 `useChunkSelection` 的做法的反面——那个 composable 里 `selectedChunks` 是函数内的 ref，因为它只被 App.vue 一处持有；这里三处要读，所以必须上移到模块作用域。**把这个区别写进注释，否则下一个人会照着 `useChunkSelection` 抄回函数内。**
 
+> **2026-10-07 修订（Task 6 执行期发现：上面这段 `signOut` 与本 Step 之外那条测相互矛盾，裁定改这段代码，不是改测）**
+> 上面写的是 `try { await apiLogout() } finally { clearAuth() }`——`finally` 只保证"清得掉"，**不保证"不上抛"**：后端一失败，`signOut()` 就把异常原样抛给调用方。而 Step 6 那条测的标题是"**后端登出失败也完成本地退出**"、正文是一句裸的 `await signOut()`，照上面这段写它**不可能绿**。实施者选择改测（`await expect(signOut()).rejects.toThrow('HTTP 502')`）而不是改这里，等于把一个真缺陷锁进了判据。裁定：**`signOut` 必须自己吃掉后端的失败**，三条理由都核过：
+> ① spec（`docs/superpowers/specs/2026-10-06-user-auth-isolation-design.md:235`）明写"登出 → `auth_token` 与 `session_id` **一起清**"，而 Task 7 的 `handleSignOut` 是在 `await signOut()` **之后**才 `clearSession()`、才清 `documents`/`queue`/`messages`/`clearSelection()`。`signOut` 一抛，后面全部跳过；而 `v-if` 因为 `finally` 跑过照样翻回登录页——**没人会察觉**。后果是下一个在这台机器上登录的人，在 `enterWorkspace` 覆盖之前会瞥见上一个账号的文件名与对话，正是本阶段要关的那类跨用户残留。
+> ② 登出时 401 是**常见路径**不是边角（令牌早过期的人点退出），502 是 uvicorn 重启时的常态（项目记忆：Vite 代理上游死了回 502 空响应体，不是网络失败）。
+> ③ 本仓所有会改状态的 composable 动作都不上抛——`useChat.js:52/121/148` 一律把错误折进 `error.value` 再回布尔；`signOut` 不能是唯一的例外。
+> "会抛"这个契约只属于 `signIn/signUp`，因为它们有 `authError` 这条文案出口；登出没有要渲染的消息。**落地形状**：在 `finally` 之前补一个空的 `catch`（吃掉即可，注释写清"后端删不掉令牌也算本地退出"），`clearAuth()` 仍留在 `finally`；Step 6 那条测**改回裸的** `await signOut()`，本地退出的两条断言就是它的牙。
+> **同批另外两刀（都在本 Task 内，都很小）**：④ `bootstrap()` 的"没令牌"分支现在只 `setAuthToken('')`，既不清模块级 `user`、也不删 localStorage 里那枚形状不合格的残留值 → 让它直接走 `clearAuth()` 再 `return false`（七条测全绿），并把 Step 6"坏形状的本地令牌按没有处理"那条补一句 `expect(localStorage.getItem('auth_token')).toBe(null)`；⑤ `documents-api.test.js` 末尾那条 XHR 测留着 `authToken='tok-xhr'` 与被替换的 `global.XMLHttpRequest` 且**没有拆桩**——今天只因为它排在最后才无害，补 `setAuthToken('')` 与 `delete global.XMLHttpRequest` 收口。
+
 - [ ] **Step 6: 写 `tests/useAuth.test.js`**
 
 ```js
@@ -2821,6 +2830,11 @@ cd frontend && npm run build
 ```
 预期：`npm test` 从基线 **84 passed / 7 文件** 涨到约 **96 passed / 8 文件**（`client.test.js` +4、`documents-api.test.js` +1、`useAuth.test.js` +7，共 +12；以汇总行为准）。`npm run build` exit 0。**0 failed 是硬要求。**
 
+> **2026-10-07 修订（Task 6 修正轮 1 的口径，覆盖上面那行的加法式）**
+> ① **门禁基数变了**：多了 `api-auth.test.js` 那 2 条之后是 **98 passed / 9 文件**，`git add` 清单要**多这一格**（`frontend/tests/api-auth.test.js`）。修正轮若再加条数，仍以当轮汇总行为准，别抄这里的加法式。
+> ② **评审的 Important（采纳）：本 Task 重写的那两行 headers，只钉了一半。** 现有判据只断 `Authorization`——把 `client.js` 里的 `Accept: 'application/json'` 或条件式的 `'Content-Type': 'application/json'` 整行删掉（或把 `request` 写成裸 `authHeaders()`），**全套 96 条照样绿**，因为此前没有任何一条测读过 `opts.headers` 的其它键。丢 `Content-Type` 的真实后果是 `POST /api/auth/login` 撞 422，症状正好是"登录了但登录用不了"——本 Task 存在的理由就是这个症状不该出现。补两行断言即可（放本 Task 新加的那组里，不新建测）：带体的请求断 `headers['Content-Type'] === 'application/json'`，`postStream` 那条断 `headers['Accept'] === 'text/event-stream'`。
+> ③ 变异自证要跟着扩一条：临时删掉 `request` 里的 `'Content-Type'` 那半行，新断言必须当场红。
+
 ```bash
 cd D:/知识库平台-前后端分离 && git add frontend/src/api/client.js frontend/src/api/documents.js \
   frontend/src/api/auth.js frontend/src/composables/useAuth.js \
@@ -2843,6 +2857,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(frontend): 
 
 **Interfaces:**
 - Consumes：Task 6 的 `useAuth()` → `{ user, authError, authBusy, isLoggedIn, bootstrap, signUp, signIn, signOut }`。**`signUp/signIn` 会抛**（内部只有 `try/finally`，没有 catch），所以调用方必须接住并把文案写进 `authError`。
+  - **2026-10-07 修订（Task 6 修正轮 1 已改，本 Task 的读法跟着变）**：**`signOut` 不属于"会抛"那一档**——它在 `finally` 前多了一个吃掉后端失败的 `catch`（理由与三条证据见 Task 6 Step 5 后的修订块）。所以 `handleSignOut` 里裸的 `await signOut()` 是**安全**的，而它**后面那五句清理（`clearSession()` / `documents` / `queue` / `messages` / `clearSelection()`）是承重的**：spec 5.3 要求"登出把 `auth_token` 与 `session_id` 一起清"，靠的正是这几句跑得完。请把那一行的注释写成事实（"后端失败已在 `useAuth` 里吞掉，所以这里一定能清到"），**不要照抄计划代码块里那句 `// 令牌一定清得掉（Task 6 的 finally）`**——`finally` 保证的是清理发生，不是不抛。
 - Produces：
   - `useSession()` → `{ sessionId, setSession(next) -> string, resetSession() -> string, clearSession() -> string }`，其中 `sessionId` 是**模块级同一个 ref**
   - `AuthPanel.vue`：props 无，emit `submit`，载荷 `{ mode: 'login'|'register', payload: { identifierType, identifier, password, nickname } }`
