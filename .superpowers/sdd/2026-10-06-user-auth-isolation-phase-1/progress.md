@@ -94,3 +94,22 @@
   - **Why**：两条都是"绿灯能盖住静默失效"的那类，越晚照出来越贵。
   - **How to apply**：Task 3 的实施者按修订块落地并跑那条顺序判据；Task 8 的探针脚本按修订后的键名写。
 - 控制器自查（不是评审结论）：`git status` 只应有 `docs/…plan.md` 与 `backend/tests/test_chroma_data.py` 两条改动；探针脚本 `probe_*.py` 属一次性工具，计划收尾时删，`baseline-*.txt` 长期保留。
+
+## Task 3: complete（commits `33f1d34..0cb1992`，单条 `0cb1992`）
+
+- 控制器两条预飞裁定均落地并被评审独立复证：`run_migrations` 改成"清单在读之后归户在写之前"，新增的顺序判据钉的是 fake client 收到的 id 清单（评审自己重推了反向顺序：`pending` 变空 → `if not ids: continue` → `requested == []` 当场红），不是被禁的 `vectors_stamped > 0`。Step 7 的 `owned == 13` 也已按重钉数字落好。
+- 门禁实跑（无服务）：`pytest -q` **236 passed / 2 skipped / 2 deselected / 0 failed**；`-m live` **16 passed / 2 skipped**；`-m migration` **2 passed**；`tests/test_migrations.py` **10 passed**。`-m migration` 1→2、默认门 deselected 1→2 都是本 Task 新增第二条 migration 标记测所致，预期内。
+- Step 8 真迁移活证（原文照抄）：首轮 `{'columns_added': [], 'indexes_added': [], 'default_user_id': 30, 'documents_claimed': 13, 'vectors_stamped': 14}`；重启 `documents_claimed: 0, vectors_stamped: 0`；health `{"document_count":4,"vector_counts":{"parent":4,"child":10}}`。控制器事后直查复核：`users` 1 行（id 30, `default@local`）、`documents` 13 行全部 `user_id=30`、NULL 0 行、`auth_tokens` 0 行。**环境前置从此改变**：迁移首轮已被消费，Task 8 每次重启只能拿到 0/0；计划里 Task 8 Step 2 与 Step 6 台账模板已按此改判（不许为复现首轮去清 `user_id`）。
+- 任务评审（spec + quality）：**Approved**，0 Critical / 0 Important / **10 Minor**。两个 self-declared 裁定都被判为"on their merits 正确"：① `stamp_vector_owner` 采"已有任何 user_id 戳就不动"（brief 的 snippet 与它自带的 `test_stamp_never_rewrites_a_foreign_users_vector` 互斥，测试方胜出）；② `test_old_vectors_get_a_user_id_stamp_on_a_copy` 在 tmp 副本上做前置归一化（delete+add），四条原判据逐字保留，非空洞；评审另核实 `chromadb 1.5.9` 的 `_update_metadata` 确实只删显式映射为 `None` 的键，故"update/upsert 会合并 metadata"为真。
+- **待终审分诊的 10 条 Minor**（本 Task，全部不在本轮修）：
+  1. `core/migrations.py:186-187` 我那条裁定保留的短路 `if not docs: pending = {...}` 在 REPEATABLE READ 下恒等空写、READ COMMITTED 下会静默丢掉刚读到的无主清单——真正的"静默遍零 Chroma 工作"由 `:158` 的 `if not ids: continue` 保证。删这两行或改注释。
+  2. 设计缺口：补戳清单按"所属文档无主"取，只有归户那一遍才可能有活；若那一遍 `backfill` 已 commit 而 `stamp_vector_owner` 抛异常（本机 Chroma 单实例锁是现实风险），此后每遍 `pending == {}`，14 个向量永久无戳，只留下 `vectors_stamped: 0` 一条痕迹。修复要走 Chroma 侧 `where={"user_id": None}` 扫描，brief 明确没做。
+  3. `core/migrations.py:152` 延迟 `from core.vector_store import ...` 每次离线跑 `test_migrations.py` 多 **34.5 s**（评审实测：`import core.migrations` 0.62 s，那行 34.52 s），占默认门一半时间。两个常量提出来即可。
+  4. `core/migrations.py:101-109` 裸 `INSERT INTO users` 与 ORM 的 `User` 模型双写，将来加 `NOT NULL` 列会让每次启动 `IntegrityError`（为 `FakeConn` 钉原始 SQL 而不得不为，值得一条指回模型的注释）。
+  5. `core/migrations.py:50` `ADD COLUMN` 建出来的列**没有** ORM 声明的 `ForeignKey('users.id')`，迁移库与 `create_all` 新库从此在约束上分叉（brief 原文的 DDL）。
+  6. `tests/test_migrations.py:56` `SELECT COUNT` 分支不可达（Interfaces 的 `count_users` 早被代码块否了），假连接里的死分支。
+  7. `tests/test_chroma_data.py:92-95` 归一化只回断了 documents 与 metadata，**没断言向量**；若将来 `get` 不返 `embeddings`，`add` 会静默走默认 embedding function（离线就是下载模型）而测仍绿。补 `after_embeddings == snapshot["embeddings"]`。
+  8. `core/migrations.py:128-143`+`:160` 无主 id 整表载入并一次 `get(ids=[...])`，14 条无碍，几万条要分块。
+  9. `tests/test_live_database.py:361/:404` 在默认门里断言**迁移之后**的状态（含硬编码 `owned == 13`）：新克隆或后续 Task 留下一行 NULL 就会为前置条件而红。已在计划里写明"重启过一轮迁移"是前置。
+  10. 报告证据卫生：`10 passed in 30.41s` 在三个不同命令下出现同一个墙钟秒数（`task-3-report.md:44/:58/:163`），像誊抄而非当轮输出。口径仍是不许誊抄。
+- 评审自述模型：**session model inherited**（它无法自省模型标识）。派发时我未指定 model，与本仓前两轮一致，已如实记为未遵守 SKILL.md 的"显式指定"要求。
