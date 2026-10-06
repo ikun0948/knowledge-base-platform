@@ -1837,11 +1837,17 @@ cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000
 
 ```bash
 curl -s "http://127.0.0.1:8000/api/documents/chunks?limit=3" | head -c 600
-curl -s "http://127.0.0.1:8000/api/documents/chunks?query=%E6%89%8B%E5%86%8C&suffix=pdf" | head -c 400
-curl -s "http://127.0.0.1:8000/api/documents/chunks?query=%25"        # 转义后的 %，期望 []
+curl -s "http://127.0.0.1:8000/api/documents/chunks?query=%E7%9F%A5%E8%AF%86%E5%BA%93%E5%B9%B3%E5%8F%B0" | head -c 400
+curl -s "http://127.0.0.1:8000/api/documents/chunks?query=%25" | python -c "import json,sys;print(len(json.load(sys.stdin)))"   # 转义后的 %
+curl -s "http://127.0.0.1:8000/api/documents/chunks?query=%5F" | python -c "import json,sys;print(len(json.load(sys.stdin)))"  # 转义后的 _
 curl -s "http://127.0.0.1:8000/api/documents/chunks?suffix=exe"       # 期望 422 数组 detail
 ```
-Expected: 前两条返回带 `parent_id/filename/suffix/snippet/child_count` 的行；`query=%` 返回 `[]`（**这条是通配符转义的活体证据**）；`suffix=exe` 返回 422。
+Expected: `limit=3` 与 `query=知识库平台` 返回带 `parent_id/filename/suffix/snippet/child_count` 的行；`suffix=exe` 返回 422。
+
+> **执行期改判（两处旧预期都错了，按实测口径覆盖）**：
+> ① 旧文写 `query=手册&suffix=pdf` 期望返回行——基线 9 篇里**没有**文件名含「手册」的文档，它本来就该返回 `[]`，用它当"搜索生效"的证据等于什么都没验。换成 `query=知识库平台`（实测命中 `rag.txt_parent_0`、`rag2.txt_parent_0`，且这是**块内正文**命中，不是文件名命中）。
+> ② 旧文写 `query=%` 期望 `[]`——`deepseek简介.docx_parent_0` 的正文里**确实有一个字面 `%`**，转义生效后诚实命中 1 行；判据不能钉"零命中"，要钉**条数对照**：全量 11 行、`%` → 1、`%%` → 0、`_` → 0。不转义时 `%`/`_` 会各自把全库 11 行捞回来（`_` 匹配任意单字符），这才是转义生效的证据。
+
 
 - [ ] **Step 4: 浏览器验证（宽屏 1280×900 + 窄屏 375×800 各一遍）**
 
@@ -1850,14 +1856,20 @@ Expected: 前两条返回带 `parent_id/filename/suffix/snippet/child_count` 的
 判据（逐条记 PASS/FAIL + 证据数字）：
 1. 面板知识库区标题是 `🧩 已选文档块`，其下有 `➕ 选择文档块` 按钮，且**不再出现**任何未选中的文档卡片列表。
 2. 点按钮 → 弹窗出现，`innerWidth` 变化不影响可见性；≤768 时弹窗在侧栏浮层之上（`z-index: 4 > 3`），实测能点到搜索框。
-3. 搜 `deepseek` → 结果全部文件名或片段含该词；切 `DOCX` → 只剩 `suffix==='docx'` 的行；切 `全部` → 条数回到上一步或更多；搜 `%` → **0 条**（转义生效的 UI 证据）。
+3. 搜 `deepseek` → 结果全部文件名或片段含该词；切 `DOCX` → 只剩 `suffix==='docx'` 的行；切 `全部` → 条数回到上一步或更多；搜 `%` → **条数远小于全量**（实测 11 → 1，那 1 行的正文里有字面 `%`；未转义会直接返回全量 11），搜 `_` → 0 条。
 4. 选 2 块 → 面板只显示这 2 块；StatusBar 显示 `（2 个文档块）`。
 5. 点其中 1 块右上角 ✕ → 面板剩 1 块；**刷新页面仍是 1 块**（localStorage 真生效，`selected_parent_ids` 里那一项已被摘掉）。
 6. 就着留下的那块问一个只在那块里能答的问题 → `meta` 帧 mode=rag、`references` 帧非空、答案逐字上屏。
-7. **改问只在"刚才取消选择的那块"里的内容 → 答案是 `未在选中的文档里找到相关内容…`、references 为空。** 这一条是"允许池真收窄了召回"的唯一活体证据，光看 UI 不算。
+7. **改问只在"刚才取消选择的那块"里的内容 → `references` 帧为空，且答案里不出现那块独有的词。** 这一条是"允许池真收窄了召回"的唯一活体证据，光看 UI 不算。
+   > **执行期改判（旧文钉了 `EMPTY_RETRIEVAL_ANSWER` 的文案，机制猜错了一半。）** 实测帧序列是 `meta mode=rag` → `references []` → 一串模型自己的 token（"…并未包含关于'第三份占位文档'的任何内容…"），**不是**那句固定说明文案。原因是两级过滤叠加：池里只剩 `rag.txt_parent_0` 时，带 `$in` 过滤的相似度检索**一定会**返回池内最近的那条子块，`parent_docs` 非空 ⇒ 不进空召回分支；随后压缩器按相关度阈值把它也滤掉，`compressed_docs=[]` ⇒ `references` 帧空、`context` 是空串。所以判据只能钉"references 为空 + 答案不含 `串行`/`上传队列`"，不能钉文案。压缩器阈值是**既有行为**（`VectorStore.compressor`），与本功能无关；顺带证明引用条如实反映"真正进了上下文的块"。
 8. 取消全部选择 → StatusBar 变 `💬 普通对话模式`，发送后 mode=normal、无 references 帧。
 9. 卡片红叉的 `title` 是"取消选择这个文档块"、引用条上的按钮文案仍是"删除此块"（两条文案不得混同；用 `evaluate` 读 `title` 原文作证）。
 10. 全程零控制台错误（`list_console_messages` 只允许 favicon 之类无害项）。
+
+> **执行期补：十条判据本身没改，红的全是探针接线（三处，都值得进下次的 prompt）**
+> ① **搜索框不能用 `click({clickCount:3})` 选旧内容再输入**——这个框里 triple-click 选不中，第二次实测框内变成 `deepseek%_知识库平台`，于是 `%` 那次"0 条命中"其实是搜了一个不存在的组合词，证据假绿。改成先 `el.value=''` + `dispatchEvent(new Event('input'))`（v-model 才会跟着清），再把**回读到的框内值**一起进证据，并且 `typed !== text` 直接抛错。
+> ② **窄屏点面板 ✕ 之前必须先关弹窗**。≤768 时侧栏是 `position: fixed` 浮层、遮罩 `z-index:4` 在它上面，那一下点击落在 backdrop 上只关掉了弹窗，取消选择根本没触发——表现为"刷新后还是 2 块"，看着像 localStorage 没同步，实际是事件没派发。宽屏没这个问题（侧栏不是浮层），所以同一份代码宽屏绿、窄屏红。
+> ③ **分类标签按文字定位，不按索引表**：`TABS` 里的 value 是 `''`，显示文字是「全部」，`['', 'PDF', 'DOCX', 'TXT'].indexOf('全部')` 拿到 `-1` 就崩在 `tabs[-1].click()`。
 
 - [ ] **Step 5: 基线核对（没被这轮验证改动）**
 
