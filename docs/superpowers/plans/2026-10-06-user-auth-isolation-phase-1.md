@@ -29,6 +29,10 @@
 - **文档修订留痕**：改既有 spec/计划一律用 `> 2026-10-XX 修订/勘误` 引用块，不抹原文。
 - **报数与判据口径**：条数只能抄工具输出的汇总行；"返回空"不等于"过滤生效"——基线里 `deepseek简介.docx_parent_0` 的正文真含一个字面 `%`，隔离类判据要靠**对照两条查询**，不能靠单条空结果。
 
+> **2026-10-06 修订（Task 1 执行期回写，两条门禁口径）**
+> ① 上面"后端门禁基线 **176 passed / 0 skipped**"那一格**要求 `:8000` 上有一份活着的 uvicorn**——`test_live_stream.py:34` 与 `:64` 那两条在没有服务时是 `skip` 而不是 `fail`。Task 1–7 按纪律既不起第二个实例也不重启现有服务，所以这几轮的硬口径统一改成：**`0 failed` 为硬性，允许正好 2 条 `skip`，且必须正好是 `test_live_stream.py:34` 与 `:64`**（本机无服务实测基线 = **174 passed / 2 skipped / 1 deselected**）。`0 skipped` 那条硬要求仍然只在 Task 8 生效——那里会重启服务，跑的是改造后的代码。
+> ② `pytest -m` 的表达式会**覆盖** `addopts` 里那条 `not migration`，不是追加。于是 `python -m pytest -m "not live" -q` 会把 `@pytest.mark.migration` 的计数钉（11/22）拖进来越界失败，撞出一个与本轮无关的红。要排除 live 就写全：`python -m pytest -m "not live and not migration" -q`。
+
 ---
 
 ### Task 1: 口令与令牌原语 + 两张账号表（纯后端，不碰 HTTP）
@@ -50,6 +54,10 @@
   - `DatabaseManager.create_user/get_user_by_identifier/get_user_by_id/count_users/create_token/get_user_by_token/delete_token`
   - `DatabaseManager.assign_unowned_documents(user_id) -> int`、`vector_ids_for_user(user_id) -> {"parent": [...], "child": [...]}`
   - `Config.AUTH_TOKEN_TTL_DAYS: int`（默认 30）、`Config.DEFAULT_USER_PASSWORD: str`（默认空串）
+
+> **2026-10-06 修订（Task 1 落地后）：Produces 少一条，`create_*` 多一个动作**
+> ① 上面 `DatabaseManager.assign_unowned_documents` / `vector_ids_for_user` 那一条**没有落地，也不该落地**。核实过：Task 3 用原始连接自己实现 `backfill_documents` / `vector_ids_without_owner`，从不调这两条；Task 4 的代码不消费它们；没有任何测覆盖；而 Step 9 里那段节头注释说"这三条"、实际只有两条。任务评审按死代码打回，已删。Task 4 的 Consumes 行同步勘误（见该处）。
+> ② `create_user` / `create_token` 在 `commit()` 之后、`close()` 之前多一句 `session.refresh(row)`。原文的 docstring 声称"关掉 session 后仍能读"，而 `expire_on_commit` 默认是 `True`，`close()` 之后读 `.id` 会 `DetachedInstanceError`——那是 Task 2 的 `/register` 与 `/login` 必然踩的 500。`backend/tests/test_security.py` 里有两条测当场钉"返回的行关会话后可读"。
 
 - [ ] **Step 1: 写 `core/security.py` 的失败测试**
 
@@ -226,6 +234,9 @@ cd backend && printf 'AUTH_TOKEN_TTL_DAYS=30\nDEFAULT_USER_PASSWORD=<REDACTED-RO
   && grep -c "^DEFAULT_USER_PASSWORD=" .env
 ```
 预期输出：`1`。**不要 `cat .env`**；这条 `grep -c` 就是唯一的验证动作。口令真值 `kb-default-2026` 会出现在 Task 8 的 live 手测里，属演示账号，随时可改（改完必须重启后端才生效——`.env` 改动不会热加载）。
+
+> **2026-10-06 修订（Task 1 执行期）：这条命令与 Global Constraints 打架，按约束裁**
+> 散文写"追加一行"，而逐字命令往真实 `.env` 塞了**两个键**。`AUTH_TOKEN_TTL_DAYS` 是调参键，`Config` 里默认 30 就能用，没有任何东西需要它出现在真实配置里。**裁定：真实 `backend/.env` 只留 `DEFAULT_USER_PASSWORD` 那一行**（`backend/.env.example` 作为模板保留两键不动，`Config.AUTH_TOKEN_TTL_DAYS` 与 `test_config.py` 的 `SANCTIONED_ATTRS` 也不为此改）。验证因此是两条计数：`grep -c "^AUTH_TOKEN_TTL_DAYS=" backend/.env` = **0**、`grep -c "^DEFAULT_USER_PASSWORD=" backend/.env` = **1**。仍然只数键，不打印内容。
 
 - [ ] **Step 7: 跑绿 Config 那两条**
 
@@ -428,6 +439,10 @@ class AuthToken(Base):
         finally:
             session.close()
 ```
+
+> **2026-10-06 修订（Task 1 落地后）：上面这节代码有两处与仓库不一致，以仓库为准**
+> ① **`# ---------- 迁移用（Task 3 ...）----------` 那一节整段删除**（`assign_unowned_documents`、`vector_ids_for_user` 与节头注释）。理由见本 Task Interfaces 处的修订。其余方法照原样落地。
+> ② 本 Task 执行期把 Task 3 的两条 DDL **提前落到了真实 MySQL**：`ALTER TABLE \`documents\` ADD COLUMN \`user_id\` INTEGER NULL` 与 `CREATE INDEX idx_documents_user_id ON documents (user_id)`，都用 `information_schema` 守卫、幂等、由一次性脚本走 stdin（不入库）。原因是 ORM 先有列而库里没有列，`test_live_database.py` 的 9 条既有测当场 MySQL 1054 红。**代价**：Task 8 Step 2 期望的"首轮 `columns_added` 含 `('documents', 'user_id')`"这条活证退化为 `[]`，首轮证据只剩 `documents_claimed: 9`；加列那条分支改由 Task 3 的 `FakeConn` 单测守住。
 
 - [ ] **Step 10: 跑绿 + 全量默认门**
 
@@ -1044,6 +1059,12 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): �
   - `stamp_vector_owner(client, vector_ids: dict, user_id: int) -> int`（返回补戳条数；已戳过的跳过，重跑回 0）
   - `run_migrations(engine, chroma_client, password: str) -> dict`（一句话汇总，供 lifespan 打日志）
 
+> **2026-10-06 修订（Task 1 落地后回写，四处，实施本 Task 时以本块为准）**
+> ① **本 Task 多一条"补索引"的活。** spec 2.2 要求 `documents.user_id` 带索引 `idx_documents_user_id`，而原文的迁移只管列（`MIGRATED_COLUMNS`），`Base.metadata.create_all` 对已存在的表整表跳过 ⇒ 已部署库会永远带着一个无索引的外键列。Task 1 的任务评审把这条打成 Important，索引已在真实库上当场补齐，**长期收拢靠本 Task**。新增模块常量 `MIGRATED_INDEXES = [("documents", "user_id", "idx_documents_user_id")]`（`(表, 列, 索引名)`），以及三个与列那三条同形的函数：`index_exists(conn, table, index) -> bool`（查 `information_schema.STATISTICS`，`TABLE_SCHEMA = DATABASE()`，表名/索引名走绑定参数 `:table` / `:index`）、`add_index(conn, table, column, index) -> None`（执行且只执行 ``CREATE INDEX `{index}` ON `{table}` (`{column}`)``，f-string 的理由与 `add_column` 同一条：DDL 不接受绑定参数，三个值只可能来自模块常量）、`ensure_indexes(conn) -> list[tuple[str, str]]`（返回这次真的建了哪些 `(表, 索引名)`，末尾 `conn.commit()`）。**顺序是硬要求**：`run_migrations` 里先 `ensure_columns(conn)` 再 `ensure_indexes(conn)`——列还不存在就建索引会当场炸。汇总字典多一格 `"indexes_added": indexes`（紧跟 `columns_added` 之后），Task 8 抄的那行 `迁移完成: {...}` 日志会带上它。
+> ② **`FakeConn` 要长两枝**：认得 `SELECT INDEX_NAME` 查询与 `CREATE INDEX` 语句。构造参数加 `existing_indexes=()`（记成 `{(表, 索引名)}`）；`CREATE INDEX` 分支只在对应列已在 `self.columns` 里时才把索引加入集合，否则 `raise AssertionError`——这一句把"先列后索引"的真语义钉在假连接上。Step 1 的测追加一条 `test_ensure_indexes_creates_only_when_missing`：空索引集合时 `ensure_indexes(conn) == [("documents", "idx_documents_user_id")]`，再跑一次 `== []`。因此 Step 5 的"预期 `6 passed`"改为 **`7 passed`**（SQL 决策 3 + 索引决策 1 + Step 4 的 3 条）。
+> ③ **空口令哨兵换成不可用的值。** 原文 `ensure_default_user` 在 `password` 为空时写入 `hash_password("this-account-has-no-password")`——那是一枚**源码里看得见的可用凭证**，任何读到这一行的人就拿到了默认账号的口令，而 Step 2 后面那段说明自己也承认"挡不住读代码的人"。改为模块常量 `UNUSABLE_PASSWORD_HASH = "unusable-no-password-set"`：它不含 `$`，`verify_password` 在四段解包那一格就 `ValueError` → 返回 `False`（即便拼出四段，首段也不是 `pbkdf2_sha256`，算法门照样拒绝）；`password_hash` 列的 `NOT NULL` 仍然满足。`backend/tests/test_migrations.py` 加一条纯逻辑判据（不建引擎）：`verify_password("this-account-has-no-password", migrations.UNUSABLE_PASSWORD_HASH) is False` 且 `verify_password("", migrations.UNUSABLE_PASSWORD_HASH) is False`。
+> ④ **计数预期**：`python -m pytest -m migration -q` 在本 Task 之前是 1 passed，变 2 的原因是 Step 7 那条 `@pytest.mark.migration` 的向量补戳判据（`test_old_vectors_get_a_user_id_stamp_on_a_copy`），**不是**上面新增的索引决策测——那条属于离线默认门，跟着 Step 5 的 `7 passed` 走。仍然只抄工具汇总行。
+
 **为什么单独立一个 Task**：`Base.metadata.create_all` 只建新表、不给已有表加列（`database.py:119` 那句 `create_all` 的能力边界），而 MySQL 没有 `ADD COLUMN IF NOT EXISTS`。这两件事合起来意味着"加一列"必须自己写成"先查 `information_schema` 再 ALTER"，而且**每次开机都要重跑**——开发者本地库、live 测试用的库和将来部署面上的库处在三个不同的迁移进度上，只有幂等启动能把它们收拢。
 
 - [ ] **Step 1: 写失败的迁移测试（假连接，只验 SQL 决策）**
@@ -1237,6 +1258,8 @@ def ensure_default_user(conn, password: str) -> int:
 
 > 上面这三条函数与 Step 1 的 `FakeConn` 要能对上：`ensure_default_user` 走的是 `SELECT id, identifier FROM users ...` 与 `INSERT INTO users`，`password` 为空时**仍然**插入一行。Step 1 钉的是"建行与口令无关"；"空口令账号不可登录"这句不由本 Task 的离线判据证。要说准：兜底那句串就写在源码里，所以它挡不住读代码的人，它挡住的是**库里没有一句可猜的固定口令**这件事——`.env` 留空时运营者没有对外公布过任何可登录口令，账号因此只作归属锚点。将来若要给它一条自动化判据，正确的位置是 live 组里"用 `DEFAULT_USER_PASSWORD=''` 走一次 `login` 拿 401"，而不是在这里造假哈希。
 
+> **2026-10-06 修订：上面这段的后半作废。** "兜底那句串就写在源码里，所以它挡不住读代码的人"恰恰是它不该被当口令用的理由——那是一枚源码可见的可用凭证。空口令时改写常量 `UNUSABLE_PASSWORD_HASH`，`verify_password` 无论拿到什么都返回 `False`，并且这一步由 `test_migrations.py` 的一条纯逻辑判据钉住。详见本 Task Interfaces 处的修订 ③。"建行与口令无关"那条判据不变。
+
 继续补三个函数（同一文件，接着写）：
 
 ```python
@@ -1311,6 +1334,8 @@ def run_migrations(engine, chroma_client, password: str) -> dict:
     logger.info("迁移完成: %s", summary)
     return summary
 ```
+
+> **2026-10-06 修订（补索引，见 Interfaces 处修订 ①）**：`with engine.connect() as conn:` 那一块里，`added = ensure_columns(conn)` 之后**紧接**一行 `indexes = ensure_indexes(conn)`（顺序不能颠倒：列还没加出来就建索引会当场炸），`summary` 字典在 `columns_added` 之后多一格 `"indexes_added": indexes`。其余四格与日志语句不变。
 
 `pending` 那句 `if docs else {...}` 是刻意的短路：只有真归户了文档才可能留下无主向量。第二遍开机 `backfill_documents` 回 0，于是向量那步一次 `get` 都不发，整个迁移退化成"两条 SELECT"。
 
@@ -1446,6 +1471,8 @@ def test_default_user_exists_and_owns_the_baseline_documents(db):
     assert owned == 9, f"基线 9 篇应全归 default，实得 {owned}"
 ```
 
+> **2026-10-06 修订（上面第一条 live 测补索引那一半，见 Interfaces 处修订 ①）**：`test_migration_columns_are_present_and_the_second_pass_is_quiet` 里，紧接列的两次 `ensure_columns(conn) == []` 之后再加索引的三句——`assert migrations.index_exists(conn, "documents", "idx_documents_user_id")`、`assert migrations.ensure_indexes(conn) == []` 两次、以及 `SHOW INDEX FROM documents` 的行数在两次 `ensure_indexes` 前后相等。这是全计划里唯一**直接查已部署 schema**（而非 ORM 元数据）的索引判据。本机这一列和这一索引都是 Task 1 执行期提前落好的，所以首轮就应当全为真（`columns_added` 那格退化成 `[]`，见 Task 1 Step 9 处的修订）。
+
 向量补戳的 live 判据放 `backend/tests/test_chroma_data.py`（那个文件已经是"在 tmp_path 副本上开库"的形态，抄现成的）：
 
 ```python
@@ -1507,6 +1534,8 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): �
 2. `curl http://localhost:8000/api/health` → 仍 `documents 9 / parent 11 / child 22`；
 3. 日志里应出现一行 `迁移完成: {...}`，`columns_added` 首次是 `[('documents', 'user_id')]`、第二次起是 `[]`，`documents_claimed` 首次 9、之后 0。
 
+> **2026-10-06 修订（第 3 条的本机预期）**：列和索引都已在 Task 1 执行期落到真实 MySQL（见 Task 1 Step 9 处的修订），所以本机这次重启的日志里 `columns_added: []`、`indexes_added: []`，**不要**期待首轮出现 `('documents', 'user_id')`——那条分支的活证已由 Task 3 的 `FakeConn` 单测（缺列/缺索引才发 DDL）与 Step 7 live 的"二次返回 `[]`"共同守住。本机唯一还活着的迁移证据是 `documents_claimed: 9 → 0` 与 `vectors_stamped`。字典键按修订 ① 是 5 个（`columns_added` / `indexes_added` / `default_user_id` / `documents_claimed` / `vectors_stamped`）。
+
 ### Task 4: `documents` 侧的归属——写进去带上主人，读出来只给主人
 
 **Files:**
@@ -1520,6 +1549,8 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): �
 
 **Interfaces:**
 - Consumes：`deps.get_current_user`（Task 2）、`Document.user_id`（Task 1）、`vector_ids_for_user`（Task 1）。
+
+> **2026-10-06 修订（Task 1 落地后）：上面第三项是错的。** `vector_ids_for_user` 从未落地（Task 1 任务评审按死代码打回删除，见 Task 1 Interfaces 处的修订）。本 Task 实际消费的是 `Document.user_id`（Task 1）、`deps.get_current_user`（Task 2）与 `DatabaseManager` 上按 `user_id` 归属的那批方法；按用户取向量 id 的能力属于 Task 3 的 `vector_ids_without_owner`（原始连接、语义是"仍未归户"，不是"按用户"），本 Task 不调它。
 - Produces：
   - `DatabaseManager.save_document(..., *, user_id)`、`get_document(doc_id, *, user_id)`、`get_all_documents(*, user_id)`、`search_parent_chunks(*, user_id, query="", suffix="", parent_ids=(), limit=50)`、`plan_chunk_deletion(document_id, parent_id, *, user_id)`、`delete_parent_chunk(document_id, parent_id, *, user_id)`、`owned_parent_ids(parent_ids, *, user_id) -> list[str]`
   - `VectorStore.add_documents(parent_docs, child_docs, document_id, *, user_id)`
@@ -3554,6 +3585,8 @@ cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000
 启动日志里必须出现这两件事，缺一件就是迁移没接上：
 
 1. `迁移完成: {...}`（`core/migrations.py` 的 `logger.info`，字典里 `columns_added` 首轮含 `('documents','user_id')`、`documents_assigned` 首轮为 9；**第二次重启应当是 `columns_added: []`、`documents_assigned: 0`**——幂等的活体证据）。
+
+> **2026-10-06 修订（上面这条按仓库实际改判）**：字典键名是 **`documents_claimed`**（`core/migrations.py` 的 `run_migrations` 返回），`documents_assigned` 这个名称在本计划里从未落地过，别按它找。另外本机的那一列与 `idx_documents_user_id` 都在 Task 1 执行期就落到真实 MySQL 了（见 Task 1 Step 9 处的修订），所以**首轮**日志就应当是 `columns_added: []`、`indexes_added: []`——这条测的"首轮非空"预期在本机不可达，幂等的活体证据改由 `documents_claimed: 9 → 0`（第一次重启归户、第二次重启零行）提供。字典共 5 个键：`columns_added` / `indexes_added` / `default_user_id` / `documents_claimed` / `vectors_stamped`。
 2. 没有 `Traceback`、没有 `数据库连接失败`。
 
 ```bash
@@ -3891,6 +3924,7 @@ print('total_users', conn.execute(text('SELECT COUNT(*) FROM users')).scalar())
   `npm test` = **N passed / 11 文件**（基线 84/7）；`npm run build` exit 0（js/css 字节数照抄一轮）。
 - 迁移首轮与次轮：`迁移完成: {columns_added: [...], documents_assigned: 9, vectors_stamped: N}` →
   重启后 `{columns_added: [], documents_assigned: 0, ...}`。**把两轮的原始日志各贴一行**。
+  > 2026-10-06 修订：键名按仓库实为 `documents_claimed`（外加 `indexes_added`，共 5 键）；本机首轮 `columns_added: []`、`indexes_added: []`（列与索引在 Task 1 就落好了）。**照实抄日志**，不要为了对上原文去改历史——台账的价值在于它是量测，不是因为它对齐了计划。
 - HTTP/SQL 判据：**照抄脚本末尾那一行 `全部判据通过：N 条`**（计划写就时 N = 31：① 组 for 循环实发 8 条 + try 内其余 22 条 + 收尾基线 1 条），
   逐档列关键条（401 先于 422、防枚举逐字节相同、A 1 篇 / B 0 篇、越权 404、default 拥有 9 篇、A 删后回 0 篇、登出立刻 401）。
 - 浏览器判据：**wide N/N、narrow N/N**（条数只抄探针输出的汇总行，不许凭印象——
