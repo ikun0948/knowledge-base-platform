@@ -140,3 +140,10 @@
 - Task 4 收尾时复评记为 out-of-scope、由我分诊的 6 条：`ChunkDB` 仍"收而不读"（严格面已由 `OwnerAwareDB` 承担）；`test_api_documents.py:58` 套件默认仍是 `FakeUser(user_id=1)`；`fakes.py:115` 的默认 1 回落——**已在 Task 5 计划文里禁掉**（新修订块 ①，明令 chat 用 43、history 用 44）；`deps.py:44` 的 LOAD_METHOD 时序——**已裁定落进 Task 5**（新修订块 ②：拆两行 + 删假库那枚 `get_user_by_token`）；`api/documents.py:167-169` 的 `saved` 未判空（归属过滤后为 `None` 会 500，理论上不可达，留终审）；`fakes.py:31` `stamped_user` 仍只写不读。
 - Task 4: **complete**（commits `168643e` 实现 + `9a107d1` 修正轮 1 + `34fa76d` 计划回写；门禁 **248 passed / 2 skipped / 2 deselected / 0 failed**，`-m live` **18 passed / 2 skipped**；评审 1 Important + 11 Minor → 复评 8/8 ADDRESSED、0 新增 Critical/Important）
 - Task 5: 开工前已知交接（抽 brief 时以计划修订块为准）：① 禁 `FakeUser()` 默认 `user_id=1`，chat 用 43 / history 用 44；② `deps.get_current_user` 拆两行先取令牌再查库，并删假库的 `get_user_by_token`；③ 不得照抄 Task 4 里未加 tag 的 `["甲"]` parent_id；④ 默认门基数已是 248。
+
+## Task 5: 开工（控制器 2026-10-06）
+
+- **BASE = `639cd0c1a0c41c941b37467a4caeb8226816559d`**（Task 4 之后含两笔文档提交）。工作树干净。
+- 开工前预飞又改了计划三处（提交 `639cd0c`）：① Step 7 那句"0 skipped"按 Global Constraints 改判为 **2 条 skip（`test_live_stream.py:34/:64`）+ 0 failed 硬性**，并把"第三条 skip = 回归"写明（本机 `.env` 的 `DEFAULT_USER_PASSWORD` 非空，已用 `grep -c "^DEFAULT_USER_PASSWORD=."` = 1 核过，值不外泄）；② Step 1 补一条事实核对：`/api/health` 读 `db.count_documents()` 与 `vector_store.collection_counts()`（`main.py:85-96`），故 `OwnerAwareDB` 必须补 `count_documents()`，否则 `test_health_stays_open` 红在 `AttributeError`；③ Step 5 的 Task 4 交接两条（禁默认 `user_id=1`，chat 43 / history 44；`deps.py:44` 在本 Task 拆两行并删假库的 `get_user_by_token`）。
+- 派发 implementer = `ageneral-purpose-fb7a61bc3eabd8bf`（后台）。简报额外要求：每条新判据都要**变异自证**（两处 `_require_owned_parents` 各自摘掉要红、删掉假库 `get_user_by_token` 后八条 401 仍绿），Step 6 的 live 流式改动**只验"干净 skip"**，真跑证据顺延 Task 8——不许伪绿。
+- 预期实数：`pytest -q` **256 passed / 2 skipped / 2 deselected / 0 failed**（+8），`-m live` 仍 **18 passed / 2 skipped**。
