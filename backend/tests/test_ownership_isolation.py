@@ -1,7 +1,7 @@
 """归属的服务端一侧（spec 3.3）。
 
 离线判据只能证两件事：**端点把 user.id 传下去了**、**越权拿到 404**。
-"甲的列表里没有乙的文档"这种真过滤 fake 演不出来，归 live 组（Step 7）。
+"甲的列表里没有乙的文档"这种真过滤 fake 演不出来，归 live 组（Step 8）。
 """
 from datetime import datetime
 from types import SimpleNamespace
@@ -13,8 +13,10 @@ from deps import get_current_user, get_db, get_doc_processor, get_vector_store
 from fakes import FakeDocProcessor, FakeUser, FakeVectorStore, with_auth
 from main import create_app
 
-OWNER = 1
-INTRUDER = 2
+# 刻意不取 1：fakes.FakeUser 的默认 user_id 就是 1，撞上了端点里硬编码 user_id=1
+# 也能通过全部离线判据（评审 F12）。这两个数还彼此不同，越权那一臂才是真越权。
+OWNER = 41
+INTRUDER = 42
 
 
 class OwnerAwareDB:
@@ -64,7 +66,11 @@ class OwnerAwareDB:
                 "parent_vector_id": "pv", "child_vector_ids": ["cv"]}
 
     def delete_parent_chunk(self, document_id, parent_id, *, user_id):
-        self._record("delete_parent_chunk", user_id)
+        # 与非变更方法同形：真库这一步也是"按 (document_id, parent_id, 主人) 联合定位，
+        # 查不到就回 None"（core/database.py 的 _find_parent_chunk）。假库若在唯一那个
+        # 变更方法上丢了过滤，别人来删就看不出差别了。
+        if not self._record("delete_parent_chunk", user_id):
+            return None
         return {"deleted_children": 1, "chunk_count": 0, "document_hidden": True}
 
     def owned_parent_ids(self, parent_ids, *, user_id):
@@ -103,7 +109,9 @@ class StampingVectorStore(FakeVectorStore):
 
     def add_documents(self, parent_docs, child_docs, document_id, *, user_id):
         self.stamped_with.append(user_id)
-        return super().add_documents(parent_docs, child_docs, document_id)
+        # 把 user_id 传下去：不传的话基类 fakes.py 里那句 self.stamped_user = user_id
+        # 恒为 None，成了"写了没人读"的误导字段（形状照 test_api_documents.py 的 RecordingVectorStore）。
+        return super().add_documents(parent_docs, child_docs, document_id, user_id=user_id)
 
 
 def make_client(db, user=FakeUser(user_id=OWNER), vector_store=None, gate=True):
@@ -149,6 +157,34 @@ def test_deleting_another_users_chunk_is_404_with_the_existing_line():
     assert res.status_code == 404
     assert res.json() == {"detail": "文档块不存在或已被删除"}
     assert ("plan_chunk_deletion", INTRUDER) in db.calls
+    # 404 来自 plan 返回 None，端点在 api/documents.py 那道 raise 就停了：
+    # 变更方法一次都没被调用。假库的 delete_parent_chunk 会过滤（评审 F14），
+    # 但这条判据的红必须仍然来自 plan 那一颗牙，不是这里。
+    assert not [name for name, _ in db.calls if name == "delete_parent_chunk"]
+
+
+def test_owner_deleting_a_chunk_forwards_the_owner_to_both_remaining_callsites():
+    """成功删除那条路上最后两个归属调用点：api/documents.py 的 delete_parent_chunk 与 get_document。
+
+    补这条之前，把这两行的 `user_id=user.id` 删掉，全套 246 条一条都不红——
+    越权那条判据在 plan 那步就 404 了，永远走不到这里；而 test_api_documents.py 的
+    ChunkDB 收了 `user_id=None` 却从不读它。这正好打在 Task 4 的主张上：
+    归属参数是必填关键字参数，忘了传就该当场 TypeError，而不是静默少一道主人。
+    """
+    db = OwnerAwareDB()
+    client, store = make_client(db, user=FakeUser(user_id=OWNER))
+
+    res = client.delete("/api/documents/7/chunks/甲.txt_parent_0")
+
+    assert res.status_code == 200, res.text
+    assert ("plan_chunk_deletion", OWNER) in db.calls
+    assert ("delete_parent_chunk", OWNER) in db.calls
+    assert ("get_document", OWNER) in db.calls
+    # 顺序契约：向量先清、行后删（见端点 docstring）
+    assert store.deleted == [(["pv"], ["cv"])]
+    # 出参契约不变：DocumentOut，且那行读的是按主人过滤后的 get_document
+    assert res.json() == {"id": 7, "filename": "甲.txt", "chunk_count": 1,
+                          "created_at": "2026-10-06T00:00:00"}
 
 
 @pytest.mark.parametrize("method,path", [

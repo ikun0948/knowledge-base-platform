@@ -222,19 +222,22 @@ def probe(db, filename, blocks, *, user_id):
     """
     if not isinstance(blocks, dict):
         blocks = {p: 1 for p in blocks}
+    # try 从 save_document 成功那一刻就开始：save_chunks 炸了也要把那一行删掉，
+    # 否则留下一行已归户的 documents，而 probe_user 收尾会把那个账号删了（_drop_probe_account），
+    # 这行就成了谁都不再引用的孤儿——而且它的 parent_id 带着本轮的 uuid，下轮也扫不到它。
     doc_id = db.save_document(filename=filename, file_path="", content="正文",
                               chunk_count=sum(blocks.values()), user_id=user_id)
-    parent_docs = [type("D", (), {"page_content": f"{p} 的正文", "metadata": {"parent_id": p}})()
-                   for p in blocks]
-    child_docs = [
-        type("D", (), {"page_content": f"{p} 的子块 {i}",
-                       "metadata": {"parent_id": p, "child_id": f"c_{p}_{i}"}})()
-        for p, n in blocks.items() for i in range(n)
-    ]
-    db.save_chunks(doc_id, parent_docs, child_docs,
-                   [f"vp_{p}" for p in blocks],
-                   [f"vc_{c.metadata['child_id']}" for c in child_docs])
     try:
+        parent_docs = [type("D", (), {"page_content": f"{p} 的正文", "metadata": {"parent_id": p}})()
+                       for p in blocks]
+        child_docs = [
+            type("D", (), {"page_content": f"{p} 的子块 {i}",
+                           "metadata": {"parent_id": p, "child_id": f"c_{p}_{i}"}})()
+            for p, n in blocks.items() for i in range(n)
+        ]
+        db.save_chunks(doc_id, parent_docs, child_docs,
+                       [f"vp_{p}" for p in blocks],
+                       [f"vc_{c.metadata['child_id']}" for c in child_docs])
         yield doc_id, list(blocks)
     finally:
         db.delete_document(doc_id)
@@ -254,7 +257,6 @@ def test_search_parent_chunks_matches_filename_and_content_without_touching_wild
         assert [r.parent_id for r in by_filename] == [f"{tag}甲_p_0"]
         assert by_filename[0].filename == f"{tag}甲.txt"
         assert by_filename[0].child_count == 2      # GROUP BY 的聚合，不是 documents.chunk_count 那个手写数
-        assert doc_a != doc_b                        # 两篇探针各自成行，后面按 tag 搜到的确实是这一批
 
         # 只出现在父块正文里的串：证明搜的是 content，不只是文件名
         assert [r.parent_id for r in

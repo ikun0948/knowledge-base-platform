@@ -66,6 +66,39 @@ def test_delete_by_document_id_is_best_effort_and_never_raises(store, caplog):
     assert "按 document_id 清扫父集合失败" in caplog.text
 
 
+def test_add_documents_stamps_the_owner_as_a_string(store):
+    """`doc.metadata['user_id'] = str(user_id)` 的本体判据（Task 4 唯一没被任何判据读到的生产语句）。
+
+    `test_chroma_data.py` 里那句 `meta["user_id"] == "1"` 测的是 `migrations.stamp_vector_owner`
+    那条补戳路，不是这里。写成 `= user_id`（裸 int）离线判据全绿，但 Chroma 的 where 是标量相等，
+    阶段二按主人收窄召回池时这个键永远匹配不上——所以"存成字符串"必须由一条判据钉住。
+    走 `VectorStore.__new__`：真构造会开 PersistentClient，`backend/data/chroma_db` 是单实例锁。
+    """
+    seen = []
+
+    class AddCollection:
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def add_documents(self, docs):
+            seen.extend(docs)
+            return [f"{self.prefix}{i}" for i in range(len(docs))]
+
+    store.parent_vectorstore = AddCollection("p")
+    store.child_vectorstore = AddCollection("c")
+    parent = type("D", (), {"page_content": "父", "metadata": {"parent_id": "甲.txt_parent_0"}})()
+    child = type("D", (), {"page_content": "子", "metadata": {"parent_id": "甲.txt_parent_0",
+                                                              "child_id": "child_0_0"}})()
+
+    parent_ids, child_ids = store.add_documents([parent], [child], 42, user_id=41)
+
+    assert (parent_ids, child_ids) == (["p0"], ["c0"])
+    assert seen == [parent, child]        # 两个集合都收到了，戳是在进 Chroma 之前打上的
+    for doc in (parent, child):
+        assert doc.metadata["user_id"] == "41", f"主人戳必须是字符串：{doc.metadata!r}"
+        assert doc.metadata["document_id"] == "42"   # 两个键形态一致（上一行才因此可比）
+
+
 def test_collection_names_match_existing_chroma(store):
     assert (COLLECTION_PARENT, COLLECTION_CHILD) == ("parent_document", "child_document")
 
