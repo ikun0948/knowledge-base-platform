@@ -265,13 +265,14 @@ def test_logout_revokes_only_the_token_in_hand():
     assert kept.json()["user"]["identifier"] == "a@b.com"
     assert len(db.tokens) == 1, "登出不该把没交出来的那枚一起清掉"
 
-    # 204 是**空体且不带 content-type**：光钉状态码挡不住 Task 7 在 logout 里 .json()——
-    # 那会当场 SyntaxError。与 200 那格并排钉，形状差才是前端要拿到的事实。
+    # 实测形状：204 的 body 是空的，但 FastAPI 的默认响应类**照样给它挂了
+    # content-type: application/json**。所以前端判"要不要 .json()"只能看 204 这个状态码，
+    # 看头会当场 SyntaxError。这里把头在场一起钉住：哪天框架把它清干净了这条会红，届时改判。
     gone = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {first}"})
     assert gone.status_code == 204
     assert gone.content == b""
-    assert "content-type" not in gone.headers
-    assert kept.content != b"" and "content-type" in kept.headers
+    assert gone.headers.get("content-type") == "application/json"
+    assert kept.content != b"" and kept.headers.get("content-type") == "application/json"
 
 
 def test_logout_without_a_token_is_401_not_silently_ok():
