@@ -4,8 +4,6 @@ import ReferenceList from './ReferenceList.vue'
 const props = defineProps({
   message: { type: Object, required: true },
 })
-// 引用条上的删除按钮在 ReferenceList 里，动作的归属人是 App.vue：这里只原样往上递
-const emit = defineEmits(['remove-chunk'])
 </script>
 
 <template>
@@ -30,7 +28,6 @@ const emit = defineEmits(['remove-chunk'])
       <ReferenceList
         v-if="props.message.references?.length"
         :references="props.message.references"
-        @remove-chunk="emit('remove-chunk', $event)"
       />
     </div>
   </div>

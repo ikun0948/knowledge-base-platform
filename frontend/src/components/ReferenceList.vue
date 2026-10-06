@@ -4,7 +4,6 @@ import { docLabel } from '../composables/useDocuments.js'
 const props = defineProps({
   references: { type: Array, required: true },
 })
-const emit = defineEmits(['remove-chunk'])
 </script>
 
 <template>
@@ -17,12 +16,6 @@ const emit = defineEmits(['remove-chunk'])
     >
       <span class="reference-source">📎 {{ docLabel(reference) }}</span>
       <span v-if="reference.deleted" class="reference-state">🗑 已删除（之前的答案仍然引用它）</span>
-      <button
-        v-else
-        class="btn btn-ghost btn-small chunk-delete"
-        type="button"
-        @click="emit('remove-chunk', { document_id: reference.document_id, parent_id: reference.parent_id })"
-      >🗑 删除此块</button>
       <span class="reference-snippet pre-wrap">{{ reference.snippet }}</span>
     </li>
   </ul>

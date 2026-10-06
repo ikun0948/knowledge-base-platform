@@ -7,7 +7,6 @@ import ChunkPickerModal from './components/ChunkPickerModal.vue'
 import DocumentPanel from './components/DocumentPanel.vue'
 import MessageList from './components/MessageList.vue'
 import StatusBar from './components/StatusBar.vue'
-import { deleteChunk } from './api/documents.js'
 import { useChat } from './composables/useChat.js'
 import { useChunkSelection } from './composables/useChunkSelection.js'
 import { useDocuments } from './composables/useDocuments.js'
@@ -55,23 +54,14 @@ async function handleClear() {
   clearing.value = false
 }
 
-// 删块是不可逆的（向量库删完就没了），所以同样的原生 confirm 门禁不能省。
-async function handleRemoveChunk({ document_id: documentId, parent_id: parentId }) {
-  const ok = window.confirm(
-    `确认删除文档块「${parentId}」？会连同它名下的子块一起从向量库移除，不可恢复。`,
-  )
-  if (!ok) return
-  try {
-    await deleteChunk(documentId, parentId)
-    // 先标界面再刷列表：引用条目是"那一轮用过什么"的凭据，不能因为刷列表而消失
-    markChunkDeleted(documentId, parentId)
-    // parent_id 全库唯一，所以按它摘正好：这一块的死是此刻确定的事实，
-    // 留在允许池里等于面板挂一张空卡片、下次问答带一个必空召回的 id
-    remove(parentId)
-    await refresh()
-  } catch (err) {
-    error.value = err.message
-  }
+// 删块的请求由弹窗自己发（deleteChunk 在那边），这里只收"已经删掉了"这个事实：
+// 先标界面再刷列表——引用条目是"那一轮用过什么"的凭据，不能因为刷列表而消失。
+function handleChunkDeleted(chunk) {
+  markChunkDeleted(chunk.document_id, chunk.parent_id)
+  // parent_id 全库唯一，所以按它摘正好：这块的死是此刻确定的事实，
+  // 留在允许池里等于面板挂一张空卡片、下次问答带一个必空召回的 id
+  remove(chunk.parent_id)
+  refresh()
 }
 
 // M-F3：直接用 ChatInput emit 的载荷（已是 trim 后的文本），不再回头重读 question——
@@ -141,7 +131,6 @@ function dismissError() {
           <MessageList
             :messages="messages"
             :has-documents="documents.length > 0"
-            @remove-chunk="handleRemoveChunk"
           />
           <ChatInput v-model="question" :pending="pending" @send="handleSend" @stop="handleStop" />
           <ChunkPickerModal
@@ -149,6 +138,7 @@ function dismissError() {
             :selected-ids="selectedParentIds"
             :error="selectionError"
             @toggle="toggle"
+            @chunk-deleted="handleChunkDeleted"
             @close="pickerOpen = false"
           />
         </div>

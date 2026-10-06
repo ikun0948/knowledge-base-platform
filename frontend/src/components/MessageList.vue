@@ -7,9 +7,6 @@ const props = defineProps({
   messages: { type: Array, required: true },
   hasDocuments: { type: Boolean, required: true },
 })
-// 第二跳转发：ReferenceList → MessageBubble → 这里 → App.vue（动作要碰 API 与文档列表，只有 App 够得着）
-const emit = defineEmits(['remove-chunk'])
-
 const listEl = ref(null)
 
 // 用数组 join 而不是模板里的多行文本：Vue 模板默认 condense 空白，
@@ -52,7 +49,6 @@ watch(
       v-for="message in props.messages"
       :key="message.key"
       :message="message"
-      @remove-chunk="emit('remove-chunk', $event)"
     />
   </section>
 </template>

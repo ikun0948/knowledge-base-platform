@@ -11,7 +11,7 @@ const props = defineProps({
   clearing: { type: Boolean, default: false },
 })
 // deselect-chunk 是"取消选择"（本地动作，不发请求）；
-// App.vue 里 MessageList 那条 remove-chunk 才是"删数据"（不可逆，要过 confirm）——两个名字不能混。
+// "删数据"（🗑，不可逆，要过 confirm）只在选择文档块弹窗里——两个入口、两个名字，不能混。
 const emit = defineEmits(['enqueue', 'retry', 'dismiss', 'clear', 'open-picker', 'deselect-chunk'])
 </script>
 

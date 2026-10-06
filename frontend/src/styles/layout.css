@@ -197,16 +197,17 @@
 .reference-source { font-weight: 600; }
 /* 删掉的块仍然留在历史里，压暗 + 换成文案是为了让"当时的答案用过它"这件事不消失 */
 .reference-deleted { opacity: 0.6; }
-.chunk-delete { align-self: flex-start; }
 
 /* ---- 块级选择（2026-10-04）：面板里的已选卡片 + 候选池弹窗 ---- */
 .picker-open { margin: 4px 0 10px; align-self: flex-start; }
 .chunk-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
 .chunk-card {
-  position: relative; display: flex; gap: 8px;
+  position: relative; min-width: 0; display: flex; gap: 8px;
   border: 1px solid var(--border); border-radius: var(--radius-card);
   background: var(--panel-bg); box-shadow: var(--shadow-bubble);
+  transition: border-color .15s, box-shadow .15s;
 }
+.chunk-card:hover { border-color: var(--brand-1); box-shadow: var(--shadow-btn-hover); }
 .chunk-card-selected { border-color: var(--brand-1); }
 .chunk-card-body {
   flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
@@ -214,19 +215,19 @@
   font: inherit; color: var(--text-main); cursor: pointer;
 }
 .chunk-title { font-weight: 600; word-break: break-all; }
-.chunk-snippet { font-size: 12px; color: var(--text-muted); }
-.chunk-meta { font-size: 11px; color: var(--text-muted); word-break: break-all; }
 .chunk-badge {
   margin-left: 6px; padding: 0 6px; border-radius: var(--radius-pill);
   background: var(--status-rag-bg); color: var(--status-rag-fg); font-size: 11px; font-weight: 400;
 }
-/* ✕ 是"取消选择"（本地、不发请求）；引用条上的 🗑 才是删数据，两者文案必须不同 */
+/* ✕ 是"取消选择"（本地、不发请求），🗑 是删向量库里的真数据（不可逆）——两者文案必须不同。
+   都是卡片的第二个孩子，才能靠右贴顶落在右上角。 */
 .chunk-remove {
   align-self: flex-start; flex: 0 0 auto; margin: 6px 6px 0 0;
   width: 22px; height: 22px; padding: 0;
   border: 0; border-radius: 50%; background: var(--fail-bg); color: var(--fail-fg);
   font-size: 13px; line-height: 1; cursor: pointer;
 }
+.chunk-delete { align-self: flex-start; flex: 0 0 auto; margin: 6px 6px 0 0; }
 
 .picker-backdrop {
   position: fixed; inset: 0; z-index: 4;   /* 高于 ≤768 侧栏浮层的 3，否则窄屏下弹窗被盖住点不到 */
@@ -234,7 +235,9 @@
   background: var(--overlay-bg);
 }
 .picker-modal {
-  width: min(92vw, 560px); max-height: 82vh; overflow: hidden;
+  /* 高度写死而不是 max-height：内容多少都不改尺寸，切到空分类时弹窗不许缩 */
+  width: min(92vw, 560px); height: 66vh; max-height: calc(100dvh - 24px);
+  overflow: hidden;
   display: flex; flex-direction: column; gap: 10px; padding: 16px;
   border: 1px solid var(--border); border-radius: var(--radius-card);
   background: var(--panel-bg); box-shadow: var(--shadow-panel);
@@ -259,12 +262,15 @@
 .picker-tab-active { background: var(--grad-brand); color: var(--on-brand); border-color: transparent; }
 .picker-error { font-size: 13px; color: var(--fail-fg); }
 .picker-hint { font-size: 13px; color: var(--text-muted); }
-/* 有界滚动：弹窗结果区不随内容长高（L-2 同族要求，长列表撑破视口是老病根） */
+/* 两列网格 + 有界滚动：弹窗高度写死后，结果区吃满剩下的空间（L-2 同族要求，
+   长列表撑破视口是老病根）。列宽必须是 minmax(0,1fr)：1fr 的最小尺寸是 auto，
+   一个超长文件名就能把列撑破、把另一列挤出弹窗。 */
 .picker-results {
-  flex: 1; margin: 0; padding: 0 2px 0 0; overflow-y: auto; max-height: 60vh;
-  display: flex; flex-direction: column; gap: 8px; list-style: none;
+  flex: 1; min-height: 0; margin: 0; padding: 0 2px 4px 0; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start; gap: 10px; list-style: none;
 }
-.picker-results li { display: flex; }   /* 卡片随栏宽：li 默认 block 会把 flex 卡片挤成内容宽 */
+.picker-results li { min-width: 0; }
 
 .chat-input {
   display: flex;
@@ -289,6 +295,8 @@
 @media (max-width: 768px) {
   /* app.py 断点里唯一还有意义的规则 */
   .message-content { max-width: 85%; }
+  /* 两列在 375px 上会挤成两个窄条：窄屏退一列，高度照旧（66vh 是全局档，不分屏幕） */
+  .picker-results { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---- Task 7 收口（ledger Task 5 ruling I-1 授权，纯末尾追加）：
