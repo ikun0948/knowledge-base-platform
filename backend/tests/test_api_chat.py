@@ -20,15 +20,16 @@ REF = Reference(document_id=1, parent_id="a.txt_parent_0", filename="a.txt", sni
 
 def test_with_documents_uses_rag_mode_and_returns_references():
     client = make_client(FakeRAG(answer="基于文档", refs=[REF]))
-    body = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]}).json()
+    body = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]}).json()
     assert body["mode"] == "rag"
     assert body["answer"] == "基于文档"
     assert body["references"][0]["filename"] == "a.txt"
 
 
-def test_empty_document_ids_falls_back_to_normal_mode():
+def test_empty_parent_ids_falls_back_to_normal_mode():
     client = make_client(FakeRAG(answer="闲聊"))
-    body = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": []}).json()
+    body = client.post("/api/chat", json={"session_id": "s1", "question": "q", "parent_ids": []}).json()
     assert body["mode"] == "normal"
     assert body["references"] == []
 
@@ -36,7 +37,8 @@ def test_empty_document_ids_falls_back_to_normal_mode():
 def test_llm_failure_returns_502_not_an_answer_in_a_200():
     """原来错误文本会被当答案返回并写进历史；现在必须是 502。"""
     client = make_client(FakeRAG(error=LLMError("大模型调用失败: boom")))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]})
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 502
     assert res.json()["detail"] == "大模型调用失败: boom"
 
@@ -54,9 +56,9 @@ class SpyRAG(FakeRAG):
         super().__init__(**kwargs)
         self.calls = []
 
-    def chat_with_documents(self, question, document_ids, session_id):
-        self.calls.append(("rag", question, list(document_ids), session_id))
-        return super().chat_with_documents(question, document_ids, session_id)
+    def chat_with_documents(self, question, parent_ids, session_id):
+        self.calls.append(("rag", question, list(parent_ids), session_id))
+        return super().chat_with_documents(question, parent_ids, session_id)
 
     def normal_chat(self, question, session_id):
         self.calls.append(("normal", question, session_id))
@@ -66,15 +68,16 @@ class SpyRAG(FakeRAG):
 def test_rag_chain_receives_the_payload_in_the_right_positions():
     rag = SpyRAG(answer="基于文档", refs=[REF])
     make_client(rag).post(
-        "/api/chat", json={"session_id": "s9", "question": "营收多少", "document_ids": [3, 1]}
+        "/api/chat", json={"session_id": "s9", "question": "营收多少",
+                           "parent_ids": ["丙_p_0", "甲_p_0"]}
     )
-    assert rag.calls == [("rag", "营收多少", [3, 1], "s9")]
+    assert rag.calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9")]
 
 
 def test_normal_chain_receives_question_and_session_only():
     rag = SpyRAG(answer="闲聊")
     make_client(rag).post(
-        "/api/chat", json={"session_id": "s9", "question": "你好", "document_ids": []}
+        "/api/chat", json={"session_id": "s9", "question": "你好", "parent_ids": []}
     )
     assert rag.calls == [("normal", "你好", "s9")]
 
@@ -82,7 +85,7 @@ def test_normal_chain_receives_question_and_session_only():
 def test_reference_serializes_to_exactly_the_spec_fields():
     """实时答案与历史渲染共用 Reference，多一个键或少一个键都会让前端分叉（spec 6.3）。"""
     body = make_client(FakeRAG(answer="基于文档", refs=[REF])).post(
-        "/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]}
+        "/api/chat", json={"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]}
     ).json()
     assert body["references"] == [
         {"document_id": 1, "parent_id": "a.txt_parent_0", "filename": "a.txt", "snippet": "片段"}
@@ -91,14 +94,15 @@ def test_reference_serializes_to_exactly_the_spec_fields():
 
 def test_retrieval_failure_is_also_502():
     client = make_client(FakeRAG(error=RetrievalError("检索或上下文压缩失败: chroma down")))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]})
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 502
     assert res.json()["detail"] == "检索或上下文压缩失败: chroma down"
 
 
 def test_normal_chain_llm_failure_is_502():
     client = make_client(FakeRAG(error=LLMError("大模型调用失败: boom")))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": []})
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "parent_ids": []})
     assert res.status_code == 502
 
 
@@ -106,7 +110,8 @@ def test_storage_error_on_rag_path_is_not_hijacked_into_502():
     """StorageError 不是聊天系异常：端点必须放行，让 main.py 的 STATUS_BY_ERROR 给 500。
     宽 except KnowledgeBaseError 会把它改写成 502，中央映射就形同虚设（spec 八节）。"""
     client = make_client(FakeRAG(error=StorageError("存储坏了")))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]})
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 500
     assert res.json()["detail"] == "存储坏了"
 
@@ -114,7 +119,7 @@ def test_storage_error_on_rag_path_is_not_hijacked_into_502():
 def test_storage_error_on_normal_path_is_not_hijacked_into_502():
     """normal 分支的 except 同样只该接管 RetrievalError/LLMError。"""
     client = make_client(FakeRAG(error=StorageError("存储坏了")))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": []})
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "parent_ids": []})
     assert res.status_code == 500
     assert res.json()["detail"] == "存储坏了"
 
@@ -122,7 +127,8 @@ def test_storage_error_on_normal_path_is_not_hijacked_into_502():
 def test_empty_retrieval_is_a_200_business_result_not_an_error():
     """rag_system 检索为空时不抛异常而是回说明文案，端点不得把它升级成 502。"""
     client = make_client(FakeRAG(answer="未在选中的文档里找到相关内容，请换个问法或确认文档已上传。", refs=[]))
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]})
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 200
     body = res.json()
     assert body["mode"] == "rag"
@@ -134,10 +140,24 @@ def test_blank_question_is_422():
     assert client.post("/api/chat", json={"session_id": "s1", "question": ""}).status_code == 422
 
 
-def test_non_integer_document_ids_is_422():
-    client = make_client(FakeRAG())
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q", "document_ids": ["abc"]})
+def test_overlong_parent_id_is_422():
+    """元素上界对齐 ParentChunk.parent_id 的 String(100)：超长的 id 不可能在库里。"""
+    res = make_client(FakeRAG()).post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": ["x" * 101]})
     assert res.status_code == 422
+
+
+def test_empty_parent_id_element_is_422():
+    res = make_client(FakeRAG()).post("/api/chat", json={
+        "session_id": "s1", "question": "q", "parent_ids": [""]})
+    assert res.status_code == 422
+
+
+def test_legacy_document_ids_field_is_ignored_not_rejected():
+    """老字段静默丢弃 → 空池 → normal。写死这条，免得以后有人把它当兼容入口重新接上。"""
+    body = make_client(FakeRAG()).post(
+        "/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]}).json()
+    assert body["mode"] == "normal"
 
 
 HTML_SNIPPET = "<script>alert(1)</script> & \"quotes\" 'single'"
@@ -147,7 +167,7 @@ def test_backend_hands_the_snippet_back_as_plain_text_and_escapes_nothing():
     """坑 6 的后端侧：转义是渲染层职责，后端既不拼 HTML 也不提前转义（spec 七节）。"""
     ref = Reference(document_id=1, parent_id="p", filename="a.txt", snippet=HTML_SNIPPET)
     res = make_client(FakeRAG(answer=HTML_SNIPPET, refs=[ref])).post(
-        "/api/chat", json={"session_id": "s1", "question": "q", "document_ids": [1]}
+        "/api/chat", json={"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]}
     )
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("application/json")
@@ -186,7 +206,7 @@ def post_stream(client, payload):
 
 def test_stream_rag_frame_sequence_is_meta_references_tokens_done():
     res = post_stream(stream_client(FakeRAG(refs=[REF], tokens=["基于", "文档"])),
-                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/event-stream")
     frames = sse_frames(res.text)
@@ -199,7 +219,7 @@ def test_stream_rag_frame_sequence_is_meta_references_tokens_done():
 
 def test_stream_normal_frame_sequence_has_no_references_frame():
     res = post_stream(stream_client(FakeRAG(tokens=["你", "好"])),
-                      {"session_id": "s1", "question": "q", "document_ids": []})
+                      {"session_id": "s1", "question": "q", "parent_ids": []})
     assert [e for e, _ in sse_frames(res.text)] == ["meta", "token", "token", "done"]
     assert sse_frames(res.text)[0][1] == {"mode": "normal", "session_id": "s1"}
 
@@ -207,7 +227,7 @@ def test_stream_normal_frame_sequence_has_no_references_frame():
 def test_stream_midway_llm_failure_degrades_to_error_frame_after_200():
     """meta 之后头已发出：LLM 中途失败只能是 error 帧，不能是 502 状态码。"""
     res = post_stream(stream_client(FakeRAG(refs=[REF], tokens=["开头"], error=LLMError("大模型调用失败，请稍后重试"), error_after=1)),
-                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 200
     frames = sse_frames(res.text)
     assert [e for e, _ in frames] == ["meta", "references", "token", "error"]
@@ -219,14 +239,14 @@ def test_stream_storage_error_comes_as_error_frame_not_hijacked():
     """StorageError（写历史失败，发生在生成完成后）：中央映射对已开播的流无能为力，
     detail 必须原文进 error 帧——前端据此撤消息，界面与后端历史一致。"""
     res = post_stream(stream_client(FakeRAG(tokens=["x"], error=StorageError("存储坏了"), error_after=1)),
-                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     frames = sse_frames(res.text)
     assert frames[-1] == ("error", {"detail": "存储坏了"})
 
 
 def test_stream_retrieval_failure_is_meta_plus_error_only():
     res = post_stream(stream_client(FakeRAG(error=RetrievalError("检索或上下文压缩失败，请稍后重试"))),
-                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 200
     assert [e for e, _ in sse_frames(res.text)] == ["meta", "error"]
 
@@ -239,7 +259,8 @@ def test_stream_unknown_failure_gives_generic_detail_without_internals():
             raise RuntimeError("OperationalError(2003): 密码 hunter2 @ 127.0.0.1:3306")
             yield  # 永不执行；仅这一行让上面的 raise 落在迭代期
 
-    res = post_stream(stream_client(Boom()), {"session_id": "s1", "question": "q", "document_ids": [1]})
+    res = post_stream(stream_client(Boom()),
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     detail = sse_frames(res.text)[-1][1]["detail"]
     assert detail == "服务器内部错误"
     assert "hunter2" not in res.text
@@ -247,7 +268,8 @@ def test_stream_unknown_failure_gives_generic_detail_without_internals():
 
 def test_stream_blank_question_is_plain_http_422_before_any_frame():
     """body 校验发生在 StreamingResponse 之前：422 仍是真状态码 + JSON detail。"""
-    res = post_stream(stream_client(FakeRAG()), {"session_id": "s1", "question": "", "document_ids": [1]})
+    res = post_stream(stream_client(FakeRAG()),
+                      {"session_id": "s1", "question": "", "parent_ids": ["a.txt_parent_0"]})
     assert res.status_code == 422
     assert "event:" not in res.text
 
@@ -258,18 +280,19 @@ def test_stream_payload_is_forwarded_in_the_right_positions():
             super().__init__(**kwargs)
             self.stream_calls = []
 
-        def chat_with_documents_stream(self, question, document_ids, session_id):
-            self.stream_calls.append(("rag", question, list(document_ids), session_id))
-            return super().chat_with_documents_stream(question, document_ids, session_id)
+        def chat_with_documents_stream(self, question, parent_ids, session_id):
+            self.stream_calls.append(("rag", question, list(parent_ids), session_id))
+            return super().chat_with_documents_stream(question, parent_ids, session_id)
 
         def normal_chat_stream(self, question, session_id):
             self.stream_calls.append(("normal", question, session_id))
             return super().normal_chat_stream(question, session_id)
 
     rag = SpyStreamRAG(tokens=["x"])
-    post_stream(stream_client(rag), {"session_id": "s9", "question": "营收多少", "document_ids": [3, 1]})
-    post_stream(stream_client(rag), {"session_id": "s9", "question": "你好", "document_ids": []})
-    assert rag.stream_calls == [("rag", "营收多少", [3, 1], "s9"), ("normal", "你好", "s9")]
+    post_stream(stream_client(rag), {"session_id": "s9", "question": "营收多少",
+                                     "parent_ids": ["丙_p_0", "甲_p_0"]})
+    post_stream(stream_client(rag), {"session_id": "s9", "question": "你好", "parent_ids": []})
+    assert rag.stream_calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9"), ("normal", "你好", "s9")]
 
 
 def test_stream_frames_are_single_line_json_with_readable_chinese():
@@ -277,21 +300,24 @@ def test_stream_frames_are_single_line_json_with_readable_chinese():
     JSON 字符串里的换行自带转义，不可能劈开帧。"""
     ref = Reference(document_id=1, parent_id="p", filename="甲.txt", snippet="中文片段")
     res = post_stream(stream_client(FakeRAG(refs=[ref], tokens=["第一段\n第二段"])),
-                      {"session_id": "s1", "question": "q", "document_ids": [1]})
+                      {"session_id": "s1", "question": "q", "parent_ids": ["a.txt_parent_0"]})
     lines = res.text.strip().split("\n")
     assert sum(1 for ln in lines if ln.startswith("data: ")) == 4  # meta/references/token/done
     assert "中文片段" in res.text and "\\u" not in res.text
     assert "第一段\\n第二段" in res.text  # 换行被 JSON 转义在字符串内部
 
 
-def test_more_than_50_document_ids_is_422():
-    """G-1 收口：String(500) 列 + 检索扇出都不该吃无界列表；50 项上限一次钉住两个端点。"""
+def test_more_than_50_parent_ids_is_422():
+    """G-1 收口：落库列 + 检索扇出都不该吃无界列表；50 项上限一次钉住两个端点。
+
+    宽度账照旧成立：50 个 parent_id 反查出的 document_id ≤50 个 ⇒ 499 字符 ≤ String(500)。
+    """
     client = make_client(FakeRAG())
     res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
-                                         "document_ids": list(range(1, 52))})
+                                         "parent_ids": [f"p{i}" for i in range(51)]})
     assert res.status_code == 422
     res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
-                                                "document_ids": list(range(1, 52))})
+                                                "parent_ids": [f"p{i}" for i in range(51)]})
     assert res.status_code == 422
     # 状态码只是另一半：校验发生在 StreamingResponse 之前，这里必须零 SSE 帧、纯 JSON
     assert "event:" not in res.text
@@ -299,21 +325,12 @@ def test_more_than_50_document_ids_is_422():
     assert res.json()["detail"]
 
 
-def test_document_id_wider_than_9_digits_is_422():
-    """M-e 宽度账：9 位×50 + 49 个逗号 = 499 恰落 String(500)；到 10 位就可能溢出，
-    而溢出的炸点在生成完成后的落库——答案已经花掉了，报错只赔一句 500。"""
+def test_stream_rejects_overlong_and_empty_parent_ids_with_zero_frames():
+    """空串连"一个可能的 id"都不是，同属坏请求；流端点依旧 422 前挡、零帧。"""
     client = make_client(FakeRAG())
-    res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
-                                         "document_ids": [10**9]})
-    assert res.status_code == 422
-
-
-def test_stream_rejects_oversized_and_nonpositive_document_ids_with_zero_frames():
-    """负数/0 连"存在的主键"都不是，同属坏请求；流端点依旧 422 前挡、零帧。"""
-    client = make_client(FakeRAG())
-    for bad in ([10**9], [0], [-1]):
+    for bad in (["x" * 101], [""], ["a", ""]):
         res = client.post("/api/chat/stream", json={"session_id": "s1", "question": "q",
-                                                    "document_ids": bad})
+                                                    "parent_ids": bad})
         assert res.status_code == 422, bad
         assert "event:" not in res.text
 
@@ -323,7 +340,7 @@ def test_stream_headers_forbid_proxy_buffering():
     状态码与帧序全对，用户看到的却是转圈后一次吐完。X-Accel-Buffering: no 是关它；
     Cache-Control: no-cache 此前无人断言（M2-3），一并钉住。"""
     res = post_stream(stream_client(FakeRAG(tokens=["你", "好"])),
-                      {"session_id": "s1", "question": "q", "document_ids": []})
+                      {"session_id": "s1", "question": "q", "parent_ids": []})
     assert res.headers["x-accel-buffering"] == "no"
     assert res.headers["cache-control"] == "no-cache"
     assert res.headers["content-type"].startswith("text/event-stream")

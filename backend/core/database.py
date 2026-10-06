@@ -334,6 +334,29 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def document_ids_for_parents(self, parent_ids):
+        """parent_id → document_id 的反查：历史列的形状不变，靠这一步补齐。
+
+        按入参顺序去重、库里没有的静默少返回——与 search_parent_chunks 同一句话：
+        删掉的块不该在历史里留一个指向空的 id。
+        """
+        ids = list(dict.fromkeys(parent_ids))
+        if not ids:
+            return []
+        session = self.get_session()
+        try:
+            rows = session.query(ParentChunk.parent_id, ParentChunk.document_id).filter(
+                ParentChunk.parent_id.in_(ids)).all()
+        finally:
+            session.close()
+        by_parent = {r.parent_id: r.document_id for r in rows}
+        doc_ids = []
+        for pid in ids:
+            doc_id = by_parent.get(pid)
+            if doc_id is not None and doc_id not in doc_ids:
+                doc_ids.append(doc_id)
+        return doc_ids
+
     # 获取历史聊天记录
     def get_chat_history(self, session_id, limit=10):
         # 获取数据库操作游标

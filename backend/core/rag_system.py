@@ -64,11 +64,19 @@ class RAGSystem:
         )
         return answer
 
-    def chat_with_documents(self, question, document_ids, session_id):
-        """基于文档的 RAG 问答：子块召回 → 回溯父块 → 压缩 → 带历史生成。"""
+    def chat_with_documents(self, question, parent_ids, session_id):
+        """基于文档块的 RAG 问答：块内召回 → 回溯父块 → 压缩 → 带历史生成。
+
+        落库列仍是 document_ids（形状不变，历史渲染与 mode 派生都吃它），
+        所以进来先做一次反查。反查为空不是故障：池子全是死块，召回自然为空，
+        走的还是 EMPTY_RETRIEVAL_ANSWER 那条既有分支。
+        """
+        doc_ids = self.db_manager.document_ids_for_parents(parent_ids)
+        if parent_ids and not doc_ids:
+            logger.warning("选中的文档块已全部失效，这一轮按空召回走: %s", parent_ids)
         no_retrieval = False
         try:
-            retriever = self.vector_store.create_retriever(document_ids)
+            retriever = self.vector_store.create_retriever(parent_ids)
             retrieved_docs = retriever.invoke(question)
             parent_docs = self.vector_store.get_parent_documents(retrieved_docs)
             if not parent_docs:
@@ -86,7 +94,7 @@ class RAGSystem:
                 session_id=session_id,
                 user_message=question,
                 assistant_message=EMPTY_RETRIEVAL_ANSWER,
-                document_ids=",".join(map(str, document_ids)),
+                document_ids=",".join(map(str, doc_ids)),
                 used_chunks=None,
             )
             return EMPTY_RETRIEVAL_ANSWER, []
@@ -113,7 +121,7 @@ class RAGSystem:
             session_id=session_id,
             user_message=question,
             assistant_message=answer,
-            document_ids=",".join(map(str, document_ids)),
+            document_ids=",".join(map(str, doc_ids)),
             used_chunks=json.dumps([r.model_dump() for r in references], ensure_ascii=False),
         )
         return answer, references
@@ -158,11 +166,14 @@ class RAGSystem:
             session_id=session_id, user_message=question, assistant_message="".join(pieces)
         )
 
-    def chat_with_documents_stream(self, question, document_ids, session_id):
+    def chat_with_documents_stream(self, question, parent_ids, session_id):
         """rag 链流式版：references 事件先于一切 token（引用先于答案上屏，spec 6.4 帧表）。
-        落库时机与非流版一致：生成完成之后、一次。"""
+        落库时机与非流版一致：生成完成之后、一次。落库列的 document_ids 由入参池子反查补齐。"""
+        doc_ids = self.db_manager.document_ids_for_parents(parent_ids)
+        if parent_ids and not doc_ids:
+            logger.warning("选中的文档块已全部失效，这一轮按空召回走（流式）: %s", parent_ids)
         try:
-            retriever = self.vector_store.create_retriever(document_ids)
+            retriever = self.vector_store.create_retriever(parent_ids)
             retrieved_docs = retriever.invoke(question)
             parent_docs = self.vector_store.get_parent_documents(retrieved_docs)
             compressed_docs = None if not parent_docs else self.vector_store.compressor.compress_documents(parent_docs, question)
@@ -176,7 +187,7 @@ class RAGSystem:
                 session_id=session_id,
                 user_message=question,
                 assistant_message=EMPTY_RETRIEVAL_ANSWER,
-                document_ids=",".join(map(str, document_ids)),
+                document_ids=",".join(map(str, doc_ids)),
                 used_chunks=None,
             )
             yield ("references", references)
@@ -209,6 +220,6 @@ class RAGSystem:
             session_id=session_id,
             user_message=question,
             assistant_message="".join(pieces),
-            document_ids=",".join(map(str, document_ids)),
+            document_ids=",".join(map(str, doc_ids)),
             used_chunks=json.dumps([r.model_dump() for r in references], ensure_ascii=False),
         )

@@ -28,7 +28,7 @@ def probe_session(tag):
 
 
 def stream_payload(session_id, question=LONG_QUESTION):
-    return {"session_id": session_id, "question": question, "document_ids": []}
+    return {"session_id": session_id, "question": question, "parent_ids": []}
 
 
 def test_client_disconnect_mid_stream_leaves_no_rows(server):

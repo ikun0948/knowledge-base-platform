@@ -9,9 +9,10 @@ from schemas.common import Reference
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=100)
     question: str = Field(min_length=1)
-    # G-1：上限 50 项——String(500) 的落库列与检索扇出都吃不消无界列表
-    # M-e：元素 1..999_999_999——9 位×50 + 49 逗号 = 499 ≤ String(500)，落库炸点不后移到生成完成后
-    document_ids: list[Annotated[int, Field(ge=1, le=999_999_999)]] = Field(
+    # 块级允许池：元素上界对齐 ParentChunk.parent_id 的 String(100)，与删块端点同源。
+    # G-1 的 50 项上界照旧成立：落库列存的是反查出的 document_id，≤50 个 ⇒ 499 字符 ≤ String(500)。
+    # 老字段 document_ids 不留 shim：唯一客户端是自家前端，同仓同部署，留着就是永不有人删的死入口。
+    parent_ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
         default_factory=list, max_length=50)
 
 

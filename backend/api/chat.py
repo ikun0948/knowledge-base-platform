@@ -14,12 +14,12 @@ logger = logging.getLogger("kb.api.chat")
 
 @router.post("", response_model=ChatResponse)
 def chat(payload: ChatRequest, rag=Depends(get_rag_system)):
-    """document_ids 为空即普通对话，用 mode 回传实际走了哪条链（spec 6.2）。"""
-    mode = mode_of(payload.document_ids)
+    """parent_ids 为空即普通对话，用 mode 回传实际走了哪条链（spec 6.2）。"""
+    mode = mode_of(payload.parent_ids)
     if mode == "rag":
         try:
             answer, references = rag.chat_with_documents(
-                payload.question, payload.document_ids, payload.session_id
+                payload.question, payload.parent_ids, payload.session_id
             )
         except (RetrievalError, LLMError) as exc:
             # 失败不写历史：残缺答案进 chat_history 会污染后续上下文（spec 七节）
@@ -46,10 +46,10 @@ def chat_stream(payload: ChatRequest, rag=Depends(get_rag_system)):
     """SSE 流式版问答（spec 6.4 帧表逐字）。meta 发出后状态码已定格 200：
     之后的失败一律降级为 error 帧，前端读 detail，HTTP 语义让位于流协议。
     /api/chat 原样保留——spec 十一节的回退路径。"""
-    mode = mode_of(payload.document_ids)
+    mode = mode_of(payload.parent_ids)
     if mode == "rag":
         events = rag.chat_with_documents_stream(
-            payload.question, payload.document_ids, payload.session_id
+            payload.question, payload.parent_ids, payload.session_id
         )
     else:
         events = rag.normal_chat_stream(payload.question, payload.session_id)

@@ -259,3 +259,20 @@ def test_search_parent_chunks_returns_the_baseline_pool_readable(db):
     rows = db.search_parent_chunks(limit=200)
     assert rows, "基线库里应有 11 个父块"
     assert all(r.parent_id and r.filename and r.child_count >= 1 for r in rows)
+
+
+def test_document_ids_for_parents_reverse_lookup_is_ordered_deduped_and_silent_on_miss(db):
+    """历史列仍写 document_ids，靠这一步补齐。fake 给不出"库里真没有这个块"的形状。"""
+    tag = new_tag()
+    doc_a = probe(db, f"{tag}戊.txt", {f"{tag}戊_p_0": 1, f"{tag}戊_p_1": 1})
+    doc_b = probe(db, f"{tag}己.docx", {f"{tag}己_p_0": 1})
+    try:
+        # 顺序=入参顺序（不是 document_id 顺序）：历史里"用了哪些文档"该保留挑选的叙述顺序
+        assert db.document_ids_for_parents([f"{tag}己_p_0", f"{tag}戊_p_1", f"{tag}戊_p_0"]) == [doc_b, doc_a]
+        # 同文档的两个块 → 一个 id，落库不出现 "9,9"
+        assert db.document_ids_for_parents([f"{tag}戊_p_0", f"{tag}戊_p_1"]) == [doc_a]
+        assert db.document_ids_for_parents([f"{tag}没这个块_p_0"]) == []
+        assert db.document_ids_for_parents([]) == []
+    finally:
+        db.delete_document(doc_a)
+        db.delete_document(doc_b)

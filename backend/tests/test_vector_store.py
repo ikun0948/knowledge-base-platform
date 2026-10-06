@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 
 import pytest
 from core.vector_store import COLLECTION_CHILD, COLLECTION_PARENT, VectorStore
@@ -88,3 +89,20 @@ def test_get_parent_documents_dedupes_shared_parent():
     parents = vs.get_parent_documents(children)
     assert calls == ["a_parent_0"]
     assert len(parents) == 1
+
+
+def test_retriever_filters_by_parent_id_not_document_id(store):
+    """块级允许池的落点。子块向量带 parent_id，所以这个过滤不需要重新灌库。"""
+    store.config = SimpleNamespace(TOP_K=3)
+    store.child_vectorstore.as_retriever = lambda search_kwargs: search_kwargs
+    kwargs = store.create_retriever(["甲.txt_parent_0"])
+    assert kwargs["filter"] == {"parent_id": {"$in": ["甲.txt_parent_0"]}}
+    assert kwargs["k"] == 6          # TOP_K * 2 的老规矩没被顺手改掉
+
+
+def test_retriever_without_pool_carries_no_filter(store):
+    store.config = SimpleNamespace(TOP_K=3)
+    store.child_vectorstore.as_retriever = lambda search_kwargs: search_kwargs
+    # 纯对话链根本不调它，但空池必须"不加 filter"而不是"filter 命中零条"
+    assert "filter" not in store.create_retriever([])
+    assert "filter" not in store.create_retriever()

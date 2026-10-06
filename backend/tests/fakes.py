@@ -56,7 +56,7 @@ class FakeRAG:
     def generate_session_id(self):
         return "fake-session"
 
-    def chat_with_documents(self, question, document_ids, session_id):
+    def chat_with_documents(self, question, parent_ids, session_id):
         if self.error:
             raise self.error
         return self.answer, self.refs
@@ -66,7 +66,7 @@ class FakeRAG:
             raise self.error
         return self.answer
 
-    def chat_with_documents_stream(self, question, document_ids, session_id):
+    def chat_with_documents_stream(self, question, parent_ids, session_id):
         if self.error is not None and self.error_after is None:
             raise self.error  # 检索/压缩失败：第一个事件都没有
         yield ("references", self.refs)

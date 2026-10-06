@@ -83,13 +83,14 @@ class VectorStore:
         # print(parent_ids, child_ids)
         return parent_ids, child_ids
 
-    def create_retriever(self, document_ids=None):
+    def create_retriever(self, parent_ids=None):
         """创建子文档检索器(只负责初始召回)"""
         search_kwargs = {"k": self.config.TOP_K * 2}
-        if document_ids:
-            # 给检索器增加一个 元数据过滤条件
+        if parent_ids:
+            # 允许池按父块收窄。子块向量本身就带 parent_id 元数据（document_processor.py:81），
+            # 所以换过滤字段不需要重新灌库——现存集合里的向量直接可用。
             search_kwargs["filter"] = {
-                "document_id": {"$in": [str(i) for i in document_ids]}
+                "parent_id": {"$in": list(parent_ids)}
             }
         # 返回一个 LangChain 检索器对象
         return self.child_vectorstore.as_retriever(search_kwargs=search_kwargs)
