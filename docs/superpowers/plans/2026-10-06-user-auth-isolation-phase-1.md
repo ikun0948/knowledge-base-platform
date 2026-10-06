@@ -3629,6 +3629,8 @@ cd frontend && npm run build
 ```
 预期：`npm test` 从 Task 6 后的约 **96 passed / 8 文件** 涨到约 **112 passed / 11 文件**（`useSession.test.js` +6、`StatusBar.test.js` +2、`AuthPanel.test.js` +8，共 +16；**以汇总行为准**）。`npm run build` exit 0。**0 failed 是硬要求。**
 
+> **2026-10-07 修订（Task 6 收口后的实测基数）**：上一段那两个"约"都低了——Task 6 落地时 Step 7 之后又补了修正轮，`api-auth.test.js`（2 条）是新文件，所以真实基数是 **98 passed / 9 文件**（HEAD `0278350` 实测）。+16 这个加数仍然正确（三个新文件的 `it()` 数逐个数过：6 / 2 / 8），因此本 Task 的目标是 **114 passed / 12 文件**。差一两条不奇怪，**照旧以汇总行为准**，但报告里必须写"实跑得到的是多少"，不许抄这一行交差。
+
 > **build 通过 ≠ 界面没问题**：这一段真正的验收（未登录不请求、左下角头像+昵称+⚙ 禁用、登录后进工作区、375px 下 rail 不塌）全在浏览器里，Task 8 Step 4 逐条打（主路是 browser-use，尺寸量测不好钉时才搬 Edge headless 探针）。这里不提前跑，是因为 `npm run dev` 起来之后与后端单实例的端口/进程纪律纠缠在一起（见 Global Constraints 的"只有一个 uvicorn"），一次性放在 Task 8 收口更省事。
 
 ```bash
