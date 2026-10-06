@@ -623,18 +623,24 @@ def test_all_selected_chunks_dead_still_goes_down_the_rag_path():
 
 def test_stream_variant_uses_the_same_reverse_lookup():
     db = StubDb(filenames={7: "手册.txt"}, parents={"甲_p_0": 7})
-    rag = build(db, StubVectorStore(parent_docs=[parent()]),
-                RunnableGenerator(lambda _: [SimpleNamespace(content="一"), SimpleNamespace(content="二")]))
+    # stream_llm 是本文件已有的助手：RunnableGenerator 只收生成器函数，
+    # 图省事写 lambda: [SimpleNamespace(...)] 会直接 TypeError。
+    rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["一", "二"]))
     list(rag.chat_with_documents_stream("问", ["甲_p_0"], "s1"))
     assert db.saved[-1]["document_ids"] == "7"
+    assert db.reverse_calls == ["甲_p_0"]
 ```
 
-（`RunnableGenerator` 已在该文件 import。）
+（易漏的一半：`test_rag_system.py` 里既有的 14 处 `chat_with_documents("q", [7], "s1")` 也要一起改。
+第二参数现在是块池，整数 `[7]` 反查不到任何东西，落库列会变空串——那批断言 `document_ids == "7"` 的用例
+会红成"字段没接上"的样子。统一按 `parent()` 桩的默认 `parent_id="p0"` 换成 `["p0"]`，并给对应
+`StubDb(...)` 补 `parents={"p0": 7}`；`[3]`/`[4]` 两处同理换成 `["p0"]` + `parents={"p0": 3}`/`{"p0": 4}`。）
 
 - [ ] **Step 5: 跑它确认红**
 
 Run: `cd backend && python -m pytest tests/test_rag_system.py -q`
-Expected: 新 3 条 FAIL（旧签名把 parent_ids 当 document_ids 直接 join，得到 `"甲_p_0,乙_p_1"`）。
+Expected: `7 failed, 13 passed` — 新 3 条红在旧签名把 parent_ids 当 document_ids 直接 join（得到 `"甲_p_0"` 这种串）；
+既有 4 条红在整数池反查为空、落库列变空串（正是上面那条"易漏的一半"）。
 
 - [ ] **Step 6: 实现反查与 rag_system 改名**
 
@@ -746,19 +752,23 @@ Expected: 全 PASS。`test_live_stream.py:31` 的 payload 已改成 `"parent_ids
 ```python
 def test_document_ids_for_parents_reverse_lookup_is_ordered_deduped_and_silent_on_miss(db):
     """历史列仍写 document_ids，靠这一步补齐。fake 给不出"库里真没有这个块"的形状。"""
-    doc_a = make_probe_doc(db, "探针戊.txt", ["戊_p_0", "戊_p_1"], {"戊_p_0": ["a"], "戊_p_1": ["b"]})
-    doc_b = make_probe_doc(db, "探针己.docx", ["己_p_0"], {"己_p_0": ["c"]})
+    tag = new_tag()     # parent_id 在全库是唯一键：不带 tag 的重跑一旦残留就撞锁，顺序断言会多吃一行
+    doc_a = probe(db, f"{tag}戊.txt", {f"{tag}戊_p_0": 1, f"{tag}戊_p_1": 1})
+    doc_b = probe(db, f"{tag}己.docx", {f"{tag}己_p_0": 1})
     try:
         # 顺序=入参顺序（不是 document_id 顺序）：历史里"用了哪些文档"该保留挑选的叙述顺序
-        assert db.document_ids_for_parents(["己_p_0", "戊_p_1", "戊_p_0"]) == [doc_b, doc_a]
+        assert db.document_ids_for_parents([f"{tag}己_p_0", f"{tag}戊_p_1", f"{tag}戊_p_0"]) == [doc_b, doc_a]
         # 同文档的两个块 → 一个 id，落库不出现 "9,9"
-        assert db.document_ids_for_parents(["戊_p_0", "戊_p_1"]) == [doc_a]
-        assert db.document_ids_for_parents(["没这个块_p_0"]) == []
+        assert db.document_ids_for_parents([f"{tag}戊_p_0", f"{tag}戊_p_1"]) == [doc_a]
+        assert db.document_ids_for_parents([f"{tag}没这个块_p_0"]) == []
         assert db.document_ids_for_parents([]) == []
     finally:
         db.delete_document(doc_a)
         db.delete_document(doc_b)
 ```
+
+（`probe` / `new_tag` 是 Task 1 Step 7 定稿的两个助手，签名 `probe(db, filename, blocks)`，
+`blocks` 是 `{parent_id: 子块数}`。）
 
 Run: `cd backend && python -m pytest tests/test_live_database.py -q`
 Expected: 全 PASS。
@@ -769,7 +779,9 @@ Expected: 全 PASS。
 cd backend && python -m pytest -q
 python -m pytest -m migration -q
 ```
-Expected: 默认门零 failed（条数比 Task 1 之后再多约 9 条）；migration 门 **1 passed**。
+Expected: 默认门零 failed = `170 passed, 2 skipped, 1 deselected`（比 Task 1 末净增 7 条：
+test_api_chat +1、test_rag_system +3、test_vector_store +2、test_live_database +1）；
+migration 门 **1 passed**。2 skipped 是 `test_live_stream.py` 够不到 :8000，非本 Task 引入。
 
 - [ ] **Step 11: 提交**
 
