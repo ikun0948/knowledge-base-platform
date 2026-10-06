@@ -2248,7 +2248,7 @@ def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
     assert res.json() == {"detail": "文档块不存在或已被删除"}
 ```
 
-> **2026-10-06 修订（上面这段代码在 Task 5 执行期改了一处，属计划代码缺陷）**：八条清单里有三条是 GET，而 httpx 的 `client.get()` **没有 `json=` 形参**——`getattr(client, method)(path, json=payload)` 对 GET 当场 `TypeError`。落地写法：**`client.request(method.upper(), path, json=payload)`**（`payload=None` 时 httpx 不带体，语义不变）。这不是风格差异，是照抄就跑不起来。
+> **2026-10-06 修订（上面这段代码在 Task 5 执行期改了一处，属计划代码缺陷）**：八条清单里有**五条**根本不该走 `json=`——httpx 0.28.1 的 `Client.get` 与 `Client.delete` **都没有 `json` 形参**（`inspect.signature` 实测：`json` 只出现在 `post` / `put` / `patch` / `request` 上），所以 `getattr(client, method)(path, json=payload)` 对 3 条 GET + 2 条 DELETE 共 **5 条臂**当场 `TypeError`。落地写法：**`client.request(method.upper(), path, json=payload)`**（`payload=None` 时 httpx 不带体，语义不变）。这不是风格差异，是照抄就跑不起来。**连带后果**：Step 2 那次"跑红"的头一批红因里，这 5 条是 `TypeError` 而不是 `200 == 401`，报数时要把两类红因分开写清，别把 `TypeError` 冒充"门没上"的证据。
 
 > Task 4 里那个 `make_client` 名字在本 Task 之后要同时服务 documents 与 chat/history 两组路径，改成 **`make_isolation_client(db=None, user=FakeUser(user_id=OWNER), rag=None, gate=True)`**：`db` 缺省时给一个 `OwnerAwareDB()`，`rag` 缺省时给 `FakeRAG()`，并多覆盖 `get_rag_system` 与 `get_config` 两格（后者是给 `test_health_stays_open` 用的：`FakeConfig` 里那个 `CHROMA_PERSIST_DIR` 足够 health 拼出响应）。改名与补格都发生在 **Step 5**——Step 1 先按新名字写判据，这样红因始终是"东西不存在"，而不是"测试写了一半"。
 
