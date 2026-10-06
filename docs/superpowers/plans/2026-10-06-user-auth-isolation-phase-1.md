@@ -2062,6 +2062,8 @@ cd backend && python -m pytest tests/test_api_documents.py tests/test_chunk_sear
 ```
 预期：`29 passed`（20 + 9），0 failed。红得最可能的一处：`RaisingDeleteDocumentDB` 与 `ChunkDB` 两个子类没跟上父类新 kwarg，报的是 `TypeError: got an unexpected keyword argument 'user_id'`。
 
+> **2026-10-07 修订（Task 4 实跑改判）**：`29` 数的是**函数**，不是 pytest 收的**用例**——两个文件里带 parametrize 的用例展开后实跑 **49 passed**。本计划一律以工具汇总行为准，凡"函数数×"式预期都按此改判。
+
 - [ ] **Step 8: live 组 32 处调用点 + 真隔离判据**
 
 `tests/test_live_database.py` 的改造是**机械的**，但要点在两处结构：
@@ -2083,6 +2085,8 @@ def probe_user(db):
 ```
 
 2. 32 处调用点逐个补 `user_id=probe_user.id`（`get_document` / `get_all_documents` / `search_parent_chunks` / `plan_chunk_deletion` / `delete_parent_chunk` / `save_document`）。**只有** `test_default_user_exists_and_owns_the_baseline_documents` 与基线那两条不参与——它们查的就是 default 的行。
+
+> **2026-10-07 修订（Task 4 实跑改判）**：那个"32"是估的，`test_live_database.py` 里真正带归属的调用点是 **60 处**，另加本 Task 新增的 2 条判据。这个数只当"改全了没有"的完整性核对，不是判据本身——真正的门是 `pytest -q` 里任何一处漏传都当场 `TypeError`。
 
 补上 Task 2 Step 6 暂缓的那条（**它的签名这时才存在**）：
 
@@ -2131,12 +2135,16 @@ def test_parent_whitelist_drops_foreign_owners(db, probe_user):
 
 > `probe(...)` 现在不是上下文管理器。Step 8 顺手把它改成 `@contextmanager`（`yield (doc_id, parent_ids)` + `finally: db.delete_document(doc_id)`），两条新判据都要用它，且现有 5 处调用点本来就在 `try/finally` 里手删——改完那 5 处也一并变干净。**这一处改造会让文件里现存的 `db.delete_document(...)` 清理行减少，属预期。**
 
+> **2026-10-06 修订（计划代码自身有洞，Task 4 落地时已补）**：上面这段没写 `probe` 的新形参，而本 Task 的 `save_document` 要求 `user_id` keyword-only 无默认值——**计划正文给出的 `probe(db, ...)` 调用点因此直接 `TypeError`**（现存调用点实测 **7 处**，不是上面说的"5 处"；本 Task 后共 8 处）。裁定：`probe` 改成 `probe(db, filename, blocks, *, user_id)`（必填，不给默认值，与"忘了就炸"这条 Task 主张同形），调用点传 `probe_user.id` 或 default 用户 id 按各判据要查的对象定。
+
 ```bash
 cd backend && python -m pytest -m live -q
 ```
 预期：在原条数上 **+2**，0 failed。基线三条（`/api/health` 与 `test_chroma_data.py`）必须仍是 9 / 11 / 22。
 
 > **2026-10-07 修订（上面这行的预期值按新基线改判）**：旧 9/11/22 作废，本轮的基线形状是**活文档 4 / 父块 4 / 子块 10**（`test_chroma_data.py` 已按 `PARENT_COUNT = 4` / `CHILD_COUNT = 10` 重钉，它才是那条常驻的自动入口）。`/api/health` 那一格在 Task 1–7 按纪律**没有服务在跑**，`curl` 会拿到 Vite/代理的 502 或连接失败，不许把它当"基线被伤了"的证据；要看 health 的实数请留到 Task 8 重启之后。`-m live` 的当轮实数是 **14 passed / 2 skipped / 211 deselected**（`test_live_stream.py:34/:64` 那两条无服务时 skip），Task 4 加完两条应当是 **16 passed / 2 skipped**，且 `0 failed`。
+
+> **2026-10-07 二次修订（Task 4 实跑改判）**：上面那个 16 是在 **Task 3 之前**量的，而 Task 3 自己就新增了 2 条 live（`documents_claimed` / 向量补戳），基数已经变 16。Task 4 的实测判据是 **18 passed / 2 skipped / 230 deselected，0 failed**。
 
 - [ ] **Step 9: 全量门 + 提交**
 
@@ -2349,6 +2357,10 @@ def make_client(rag, db=None, user=None):
 ```
 
 `tests/test_api_history.py` 的 `make_client` 同样加 `with_auth(app, user or FakeUser())`（`HistoryDB` 已覆盖 `get_db`，不用新格子）。
+
+> **2026-10-06 修订（Task 4 收口时交接到本 Task，两条都是硬要求）**
+> ① 上面两处 `user or FakeUser()` 的回落默认是 **`user_id=1`**，而 Task 4 的评审发现 F12 刚证明"假用户的 id 与某处硬编码的 1 相同"会让**端点漏传归属**变得测不出来（`test_ownership_isolation.py` 已把 `OWNER`/`INTRUDER` 抬到 41/42）。所以本 Task 的两套 `make_client` 里，凡是要判"白名单/登录门确实拿到 `user.id`"的测，**必须显式传一个不等于 1、也不等于 41/42/9/77 的 user_id**（建议 chat 用 43、history 用 44），别依赖 `FakeUser()` 的默认值。
+> ② `deps.py:44` 现在是 `db.get_user_by_token(hash_token(bearer_token(request)))`——CPython 先解析 `LOAD_METHOD` 再算实参，所以**假库少一个方法就会把"没令牌"变成 500 而不是 401**。本 Task 要把 chat/history 那四条并进 `test_documents_endpoints_reject_a_missing_token`，正是靠这条 401 判据吃饭。裁定：**在本 Task 内**把它拆成两行（先 `token = bearer_token(request)`，空令牌当场 `AuthError`，再查库），并**顺手删掉测试假库里那枚为绕过该问题而加的 `get_user_by_token`**——这样 401 由构造保证，不再依赖一次性变异证明。Task 4 的复评已把这条记为 out-of-scope，落点就是这里。
 
 同文件补一条断言，钉住"白名单确实被调了"：
 
