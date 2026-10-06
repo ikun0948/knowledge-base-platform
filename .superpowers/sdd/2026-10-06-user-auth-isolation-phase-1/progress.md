@@ -147,3 +147,13 @@
 - 开工前预飞又改了计划三处（提交 `639cd0c`）：① Step 7 那句"0 skipped"按 Global Constraints 改判为 **2 条 skip（`test_live_stream.py:34/:64`）+ 0 failed 硬性**，并把"第三条 skip = 回归"写明（本机 `.env` 的 `DEFAULT_USER_PASSWORD` 非空，已用 `grep -c "^DEFAULT_USER_PASSWORD=."` = 1 核过，值不外泄）；② Step 1 补一条事实核对：`/api/health` 读 `db.count_documents()` 与 `vector_store.collection_counts()`（`main.py:85-96`），故 `OwnerAwareDB` 必须补 `count_documents()`，否则 `test_health_stays_open` 红在 `AttributeError`；③ Step 5 的 Task 4 交接两条（禁默认 `user_id=1`，chat 43 / history 44；`deps.py:44` 在本 Task 拆两行并删假库的 `get_user_by_token`）。
 - 派发 implementer = `ageneral-purpose-fb7a61bc3eabd8bf`（后台）。简报额外要求：每条新判据都要**变异自证**（两处 `_require_owned_parents` 各自摘掉要红、删掉假库 `get_user_by_token` 后八条 401 仍绿），Step 6 的 live 流式改动**只验"干净 skip"**，真跑证据顺延 Task 8——不许伪绿。
 - 预期实数：`pytest -q` **256 passed / 2 skipped / 2 deselected / 0 failed**（+8），`-m live` 仍 **18 passed / 2 skipped**。
+- 实施回报 **DONE_WITH_CONCERNS**，提交 `582f1b7`（8 文件 +207/−44）。实跑：RED `6 failed, 9 passed`（4 条未上门的 401 拿到 200、2 条越权拿到 200）；全量门 **256 passed / 2 skipped / 2 deselected / 1 warning**（与预飞改判的 +8 一致）；`-m live` **18 passed / 2 skipped / 240 deselected**；0 failed。
+- 变异自证四条都咬住了，其中两条是本轮最值钱的证据：**B2** 把流式端点的白名单检查挪进 `frames()` 里，红的是 `RuntimeError: response already started`——钉的是**位置**不是"有没有"；**C** 把 `deps.py` 还原成一行式且假库桩已删，八条 401 全红在 `AttributeError`→500，正是 Task 4 交接 ② 要的构造级证明。
+- **Controller 裁定（实施者交回的 6 条关切，我已逐条处置并回写计划）**：
+  ① `git add` 清单漏 `backend/deps.py`——**实施者正确**：按字面清单提交会把红测留在库里。已在 Task 5 的 Files 清单补这一格并注明"原清单漏了"。
+  ② `getattr(client, method)(path, json=payload)` 对 GET 当场 `TypeError`（httpx 的 `get()` 没有 `json=`）——计划代码缺陷，落地用 `client.request(method.upper(), ...)`。已回写修订块。
+  ③ 隔离文件实收 15 条、计划写 ~14——Task 4 修正轮多加了一条 documents 判据，属预期漂移，不改计划文（计划自己声明"只抄汇总行"）。
+  ④ 白名单断言用 `user_id=5` 而非我建议的 43/44——**接受**：硬约束是"不等于 1/41/42/9/77"，5 满足且它是 brief 代码块里的字面值；history 侧本来没有会读 `user.id` 的判据（阶段一 history 不过滤用户），所以 44 无适用点。**这条建议本身写得过死，已按"取任一不撞车的值"重述**。
+  ⑤ 两条 live 流式判据本轮只做到"编辑正确 + 干净 skip"，真跑证据顺延 Task 8——**这正是预飞改判要的口径**，实施者没有伪绿，赞。
+  ⑥ 保留了 Task 4 那条 `assert get_current_user not in ...` 的牙（brief 的新 snippet 把它丢了）——**接受**，那是"gate=False 真走依赖而非覆盖"的唯一守卫。
+- 计划文另修一处全局口径：那 2 条允许 skip **不再按行号认**（Task 5 插了 `login_token()`，`test_live_stream.py` 的两条从 `:34/:64` 漂到 `:53/:87`），改按函数名点名；并给 Task 8 留了一手——服务活着时这两条还可能因大模型不可用各自再 skip 一次（`:73`/`:106`），届时"0 skipped"被打破先查 LLM 再查代码。
