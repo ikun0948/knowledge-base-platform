@@ -90,11 +90,14 @@ def test_rag_question_passes_the_parent_pool_through_the_whitelist():
     """白名单确实被调、而且拿到的是这个用户的 id——不传 user.id 的写法在这里必红。
 
     user_id 显式取 5：`FakeUser()` 的默认是 1，端点若把归属硬编码成 1 就永远测不出来（评审 F12）。
+    另一半牙是状态码（评审 Minor 6）：只断 calls 的话，"照样调白名单、却把合法主人 404 掉"
+    这种写法照样绿，所以这里同时钉 200。
     """
     db = FakeOwnedParentsDB()
     client = make_client(FakeRAG(), db=db, user=FakeUser(user_id=5))
-    client.post("/api/chat", json={"session_id": "s1", "question": "q",
-                                   "parent_ids": ["a.txt_parent_0"]})
+    res = client.post("/api/chat", json={"session_id": "s1", "question": "q",
+                                         "parent_ids": ["a.txt_parent_0"]})
+    assert res.status_code == 200, res.text
     assert db.calls == [(("a.txt_parent_0",), 5)]
 
 

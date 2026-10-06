@@ -222,8 +222,9 @@ def test_every_business_endpoint_rejects_a_missing_token(method, path):
     # 这一行是本条判据的牙齿：覆盖没撤干净，测的就是替身而不是那扇真门
     assert get_current_user not in client.app.dependency_overrides
     payload = {"session_id": "s1", "question": "q"} if method == "post" else None
-    # 计划的 getattr(client, method)(path, json=...) 在 GET 上会 TypeError：
-    # httpx.Client.get 不收 json 参数（只有 post/put/patch/delete 收）。request() 八个动词同一条路。
+    # 计划的 getattr(client, method)(path, json=...) 对 8 条臂里的 5 条当场 TypeError：
+    # inspect.signature 实测 httpx.Client 只有 post/put/patch/request 收 json=，**get 与 delete 都不收**，
+    # 而这份清单是 3 条 GET + 2 条 DELETE + 3 条 POST ⇒ 5 条臂走不通。request() 八个动词同一条路。
     res = client.request(method.upper(), path, json=payload)
     assert res.status_code == 401, f"{method.upper()} {path} 没上门"
     assert res.json() == {"detail": "未登录或登录已过期"}
@@ -232,10 +233,15 @@ def test_every_business_endpoint_rejects_a_missing_token(method, path):
 def test_health_stays_open():
     """/api/health 是运维探针，spec 3.2 明写不上门。
 
-    这条看着像"没测东西"，其实测的是"没把门多加到 health 上"——
-    它是项目记忆与现有判据里那条基线计数（活文档 4 / 父块 4 / 子块 10，2026-10-07 重钉）唯一的自动入口。
-    health 依赖 get_config/get_db/get_vector_store 三格，make_isolation_client 全部覆盖，
-    所以这里能硬断言 200，而不是"只要不是 401 就行"。
+    这条判据的两格牙：health 一旦被人误上门 → 401 当场红；`make_isolation_client`
+    覆盖的 get_config / get_db / get_vector_store 三格少一格 → AttributeError → 500 红。
+    所以这里是硬断言 200，不是"只要不是 401 就行"。
+
+    它**不**校验健康检查里的数字：本条走的是替身，`OwnerAwareDB.count_documents()` 恒回
+    `len(self.rows)`=1（见上面那格）、`FakeVectorStore.collection_counts()` 恒回
+    `{"parent": 2, "child": 7}`（tests/fakes.py）。活文档 4 / 父块 4 / 子块 10 那条基线计数
+    的常驻入口是 `tests/test_chroma_data.py`——注意它两条都在 `migration` 组里，默认门
+    （`addopts = -m "not migration"`）不跑它，要显式 `-m migration` 且它会打开真 Chroma。
     """
     client, _ = make_isolation_client(gate=False)
     assert client.get("/api/health").status_code == 200
@@ -248,6 +254,9 @@ def test_asking_with_a_foreign_parent_id_is_404():
         "session_id": "s1", "question": "q", "parent_ids": ["甲.txt_parent_0"]})
     assert res.status_code == 404
     assert res.json() == {"detail": "文档块不存在或已被删除"}
+    # 状态码 + 文案还不够：模块 docstring 主张"钉的是端点把 user.id 传下去了"，
+    # 所以这里也得像上面 documents 越权那条一样断言转发本身（评审 Minor 5）。
+    assert ("owned_parent_ids", INTRUDER) in db.calls
 
 
 def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
@@ -262,3 +271,24 @@ def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
         "session_id": "s1", "question": "q", "parent_ids": ["甲.txt_parent_0"]})
     assert res.status_code == 404
     assert res.json() == {"detail": "文档块不存在或已被删除"}
+    assert ("owned_parent_ids", INTRUDER) in db.calls
+
+
+def test_owner_asking_the_same_chunk_twice_in_one_question_is_not_a_404():
+    """一次提问里同一个块出现两次是合法入参：比较式**两侧**都得按去重后的长度算。
+
+    `api/chat.py` 那句 `len(owned) != len(list(dict.fromkeys(parent_ids)))` 若把右边写成
+    `len(parent_ids)`（不去重），`owned_parent_ids` 按入参去重只回 1 个、右边数出 2 个，
+    "同一个人问同一个块两次"就会被误判 404——而本文件其余各条传的都是不重复的池，
+    全套判据一条都不红（评审 Minor 7，与 Task 4 的 F11 同一类）。
+
+    这条钉的是**去重口径**，不是"有没有这道检查"：把那个 `if` 整块删掉它照样绿，
+    变红的是上面两条越权判据。
+    """
+    db = OwnerAwareDB()
+    client, _ = make_isolation_client(db, user=FakeUser(user_id=OWNER))
+    res = client.post("/api/chat", json={
+        "session_id": "s1", "question": "q",
+        "parent_ids": ["甲.txt_parent_0", "甲.txt_parent_0"]})
+    assert res.status_code == 200, res.text
+    assert res.json()["mode"] == "rag"
