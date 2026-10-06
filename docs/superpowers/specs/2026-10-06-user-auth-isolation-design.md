@@ -223,6 +223,8 @@ chat 两个端点在碰 `rag` 之前先 `require_llm_config(user)`：缺 `api_ke
 
 `App.vue:114-118` 的 `.session-debug` 块整块删除（含 `<code class="session-value">` 与"换一个 session_id"按钮）。原位置 `.user-rail`：头像 + 昵称 + ⚙ 设置按钮（`aria-label="打开设置"`）。
 
+**但"换一个新的 session_id"这个能力不能跟着按钮一起删**。`App.vue:50` 的注释写明现有行为与归档 `app.py` 等价：**清空对话后会换一个新 id**。按钮没了，这个换 id 的动作必须留在 `handleClear`（或 `useAuth.clearHistory`）里，否则"清空对话"会退化成"清空但不换 id"，与归档行为不一致，而且旧 `chat_history` 行还挂在同一个 id 上——将来任何"重新拉历史"的路径都会把刚清空的对话捞回来。判据：清空后 `localStorage.session_id` 的值必须与清空前不同，且不等于历史里任何一条的 id。
+
 `StatusBar.vue:19` 那个显示 session 前 8 位的 `.session-chip` **一并去掉**——否则 session_id 只是从左下挪到了顶上，等于没删。
 
 ### 5.5 新组件
