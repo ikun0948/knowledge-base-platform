@@ -2247,6 +2247,8 @@ def test_stream_endpoint_refuses_a_foreign_parent_id_before_the_first_frame():
 
 > Task 4 里那个 `make_client` 名字在本 Task 之后要同时服务 documents 与 chat/history 两组路径，改成 **`make_isolation_client(db=None, user=FakeUser(user_id=OWNER), rag=None, gate=True)`**：`db` 缺省时给一个 `OwnerAwareDB()`，`rag` 缺省时给 `FakeRAG()`，并多覆盖 `get_rag_system` 与 `get_config` 两格（后者是给 `test_health_stays_open` 用的：`FakeConfig` 里那个 `CHROMA_PERSIST_DIR` 足够 health 拼出响应）。改名与补格都发生在 **Step 5**——Step 1 先按新名字写判据，这样红因始终是"东西不存在"，而不是"测试写了一半"。
 
+> **2026-10-06 修订（开工前核过 `/api/health` 的真实取数）**：health 那一格读的是 `db.count_documents()` 与 `vector_store.collection_counts()`（`main.py:85-96`），**不是** `get_all_documents(user_id=...)`——`count_documents` 在 Task 4 里被有意留在"不加归属"那一侧。所以 `test_health_stays_open` 落地时，`OwnerAwareDB` **必须补一个 `count_documents()`**（返回 `len(self.rows)` 就够），否则这条判据红在 `AttributeError` 而不是红在"health 上门了"。`FakeVectorStore` 那边 `collection_counts` 已经有了，不用新加。
+
 - [ ] **Step 2: 跑红**
 
 ```bash
@@ -2416,6 +2418,8 @@ cd backend && python -m pytest -m live -q
 cd backend && python -m pytest -q
 ```
 预期：在 Task 4 之后那条汇总数上 **+8**（401 参数化 4→8、`test_health_stays_open`、问答越权 2、白名单断言 1）。**别抄这里的加法式，只抄汇总行**；硬性要求仍是 0 failed、0 skipped（`login_token` 那条 skip 只在 `DEFAULT_USER_PASSWORD` 为空时出现，而 Step 6 之前必须先把 `.env` 那行设上）。
+
+> **2026-10-06 修订（本 Task 开工前按 Global Constraints 的绿灯口径改判）**：上面那句"0 skipped"是 **Task 8 的口径**，在 Task 5 不可达——Task 1–7 期间按纪律 **:8000 上没有服务**（embedding 按进程加载，本机同时只准一份 uvicorn），而 Step 6 改的正是 `test_live_stream.py:34/:64` 这两条，它们由该文件的 `server` 夹具（`:22`）在无服务时 **skip**。所以本 Task 的正确绿灯是：**`0 failed` 硬性 + 恰好 2 条 skip，且必须是那两条**；`pytest -q` 期望 **256 passed / 2 skipped / 2 deselected**（248 + 8）。`login_token()` 引入的是**第三条** skip 的可能性（`DEFAULT_USER_PASSWORD` 为空），本机 `.env` 已设值（`grep -c "^DEFAULT_USER_PASSWORD=." = 1`），出现第三条就是回归，要当场查。Step 6 那两条真流式判据的实跑验证顺延到 Task 8。
 
 ```bash
 cd D:/知识库平台-前后端分离 && git add backend/api/chat.py backend/api/history.py \
