@@ -350,3 +350,25 @@ def test_stream_variant_uses_the_same_reverse_lookup():
     list(rag.chat_with_documents_stream("问", ["甲_p_0"], "s1"))
     assert db.saved[-1]["document_ids"] == "7"
     assert db.reverse_calls == ["甲_p_0"]
+
+
+# --- 坑 9：模型名来自 Config，不留第二处字面量 ---
+
+def test_answer_llm_takes_the_model_name_from_config(monkeypatch):
+    """真构造会建 ChatOpenAI 客户端，这里把它换成记录器：只验"配置值原样传下去"。
+
+    钉这条的理由是历史事故——2026-10-03 换可用模型时只改了压缩那处，
+    答题仍在调旧模型，不报错、只是行为不对。两处都从 config 取值就不可能再分叉。
+    """
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr("core.rag_system.ChatOpenAI", Recorder)
+    config = SimpleNamespace(OPENAI_API_KEY="k", OPENAI_BASE_URL="u", LLM_MODEL="probe-model")
+
+    RAGSystem(config, None, None)
+
+    assert seen["model"] == "probe-model"

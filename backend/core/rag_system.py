@@ -23,11 +23,11 @@ class RAGSystem:
         self.db_manager = db_manager
         self.vector_store = vector_store
 
-        # 初始化LLM（通义千问，兼容OpenAI接口格式）；模型名硬编码，spec 第七节坑 9 本次不动
+        # 初始化LLM（通义千问，兼容OpenAI接口格式）；模型名与 vector_store 的压缩模型同源（坑 9）
         self.llm = ChatOpenAI(
             api_key=config.OPENAI_API_KEY,
             base_url=config.OPENAI_BASE_URL,
-            model="qwen3.7-flash",
+            model=config.LLM_MODEL,
             temperature=0.7,
             streaming=True,
         )

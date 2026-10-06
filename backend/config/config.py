@@ -29,6 +29,9 @@ def _chroma_persist_dir() -> str:
 class Config:
     OPENAI_API_KEY = os.getenv("DASHSCOPE_API_KEY")
     OPENAI_BASE_URL = os.getenv("DASHSCOPE_BASE_URL")
+    # 坑 9：答题与压缩两处共用这一个值。属调参键（同 TOP_K/CHUNK_SIZE），缺配置走默认，
+    # 不像 CHROMA_PERSIST_DIR 那样缺键就炸——换模型不该变成起不动服务。
+    LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.7-flash")
     LOCAL_MODEL_PATH = os.getenv("LOCAL_MODEL_PATH")
 
     MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")

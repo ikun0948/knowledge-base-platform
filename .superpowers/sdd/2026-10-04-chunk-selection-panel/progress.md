@@ -205,3 +205,34 @@ Task 3 末 `useChat.js` 的 payload 键已是 `parent_ids`，而 `App.vue` 仍�
 - 收尾遗留（本轮新增，不进实现）：① 弹窗删除后引用条的 `deleted` 态仍不持久化（旧遗留①的同一件事，
   触发点换了不影响结论）；② `#块序号` 只在 `parent_id` 形如 `…_parent_N` 时给出，
   历史脏数据退成纯文件名后同文档多块会在卡面上撞名（靠 title 才能分辨）。
+
+## 2026-10-06 追加：坑 9——模型名进 `.env`（bounded 路径，TDD）
+
+- 需求出处：spec 第七节坑 9。原文只说"模型名硬编码在两处，应进 `.env`"，
+  落点确实是 `core/rag_system.py`（答题）与 `core/vector_store.py`（上下文压缩）两个 `ChatOpenAI(...)` 构造点。
+- 路径分类：**bounded**——改的是已在仓库里的两条构造链，无新子系统。短设计在对话里过，用户回
+  "确认，按默认值策略做" 才动手。
+- 八项决策里最要紧的一条是**缺键策略**：
+  - 项目自己的约定是"基础设施键缺了就炸（`CHROMA_PERSIST_DIR` 有绝对路径守卫），调参键缺了走默认"
+    （`TOP_K` / `CHUNK_SIZE` / `CHUNK_OVERLAP` 都是 `os.getenv(..., 默认)`）。
+  - 模型名属调参键 ⇒ `LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.7-flash")`。
+    换成必需键的话，"换模型"会变成"服务起不来"，代价不对。
+- RED（5 红 / 6 绿，红的正好是五条判据）：
+  `test_llm_model_is_read_from_the_environment`、`test_llm_model_falls_back_to_the_default_without_the_key`、
+  `test_config_class_exposes_only_sanctioned_attrs`、`test_answer_llm_takes_the_model_name_from_config`、
+  `test_compressor_llm_takes_the_model_name_from_config`。
+  最后一条当时报的是 `assert 'qwen3.7-flash' == 'probe-model'`——字面量被抓了个正着。
+- GREEN：新增 4 条测试（第 5 条红的是既有的 `SANCTIONED_ATTRS` 钉，它同时是"新属性必须被承认"的守卫）。
+  后端门禁 **176 passed / 1 deselected**（基线 172 + 新增 4；不是 +5，别报错）。
+- 两处构造点的判据都用 monkeypatch 替掉 `ChatOpenAI` 抓 `model=` 实参：
+  `VectorStore.__new__` 那条路走不通（构造会加载 0.6B embedding），所以 embedding / Chroma /
+  `LLMChainExtractor` 全得替掉，只留"传进去的模型名"这一件事在被测。
+- 上线：`.env` 追加 `LLM_MODEL=qwen3.7-flash`（只 `grep -c` 验证键在，**没打印过内容**）。
+  `core/*.py` 改动必须重启 uvicorn 才生效——杀掉改代码之前起的那个 PID，只跑一份新的。
+  重启后 `/api/health` **9 / 11 / 22**、live 打一枪 `POST /api/chat/stream` 出词正常
+  （`meta`→`token`×2→`done`），运行日志零 ERROR/Traceback。
+- **踩到的坑（与坑 9 无关，但值得记）**：Git Bash 里 `curl -d '{"question":"中文…"}'` 的中文按 cp936 出门，
+  后端 JSON 解析直接 400（`"error parsing the body"`）。改成 Python 以 `encoding="utf-8"` 写一个临时
+  payload 文件、`--data @file` 才通。老话再说一遍：**中文别走 shell 参数**。
+- 收尾遗留（本轮新增）：`知识库平台开发文档.md:155/339/394` 还写着旧模型名 `qwen3.8-max` 和
+  "硬编码两处"的表述——那是坑 9 修完之前的旧事实，属文档漂移，未在本轮改。

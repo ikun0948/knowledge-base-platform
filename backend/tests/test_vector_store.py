@@ -106,3 +106,29 @@ def test_retriever_without_pool_carries_no_filter(store):
     # 纯对话链根本不调它，但空池必须"不加 filter"而不是"filter 命中零条"
     assert "filter" not in store.create_retriever([])
     assert "filter" not in store.create_retriever()
+
+
+def test_compressor_llm_takes_the_model_name_from_config(monkeypatch):
+    """坑 9 的第二处：压缩用的 LLM 必须与答题用同一个来源。
+
+    embedding/Chroma 全部替换掉——真构造会加载 0.6B 模型，测试里绝不能触发。
+    """
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    config = SimpleNamespace(LOCAL_MODEL_PATH="p", CHROMA_PERSIST_DIR="c",
+                             OPENAI_API_KEY="k", OPENAI_BASE_URL="u", LLM_MODEL="probe-model")
+    monkeypatch.setattr("core.vector_store.ChatOpenAI", Recorder)
+    monkeypatch.setattr("core.vector_store.HuggingFaceEmbeddings", lambda **kw: object())
+    monkeypatch.setattr("core.vector_store.Chroma", lambda **kw: object())
+    monkeypatch.setattr("core.vector_store.chromadb",
+                        SimpleNamespace(PersistentClient=lambda **kw: object()))
+    monkeypatch.setattr("core.vector_store.LLMChainExtractor",
+                        SimpleNamespace(from_llm=lambda llm: object()))
+
+    VectorStore(config)
+
+    assert seen["model"] == "probe-model"

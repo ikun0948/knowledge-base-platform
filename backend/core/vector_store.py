@@ -38,11 +38,11 @@ class VectorStore:
             embedding_function=self.embeddingd
         )
 
-        # 初始化大模型
+        # 初始化大模型（上下文压缩用；模型名与 rag_system 的答题模型同源，坑 9）
         self.llm = ChatOpenAI(
             api_key=self.config.OPENAI_API_KEY,
             base_url=self.config.OPENAI_BASE_URL,
-            model="qwen3.7-flash",
+            model=self.config.LLM_MODEL,
             temperature=0,
         )
 

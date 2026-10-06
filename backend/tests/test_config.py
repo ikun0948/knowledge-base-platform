@@ -12,6 +12,7 @@ CONFIG_SRC = Path(config_module.__file__)
 SANCTIONED_ATTRS = {
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
+    "LLM_MODEL",
     "LOCAL_MODEL_PATH",
     "MYSQL_HOST",
     "MYSQL_PORT",
@@ -46,13 +47,13 @@ def _run_import(cwd, python_path, code="import config.config", **extra_env):
     )
 
 
-def _run_import_with_env_file(tmp_path, dotenv_text):
+def _run_import_with_env_file(tmp_path, dotenv_text, code="import config.config"):
     """用当前 config.py 源码加受控 .env 搭一个临时 backend/，改写真实 .env 会牵连配置文件。"""
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "__init__.py").write_text("", encoding="utf-8")
     shutil.copyfile(CONFIG_SRC, tmp_path / "config" / "config.py")
     (tmp_path / ".env").write_text(dotenv_text, encoding="utf-8")
-    return _run_import(tmp_path, tmp_path)
+    return _run_import(tmp_path, tmp_path, code)
 
 
 def test_env_file_is_located_by_file_position_not_cwd(tmp_path):
@@ -89,6 +90,29 @@ def test_relative_chroma_dir_in_env_file_is_rejected(tmp_path):
     result = _run_import_with_env_file(tmp_path, "DASHSCOPE_API_KEY=x\nCHROMA_PERSIST_DIR=data/chroma_db\n")
     assert result.returncode != 0, result.stdout
     assert "CHROMA_PERSIST_DIR 必须是绝对路径" in result.stderr
+
+
+def test_llm_model_is_read_from_the_environment():
+    """坑 9：模型名进配置。改 .env 一个键就要能同时换掉答题与压缩两处，代码里不许再留字面量。
+
+    依赖 load_dotenv 默认不覆盖已设置的进程环境变量（与相对路径那条守卫同一个前提）。
+    """
+    result = _run_import(
+        BACKEND_DIR, BACKEND_DIR,
+        "from config.config import Config; print(Config.LLM_MODEL)",
+        LLM_MODEL="probe-model",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "probe-model"
+
+
+def test_llm_model_falls_back_to_the_default_without_the_key(tmp_path):
+    """缺键只是用默认值，不是把后端起不来：模型名属调参键，与 TOP_K/CHUNK_SIZE 同档。"""
+    dotenv = f"DASHSCOPE_API_KEY=x\nCHROMA_PERSIST_DIR={tmp_path / 'chroma'}\n"
+    result = _run_import_with_env_file(
+        tmp_path, dotenv, "from config.config import Config; print(Config.LLM_MODEL)")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "qwen3.7-flash"
 
 
 def test_config_class_exposes_only_sanctioned_attrs():
