@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 
-from core.security import hash_password, hash_token, new_token, verify_password
+from core.security import (ALGORITHM, PBKDF2_ITERATIONS, hash_password, hash_token,
+                           new_token, verify_password)
 from deps import bearer_token, get_config, get_current_user, get_db
 from schemas.auth import AuthOut, LoginIn, MeOut, RegisterIn, UserOut
 
@@ -20,9 +21,11 @@ logger = logging.getLogger("kb.api.auth")
 LOGIN_FAILED = "账号或密码不正确"
 ACCOUNT_TAKEN = "该账号已注册"
 
-# 账号不存在时也走一次哈希比较，让"没这个账号"与"密码错"在耗时上不可分辨。
-# 迭代数给 1000 就够：这条路径要的是"确实花时间算过"，不是"算满 39 万次"。
-_DUMMY_HASH = "pbkdf2_sha256$1000$" + "0" * 32 + "$" + "0" * 64
+# 账号不存在时也要做一次同价的哈希比较：耗时由 stored 串里的迭代数决定，
+# 所以垫片的迭代数必须与真行一致，否则"没这个账号"会明显更快（spec 3.5）。
+_DUMMY_SALT_HEX = "0" * 32
+_DUMMY_DIGEST_HEX = "0" * 64
+_DUMMY_HASH = f"{ALGORITHM}${PBKDF2_ITERATIONS}${_DUMMY_SALT_HEX}${_DUMMY_DIGEST_HEX}"
 
 
 def default_nickname(identifier: str, identifier_type: str) -> str:

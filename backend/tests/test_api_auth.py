@@ -11,6 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+from api.auth import _DUMMY_HASH
+from core.security import ALGORITHM, PBKDF2_ITERATIONS, hash_password, verify_password
 from deps import get_config, get_db
 from main import create_app
 from schemas.auth import normalize_identifier
@@ -169,6 +171,33 @@ def test_unknown_account_and_wrong_password_are_byte_identical():
     assert unknown.content == known.content
 
 
+def test_dummy_hash_never_verifies_any_password():
+    """垫片的另一半判据是**恒假**：它那 64 个 0 的摘要不可能被任何口令算出来。
+
+    这条不是洁癖——`login` 里 `user is None` 那道滤条件一旦被人去掉或写反，
+    垫片就是唯一的门；而它要是在某个口令上返回 True，未知账号就登录成功了。
+    """
+    for password in ("", "hunter2-pass", "wrong-pass", "0" * 32, "0" * 64, "pbkdf2_sha256"):
+        assert verify_password(password, _DUMMY_HASH) is False, "垫片被验过了：未知账号会登录成功"
+
+
+def test_dummy_hash_is_the_same_shape_and_cost_as_a_real_row():
+    """耗时面的钉子：`verify_password` 的迭代数取自 stored 串自己（core/security.py:30）。
+
+    所以垫片写成 `…$1000$…` 时"没这个账号"只算 1000 轮、"密码错"算 390000 轮，
+    实测差约 200 倍——注释里那句"不可分辨"就是假话。这条钉住四段形状与迭代数同价，
+    谁再把它改回小数字就撞红。
+    """
+    dummy = _DUMMY_HASH.split("$")
+    real = hash_password("shape-probe").split("$")
+    assert len(dummy) == 4
+    assert dummy[0] == real[0] == ALGORITHM
+    assert dummy[1] == real[1] == str(PBKDF2_ITERATIONS)
+    assert len(dummy[2]) == len(real[2]) == 32
+    assert len(dummy[3]) == len(real[3]) == 64
+    assert bytes.fromhex(dummy[2]) and bytes.fromhex(dummy[3]), "hex 段解不开就等于验时静默 False"
+
+
 def test_me_returns_the_user_and_never_the_password_hash():
     client, db = make_client()
     token = register(client).json()["token"]
@@ -212,6 +241,37 @@ def test_logout_revokes_the_same_token_immediately():
     assert client.post("/api/auth/logout", headers=headers).status_code == 204
     assert client.get("/api/auth/me", headers=headers).status_code == 401
     assert client.post("/api/auth/logout", headers=headers).status_code == 401
+
+
+def test_logout_revokes_only_the_token_in_hand():
+    """同一用户多枚令牌并存时，登出只吊销手里这枚。
+
+    今天 `logout` 吊销的是**手里那枚令牌原文**的哈希、`delete_token` 只按 token_hash 过滤，这是对
+    的；但"改成按 user_id 清掉全部会话"（很常见的需求变更）今天撞不红任何测。这条同时钉住
+    两件事：多登录不互踢（产品语义），以及吊销的粒度是**一枚票**而不是一个账号。
+    """
+    client, db = make_client()
+    first = register(client).json()["token"]
+    second = client.post("/api/auth/login", json={"identifier": "a@b.com",
+                                                  "password": "hunter2-pass"}).json()["token"]
+    assert first != second
+    assert len(db.tokens) == 2, "两次登录各自留一行：谁也不踢谁"
+    assert client.post("/api/auth/logout",
+                       headers={"Authorization": f"Bearer {second}"}).status_code == 204
+    assert client.get("/api/auth/me",
+                      headers={"Authorization": f"Bearer {second}"}).status_code == 401
+    kept = client.get("/api/auth/me", headers={"Authorization": f"Bearer {first}"})
+    assert kept.status_code == 200
+    assert kept.json()["user"]["identifier"] == "a@b.com"
+    assert len(db.tokens) == 1, "登出不该把没交出来的那枚一起清掉"
+
+    # 204 是**空体且不带 content-type**：光钉状态码挡不住 Task 7 在 logout 里 .json()——
+    # 那会当场 SyntaxError。与 200 那格并排钉，形状差才是前端要拿到的事实。
+    gone = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {first}"})
+    assert gone.status_code == 204
+    assert gone.content == b""
+    assert "content-type" not in gone.headers
+    assert kept.content != b"" and "content-type" in kept.headers
 
 
 def test_logout_without_a_token_is_401_not_silently_ok():
