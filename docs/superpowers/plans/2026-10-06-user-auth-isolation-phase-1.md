@@ -3664,6 +3664,8 @@ cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000
 1. `迁移完成: {...}`（`core/migrations.py` 的 `logger.info`，字典里 `columns_added` 首轮含 `('documents','user_id')`、`documents_assigned` 首轮为 9；**第二次重启应当是 `columns_added: []`、`documents_assigned: 0`**——幂等的活体证据）。
 
 > **2026-10-06 修订（上面这条按仓库实际改判）**：字典键名是 **`documents_claimed`**（`core/migrations.py` 的 `run_migrations` 返回），`documents_assigned` 这个名称在本计划里从未落地过，别按它找。另外本机的那一列与 `idx_documents_user_id` 都在 Task 1 执行期就落到真实 MySQL 了（见 Task 1 Step 9 处的修订），所以**首轮**日志就应当是 `columns_added: []`、`indexes_added: []`——这条测的"首轮非空"预期在本机不可达，幂等的活体证据改由 `documents_claimed: 9 → 0`（第一次重启归户、第二次重启零行）提供。字典共 5 个键：`columns_added` / `indexes_added` / `default_user_id` / `documents_claimed` / `vectors_stamped`。
+
+> **2026-10-07 修订（迁移首轮已被 Task 3 消费掉：Task 8 这一格只会是 0/0，别去复现首轮）**：真实首轮发生在 **Task 3 Step 8 的手工确认**，本机日志为 `{'columns_added': [], 'indexes_added': [], 'default_user_id': 30, 'documents_claimed': 13, 'vectors_stamped': 14}`，重启一次后 `documents_claimed: 0, vectors_stamped: 0`（这条原文已直查复核：`users` 1 行 id=30、`documents` 13 行全部 `user_id=30`、`user_id IS NULL` 0 行）。所以 **Task 8 的每一次重启都只能拿到 `documents_claimed: 0` / `vectors_stamped: 0`**，那不是"迁移没跑"，而是幂等已经生效；首轮那两格的证据**引台账里 Task 3 那条**，不许为了让日志重新出现 13 而去手工 `UPDATE documents SET user_id = NULL`——那等于删改既有数据（Global Constraints 第一条）。同一个状态也是默认门里 `test_live_database.py` 那两条归户断言（含 `owned == 13`）的前置条件：**没跑过一轮启动迁移的机器上，`python -m pytest -q` 会为前置条件而红**，与新代码无关，这条要在台账里写明。
 2. 没有 `Traceback`、没有 `数据库连接失败`。
 
 ```bash
@@ -4004,8 +4006,7 @@ print('total_users', conn.execute(text('SELECT COUNT(*) FROM users')).scalar())
 - 五条门的实数：`pytest -q` = **N passed / 0 skipped / 1 deselected**（基线 176；**2026-10-07 无服务实跑 224 passed / 2 skipped / 1 deselected**，Task 8 这一轮服务在跑，那 2 条 `test_live_stream` 应当转为 pass ⇒ 预期 **226 / 0 / 1**）；
   `-m live` = **N passed**（基线 14）；`-m migration` = **2 passed**（基线 1）；
   `npm test` = **N passed / 11 文件**（基线 84/7）；`npm run build` exit 0（js/css 字节数照抄一轮）。
-- 迁移首轮与次轮：`迁移完成: {columns_added: [...], documents_claimed: 13, vectors_stamped: 14}` →
-  重启后 `{columns_added: [], documents_claimed: 0, ...}`。**把两轮的原始日志各贴一行**。
+- 迁移：**首轮证据在 Task 3**（`documents_claimed: 13, vectors_stamped: 14`，日志原文见 Task 3 那一节）；Task 8 的重启只能拿到 `documents_claimed: 0, vectors_stamped: 0`，**把 Task 8 这一轮的原始日志贴一行并注明"首轮已被 Task 3 消费"**，不要为复现首轮去清 `user_id`。
   > 2026-10-06 修订：键名按仓库实为 `documents_claimed`（外加 `indexes_added`，共 5 键）；本机首轮 `columns_added: []`、`indexes_added: []`（列与索引在 Task 1 就落好了）。**照实抄日志**，不要为了对上原文去改历史——台账的价值在于它是量测，不是因为它对齐了计划。
   > 2026-10-07 修订：原文这两格写的是 `documents_assigned: 9`。键名按上面那条勘误，**数字**随基线重钉改成 **13**（= 4 活 + 9 隐存的物理行），`vectors_stamped` 的本机实数预期是 **14**（4 父块向量 + 10 子块向量，直查得来）。首轮就报 `vectors_stamped: 0` 说明 Step 3 那条顺序修订没落地，按失败处理。
 - HTTP/SQL 判据：**照抄脚本末尾那一行 `全部判据通过：N 条`**（计划写就时 N = 31：① 组 for 循环实发 8 条 + try 内其余 22 条 + 收尾基线 1 条），
