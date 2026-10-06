@@ -1243,8 +1243,14 @@ describe('ChunkCard', () => {
 ```
 
 Run: `cd frontend && npm test` → Expected: FAIL — 找不到 `ChunkCard.vue`。
+红在文件级（同 Task 3 Step 5）：`Test Files  1 failed | 6 passed (7)`、`Tests  60 passed (60)`。
 
 - [ ] **Step 2: 实现 `ChunkCard.vue`**
+
+> **执行期回写（DOM 顺序 = 视觉位置）**：计划原本把红叉写在 `.chunk-card-body` **之前**。
+> `.chunk-card` 是 `display: flex` 的横向容器，第一个孩子会落在**左上角**——而需求要的是**右上角**。
+> jsdom 不排版，所以 Step 1 那五条判据对"写在前面"照样全绿：位置错只能靠浏览器量测发现。
+> 落地版把本体排在前、✕ 排在后，`align-self: flex-start` + `margin: 6px 6px 0 0` 正好把它钉在右上。
 
 ```vue
 <script setup>
@@ -1260,15 +1266,6 @@ const emit = defineEmits(['toggle', 'remove'])
 
 <template>
   <div class="chunk-card" :class="{ 'chunk-card-selected': props.selected }">
-    <!-- stop 是必需的：红叉在卡片本体内部，不拦一下会同时触发 toggle，看起来像"取消两次=没变" -->
-    <button
-      v-if="props.removable"
-      class="chunk-remove"
-      type="button"
-      aria-label="取消选择"
-      title="取消选择这个文档块"
-      @click.stop="emit('remove', props.chunk.parent_id)"
-    >✕</button>
     <button class="chunk-card-body" type="button" @click="emit('toggle', props.chunk)">
       <span class="chunk-title">
         {{ docLabel(props.chunk) }}
@@ -1277,6 +1274,16 @@ const emit = defineEmits(['toggle', 'remove'])
       <span class="chunk-snippet">{{ props.chunk.snippet }}</span>
       <span class="chunk-meta">块 {{ props.chunk.parent_id }} · {{ props.chunk.child_count }} 个子块</span>
     </button>
+    <!-- 红叉排在卡片本体之后：.chunk-card 是横向 flex，第二个孩子才落在右上角（写在前面会顶到左上角）。
+         stop 也是必需的：红叉嵌在同一张卡片里，不拦住冒泡就会连带触发 toggle，看起来像"取消两次=没变"。 -->
+    <button
+      v-if="props.removable"
+      class="chunk-remove"
+      type="button"
+      aria-label="取消选择"
+      title="取消选择这个文档块"
+      @click.stop="emit('remove', props.chunk.parent_id)"
+    >✕</button>
   </div>
 </template>
 ```
@@ -1490,13 +1497,66 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 - [ ] **Step 5: 跑弹窗测试并修接线问题**
 
 Run: `cd frontend && npm test`
-Expected: 弹窗用例全绿。两个可能的坑提前说清：① `search()` 是 async，`onMounted` 触发的那一次要等 microtask 落地，测试里 `await Promise.resolve()`（必要时两轮）就是等它——别为了过测试把 `busy` 分支删掉；② Esc 走的是 `window` 上的监听，所以判据从 `window.dispatchEvent` 派发、并在用例末尾 `unmount()`，否则监听会跨用例存活。
+Expected: 弹窗用例全绿。
+
+> **执行期回写（实测四条红，两类原因）**
+>
+> ① **`await Promise.resolve()` 一轮不够。** 计划里"点结果卡片""带角标""零命中"三条各写了一轮、
+> "请求失败"写了两轮，实测全红——`await listChunks(...)` 的 mock promise 落地占一轮 microtask，
+> Vue 调度器的渲染排队又是一轮，DOM 里那时还没有卡片。"零命中"那条收到的实际文案是 `搜索中…`
+> （busy 还挂着）。四条 DOM 判据统一改 `await flushPromises()`（`@vue/test-utils` 导出，
+> 走一个 `setTimeout(0)` 把 microtask 队列排空）；只验"调用过什么"的那条不用等。
+>
+> ② **Esc 那条的后半是假判据。** `wrapper.unmount()` 会把 VTU 的事件记录一起清掉，
+> 之后再读 `wrapper.emitted('close')` 拿到 `undefined`，报的是
+> `AssertionError: Target cannot be null or undefined`——而不是"监听没摘掉"这个真信号。
+> "卸载后不再响应"必须用一个存活于卸载之外的观察点：
+>
+> ```js
+> it('Esc 关闭，卸载后不再抢键盘', async () => {
+>   const closed = []
+>   const shown = ref(true)
+>   const Host = {
+>     setup() {
+>       return () => (shown.value
+>         ? h(ChunkPickerModal, { selectedIds: [], error: '', onClose: () => closed.push(1) })
+>         : null)
+>     },
+>   }
+>   mount(Host)
+>   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+>   expect(closed).toHaveLength(1)
+>
+>   shown.value = false
+>   await nextTick()   // 让 onUnmounted 跑掉
+>   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+>   expect(closed).toHaveLength(1)
+> })
+> ```
+>
+> 宿主用 `h()` 而不是字符串 `template`：vitest 这边解析到的是 Vue 运行时构建，没有模板编译器。
+> 别为了过测试把 `busy` 分支删掉——它挡的是"搜索中"与"没有匹配"两种状态的岔路。
 
 - [ ] **Step 6: `DocumentPanel` 知识库区重写 + `useDocuments` 瘦身 + 删 `DocCard`**
 
 `frontend/src/composables/useDocuments.js`：删 `const selectedIds = ref([])`、`toggleSelect` 函数、`refresh` 里那两行失效摘勾（连同它的注释）、return 里的 `selectedIds` 与 `toggleSelect`。**`docLabel` 留在原位**（M-F2 的唯一出处，`ReferenceList` 也在吃）。
 
 删除文件：`git rm frontend/src/components/DocCard.vue`。
+
+> **执行期回写（三处连带）**
+>
+> 1. **`documents` prop 删掉，不保留。** 计划原文在 props 与 App 接线里都留着它，但新模板通体没有一处
+>    读 `props.documents`（文档总数由 `docCount` 那条 metric 说，弹窗里自己会搜）——留一个没人吃的
+>    必填 prop 只会让 App 继续传一个哑参数。落地版 props 是：
+>    `selectedChunks / selectionError / queue / listError / docCount / clearing`。
+>    App.vue 仍解构 `documents`，那是 `MessageList :has-documents` 在吃，别跟着删。
+> 2. **`layout.css` 里退役的不止三条规则**：`.doc-list / .doc-card / .doc-card:hover / .doc-card-checked`
+>    之外还有 `.doc-name`、`.doc-meta` 两条只服务 DocCard。判据是 `grep -rn "doc-card\|doc-list" src/`，
+>    落地时把口径扩到 `grep -rn "DocCard\|doc-card\|doc-list\|doc-name\|doc-meta" src/ tests/`，
+>    确认只剩 `layout.css` 自身才动手。
+> 3. **`--shadow-card-hover` 变成死 token**：它唯一的使用者是 `.doc-card:hover`。删掉后
+>    `grep -rn "shadow-card-hover" src/` 必须 0 命中——G-4 的门只查字面量，不查没用的 token，
+>    所以这一条得手动扫。
 
 `frontend/src/components/DocumentPanel.vue` 全文替换为：
 
@@ -1506,7 +1566,6 @@ import ChunkCard from './ChunkCard.vue'
 import FileUploader from './FileUploader.vue'
 
 const props = defineProps({
-  documents: { type: Array, required: true },
   selectedChunks: { type: Array, required: true },
   selectionError: { type: String, default: '' },
   queue: { type: Array, required: true },
@@ -1514,6 +1573,8 @@ const props = defineProps({
   docCount: { type: Number, required: true },
   clearing: { type: Boolean, default: false },
 })
+// deselect-chunk 是"取消选择"（本地动作，不发请求）；
+// App.vue 里 MessageList 那条 remove-chunk 才是"删数据"（不可逆，要过 confirm）——两个名字不能混。
 const emit = defineEmits(['enqueue', 'retry', 'dismiss', 'clear', 'open-picker', 'deselect-chunk'])
 </script>
 
@@ -1591,6 +1652,13 @@ onMounted(async () => {
   await restore(sessionId.value)
 })
 ```
+
+> **执行期补一条（第五处改动）**：`handleRemoveChunk` 在 `deleteChunk` 成功后要顺手 `remove(parentId)`。
+> spec 六节"已知遗留"写的是"死块要下次 hydrate 才剪"，那是针对**别处**发生的删除（另一个标签页、
+> 文档被隐存）；而引用条上的 🗑 是**此刻本地亲手删的**，这块的死是确定事实——不摘就是面板上挂一张
+> 指向已消失内容的卡片、下一次问答还带一个必空召回的 id，白等一次刷新。
+> `parent_id` 在全库是唯一键（`ParentChunk.parent_id` 带 UNIQUE），所以按它摘正好，不会误伤别的文档。
+> 顺带改掉那条注释里对 `selectedIds` 的引用：失效摘勾那套机制随 DocCard 一起退役了。
 
 ```js
 async function handleSend(text) {
@@ -1708,6 +1776,15 @@ Expected: 只剩 `src/styles/layout.css` 自身（`DocCard.vue` 已 `git rm`）�
 
 `.picker-results` 是 `<ul>`，`li` 里放 `.chunk-card`：在 `.picker-results li` 上加 `display: flex;` 让卡片随栏宽。追加到上面块的末尾。
 
+> **执行期回写（落地版比计划多两处，都是为了不被排版咬）**
+> - `.picker-open` 补 `align-self: flex-start;`：`.side-panel-inner` 是 `flex-direction: column`，
+>   按钮默认被拉成整行宽，"➕ 选择文档块"会顶满侧栏，与旁边 `metric` 的观感不一致。
+> - `.chunk-card-body` 补 `min-width: 0;`：flex 子项的默认最小宽度是 `auto`，长 `parent_id`
+>   （`手册 上.pdf_parent_0` 这种带空格/中文的）在 `word-break: break-all` 下也照样把卡片撑破侧栏，
+>   必须先把最小尺寸松开，`break-all` 才真的生效。
+> - `.picker-results li { display: flex; }` 按计划那句追加在块末尾，实测必需：`li` 默认 block，
+>   里面的 `.chunk-card` 收成内容宽，弹窗里每张卡片宽度不一。
+
 - [ ] **Step 9: 跑前端门禁**
 
 ```bash
@@ -1715,6 +1792,12 @@ cd frontend && npm test && npm run build
 grep -rnE '#[0-9a-fA-F]{3,8}\b|rgba?\(' frontend/src --include='*.css' --include='*.vue' --include='*.js' | grep -v 'styles/variables.css'
 ```
 Expected: 测试零 failed、build exit 0、**grep 0 命中**（G-4 唯一口径）。若 grep 报 `--include` 语法问题，命令前缀去掉重复的 `frontend/`（在 frontend 目录下跑时用 `src`）。
+
+实测数：**75 passed (75)、7 个文件**（Task 3 末 60 + ChunkCard 5 + 弹窗 10），
+build `dist/assets/index-*.css 9.99 kB` + `index-*.js 85.07 kB`、exit 0；
+G-4 grep 命中 0（`--overlay-bg` 是这一轮唯一新增的颜色字面量，只进 `variables.css`）。
+旧接线扫描只剩两处合法命中：`ChunkPickerModal` 自己的 `selectedIds` prop（它吃的是 parent_id 数组，
+与退役的文档勾选无关），以及 `useChat.js:40` 那句指**数据库列名** `chat_history.document_ids` 的注释。
 
 - [ ] **Step 10: 提交**
 
