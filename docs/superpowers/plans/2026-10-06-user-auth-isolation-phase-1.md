@@ -33,6 +33,24 @@
 > ① 上面"后端门禁基线 **176 passed / 0 skipped**"那一格**要求 `:8000` 上有一份活着的 uvicorn**——`test_live_stream.py:34` 与 `:64` 那两条在没有服务时是 `skip` 而不是 `fail`。Task 1–7 按纪律既不起第二个实例也不重启现有服务，所以这几轮的硬口径统一改成：**`0 failed` 为硬性，允许正好 2 条 `skip`，且必须正好是 `test_live_stream.py:34` 与 `:64`**（本机无服务实测基线 = **174 passed / 2 skipped / 1 deselected**）。`0 skipped` 那条硬要求仍然只在 Task 8 生效——那里会重启服务，跑的是改造后的代码。
 > ② `pytest -m` 的表达式会**覆盖** `addopts` 里那条 `not migration`，不是追加。于是 `python -m pytest -m "not live" -q` 会把 `@pytest.mark.migration` 的计数钉（11/22）拖进来越界失败，撞出一个与本轮无关的红。要排除 live 就写全：`python -m pytest -m "not live and not migration" -q`。
 
+> **2026-10-07 修订（基线重钉：全计划的 9 / 11 / 22 作废，改用下面这组实数）**
+> **为什么作废**：旧 9 篇里有 8 篇在界面上被删到 `chunk_count` 归零（用户在 UI 里删的，不是本轮的副作用），只剩 `deepseek简介.docx` 一份活着；随后按批准的补救方案，用**真 HTTP 通路**（`POST /api/documents`，同一份 uvicorn 进程，不启第二个实例）补传 `baseline-a.txt` / `baseline-b.txt` / `baseline-c.txt` 三篇小文档重建基线。三篇原文与建法记录在 `.superpowers/sdd/2026-10-06-user-auth-isolation-phase-1/baseline-*.txt`，**长期保留**。
+> **2026-10-07 实测（MySQL 表 + Chroma 目录副本 + `/api/health` 三路一致）**：
+> - **活文档 4 / 父块 4 / 子块 10**。逐篇：`deepseek简介.docx` 1 父 5 子、`baseline-a.txt` 1 父 1 子、`baseline-b.txt` 1 父 3 子、`baseline-c.txt` 1 父 1 子。Chroma `parent_document` 与 `child_document` 的 id 清单已逐字钉进 `backend/tests/test_chroma_data.py`（`PARENT_COUNT = 4` / `CHILD_COUNT = 10`）。
+> - **`documents` 物理行 13** = 4 活 + 9 隐存（`is_active=0`、块数 0：`comp/rag/third/xss/comp2/rag2/long/wide/picker-probe`）。13 行**全部 `user_id IS NULL`**。
+> - `users` 0 行、`auth_tokens` 0 行。
+> **两处口径必须跟着改**（原文写在别的 Task 里，各 Task 有自己的就地修订块）：
+> ① **`documents_claimed` 是 13，不是 4**。迁移补的是 `WHERE user_id IS NULL` 的**物理行**，隐存那 9 行同样归户——否则它们日后重新可见时会挂在无人名下。凡原文写 `assert owned == 9` / `documents_claimed: 9` 的格子，本轮一律 **13**。
+> ② 上面 `:21` 那句"`/api/health` 是**全局物理计数**"按仓库改判，而且它数出来的**字段名也与原文不同**。真实形状只有四个顶层键（`main.py:84-89`）：
+>
+> ```json
+> {"status": "ok", "chroma_dir": "...", "document_count": 4,
+>  "vector_counts": {"parent": 4, "child": 10}}
+> ```
+>
+> `document_count` 走 `DatabaseManager.count_documents()`（`core/database.py:359`，`filter(is_active == True)`）→ 它数的是**活文档 4**；`vector_counts` 才是物理计数，且它的键是 **`parent` / `child`**（`core/vector_store.py:51-55`），**不存在** `parent_chunk_count` / `child_chunk_count` 这两个顶层键——原文与脚本里凡按那两个名字取值的，拿到的都是 `None`。所以 health 只能证明"没伤到活数据"，收尾自查要 **`document_count == 4` + `vector_counts == {"parent": 4, "child": 10}` 与 SQL `documents_total == 13` 并读**才盖住隐存行。
+> ③ 旧门禁格（`:26` 的 **176 passed / 0 skipped**、修订 ① 的 **174 passed / 2 skipped**、以及 Task 4 说的"+2"）已随 Task 1/2 的落地漂移。**2026-10-07 当轮实跑（本机无 uvicorn，`0 failed` 硬口径 + 正好 2 条 `test_live_stream.py` skip）**：`python -m pytest -q` = **224 passed / 2 skipped / 1 deselected / 0 failed**；`python -m pytest -m live -q` = **14 passed / 2 skipped / 211 deselected**；`python -m pytest -m migration -q` = **1 passed / 226 deselected**。后续每轮以**当轮命令的汇总行**为准并抄进台账，只允许条数变多、不允许 failed；`-m migration` 那一格现在钉的是新基线 **4 / 10**。
+
 ---
 
 ### Task 1: 口令与令牌原语 + 两张账号表（纯后端，不碰 HTTP）
@@ -656,16 +674,6 @@ ACCOUNT_TAKEN = "该账号已注册"
 # 迭代数给 1000 就够：这条路径要的是"确实花时间算过"，不是"算满 39 万次"。
 _DUMMY_HASH = "pbkdf2_sha256$1000$" + "0" * 32 + "$" + "0" * 64
 
-> 2026-10-06 修订（Task 2 Step 3：上面那个 `1000` 是计划写错，落地改数不改注释）
-> `verify_password` 的耗时由 **stored 串自己**那段迭代数决定（`core/security.py:30` 是从串里解出来的，
-> 不是读全局常量）。所以垫片给 1000 时："没这个账号"算 1000 轮、"密码错"算 390000 轮，
-> 实测差约 200 倍——注释里那句"耗时上不可分辨"当场是假话，攻击者拿秒表就能枚举账号。
-> **落地改为同价**：`_DUMMY_HASH = f"{ALGORITHM}${PBKDF2_ITERATIONS}${'0'*32}${'0'*64}"`，
-> 从 `core.security` 引常量而不是抄字面量，以后 `PBKDF2_ITERATIONS` 上调时垫片自动跟上。
-> **明确不做**任何 `sleep` / 取平均 / 补齐到某个墙钟值的"抹平"写法：那只是把假安全感写进生产路径，
-> 还多一个随机器负载抖动的判据。代价是未知账号登录多花约 200ms——注册面与登录失败面，不值一提。
-> 由两条测钉住：垫片对任意口令恒 `False`（形状对了但恒真也照样是洞）；四段形状与迭代数和真行逐字段相等。
-
 
 def default_nickname(identifier: str, identifier_type: str) -> str:
     if identifier_type == "email":
@@ -719,6 +727,25 @@ def logout(request: Request, db=Depends(get_db), user=Depends(get_current_user))
 def me(user=Depends(get_current_user)):
     return MeOut(user=UserOut.model_validate(user))
 ```
+
+> **2026-10-06 修订（Task 2 Step 3：上面那块里的 `1000` 是计划写错，落地改数不改注释）**
+> `verify_password` 的耗时由 **stored 串自己**那段迭代数决定（`core/security.py:26` 从串里解出来、`:30`
+> 拿去喂 `pbkdf2_hmac`），不是读全局常量。所以垫片给 1000 时："没这个账号"算 1000 轮、"密码错"算
+> 390000 轮，实测差约 190 倍——注释里那句"耗时上不可分辨"当场是假话，攻击者拿秒表就能枚举账号。
+> **落地改为同价**，从 `core.security` 引 `ALGORITHM` / `PBKDF2_ITERATIONS` 而不是抄字面量，以后
+> `PBKDF2_ITERATIONS` 上调时垫片自动跟上。盐与摘要那两段 hex **提到 f-string 外面**（写成
+> `_DUMMY_SALT_HEX` / `_DUMMY_DIGEST_HEX` 两个模块常量），花括号里不放表达式：
+>
+> ```python
+> _DUMMY_SALT_HEX = "0" * 32
+> _DUMMY_DIGEST_HEX = "0" * 64
+> _DUMMY_HASH = f"{ALGORITHM}${PBKDF2_ITERATIONS}${_DUMMY_SALT_HEX}${_DUMMY_DIGEST_HEX}"
+> ```
+>
+> **明确不做**任何 `sleep` / 取平均 / 补齐到某个墙钟值的"抹平"写法：那只是把假安全感写进生产路径，
+> 还多一个随机器负载抖动的判据。代价是未知账号登录多花约 200ms——注册面与登录失败面，不值一提。
+> 由两条测钉住：垫片对任意口令恒 `False`（形状对了但恒真也照样是洞）；四段形状与迭代数和真行逐字段相等
+> （后者断的是 `_DUMMY_HASH.split("$")[1]`，所以那两个常量名也是判据的一部分）。
 
 - [ ] **Step 4: 写 `tests/test_api_auth.py`**
 
@@ -828,15 +855,6 @@ def test_register_rejects_malformed_email(bad):
     assert register(client, identifier=bad).status_code == 422
 
 
-> 2026-10-06 修订（Task 2 Step 4：这两格自相矛盾，落地时改上面那格）
-> `test_register_nickname_defaults_and_overrides` 用 `x@y.z` 期望 201，而本格把 `a@b.c` 钉成 422——
-> 同一件事两个结论。`schemas/auth.py:11` 的 `EMAIL_RE` 要求 TLD 至少两个字母（`[A-Za-z]{2,}`），
-> 所以单字母 TLD 一律 422，`x@y.z` 当场红。
-> **改判：把昵称用例换成 `x@y.zz`，不放宽正则。** 理由是那条 `{2,}` 是生产校验，不是为测试设的门槛——
-> 为凑一个测试值把它退成 `{1,}`，等于真实用户能注册出 `a@b.c` 这种过不了任何发信域的邮箱。
-> 实现处已在两格之间留了互指注释；后续 Task 抄这段判据时以 `x@y.zz` 为准。
-
-
 @pytest.mark.parametrize("bad", ["12345678901", "1380000000", "138000000012", "23800000001", "1380000000a"])
 def test_register_rejects_malformed_phone(bad):
     client, _ = make_client()
@@ -866,6 +884,15 @@ def test_duplicate_register_is_409_with_one_chinese_line():
     assert res.status_code == 409
     assert res.json() == {"detail": "该账号已注册"}
 ```
+
+> **2026-10-06 修订（Task 2 Step 4：上面这两格自相矛盾，落地时改昵称那一格）**
+> `test_register_nickname_defaults_and_overrides` 用 `x@y.z` 期望 201，而 `test_register_rejects_malformed_email`
+> 把 `a@b.c` 钉成 422——同一件事两个结论。`schemas/auth.py:11` 的 `EMAIL_RE` 要求 TLD 至少两个字母
+> （`[A-Za-z]{2,}`），所以单字母 TLD 一律 422，`x@y.z` 当场红。
+> **改判：把昵称用例换成 `x@y.zz`，不放宽正则。** 理由是那条 `{2,}` 是生产校验，不是为测试设的门槛——
+> 为凑一个测试值把它退成 `{1,}`，等于真实用户能注册出 `a@b.c` 这种过不了任何发信域的邮箱。
+> 实现处在那格用例上留了指向 `test_register_rejects_malformed_email` 的注释（单向指针，本格不反指）；
+> 后续 Task 抄这段判据时以 `x@y.zz` 为准。
 
 第二批（登录、令牌、登出、`/me`）：
 
@@ -1358,6 +1385,26 @@ def run_migrations(engine, chroma_client, password: str) -> dict:
 
 `pending` 那句 `if docs else {...}` 是刻意的短路：只有真归户了文档才可能留下无主向量。第二遍开机 `backfill_documents` 回 0，于是向量那步一次 `get` 都不发，整个迁移退化成"两条 SELECT"。
 
+> **2026-10-07 修订（预飞检查裁定：`run_migrations` 里这两步的顺序反了，补戳在那份原文下永远拿不到清单）**
+> `backfill_documents` 的最后一句是 `conn.commit()`（本 Step 上面），而 `vector_ids_without_owner` 的筛选条件是 `d.user_id IS NULL`。按原文顺序 `docs = backfill_documents(...)` 在前、`pending = vector_ids_without_owner(conn)` 在后：commit 之后库里**一行 NULL 都不剩**，于是 `pending` 恒为 `{"parent": [], "child": []}`，`stamp_vector_owner` 一步 `get` 都不会发、`vectors_stamped` **永远是 0**。`FakeConn` 那三条纯逻辑判据演的是"发了什么 SQL"，对顺序无感；Step 7 的 live 判据只查 `documents`，也照不出来——唯一能暴露它的是日志里那一格。后果不是"阶段一读数不对"（读侧 `$and` 过滤按勘误属阶段二），而是**补戳整段是死代码**：阶段一要落地 `user_id` 戳，靠的正是这一步。
+>
+> **裁定：把读放在写之前**，`with engine.connect() as conn:` 那块改成四行（其余不动）：
+>
+> ```python
+>         added = ensure_columns(conn)
+>         indexes = ensure_indexes(conn)
+>         user_id = ensure_default_user(conn, password)
+>         # 清单必须在归户之前读：backfill_documents 自己会 commit，之后 NULL 行就不存在了
+>         pending = vector_ids_without_owner(conn)
+>         docs = backfill_documents(conn, user_id)
+>         if not docs:
+>             pending = {"parent": [], "child": []}
+> ```
+>
+> 短路语义与原文一致（幂等第二遍 `docs == 0`，`stamp_vector_owner` 一次 `get` 都不发），代价是静默那一遍多两条**返回空**的 SELECT——比"补戳静默失效"便宜得多。
+>
+> **新增一条判据（本修订自带，必须落）**：`test_migrations.py` 里给 `run_migrations` 加一条用 `FakeConn` + 假 client 的测，钉住**调用顺序**：断言 fake client 收到的 `get_collection`/`get` 里带的 id 清单，就是那条 `SELECT ... WHERE ... d.user_id IS NULL` 返回的行（即"清单来自归户之前"）。做法自选，但**不许**只断言 `vectors_stamped > 0`——把两条 SELECT 的顺序写反，那种断言在假连接下照样绿。
+
 - [ ] **Step 4: 补三条纯逻辑判据（假 Chroma client + 真哈希）**
 
 `backend/tests/test_migrations.py` 追加：
@@ -1469,7 +1516,10 @@ def test_migration_columns_are_present_and_the_second_pass_is_quiet(db):
 
 @pytest.mark.live
 def test_default_user_exists_and_owns_the_baseline_documents(db):
-    """spec 7.3 的第 5 条判据（旧数据归位 SQL 直查）搬进自动化：基线 9 篇全归 default。
+    """spec 7.3 的第 5 条判据（旧数据归位 SQL 直查）搬进自动化：基线 13 行全归 default。
+
+    13 是 documents 的**物理行数**（4 篇活 + 9 篇删块删到 is_active=0 的隐存行），不是
+    `/api/health` 那个活文档计数——归户 SQL 是 `WHERE user_id IS NULL`，隐存行同样要归户。
 
     这条不成立就说明 lifespan 那次 run_migrations 没跑成——手动起服务时最容易漏。
     """
@@ -1487,7 +1537,7 @@ def test_default_user_exists_and_owns_the_baseline_documents(db):
         unowned = conn.execute(text(
             "SELECT COUNT(*) FROM documents WHERE user_id IS NULL")).fetchone()[0]
     assert unowned == 0, f"还有 {unowned} 篇文档无主，归户那步没做完"
-    assert owned == 9, f"基线 9 篇应全归 default，实得 {owned}"
+    assert owned == 13, f"基线 13 行应全归 default，实得 {owned}"
 ```
 
 > **2026-10-06 修订（上面第一条 live 测补索引那一半，见 Interfaces 处修订 ①）**：`test_migration_columns_are_present_and_the_second_pass_is_quiet` 里，紧接列的两次 `ensure_columns(conn) == []` 之后再加索引的三句——`assert migrations.index_exists(conn, "documents", "idx_documents_user_id")`、`assert migrations.ensure_indexes(conn) == []` 两次、以及 `SHOW INDEX FROM documents` 的行数在两次 `ensure_indexes` 前后相等。这是全计划里唯一**直接查已部署 schema**（而非 ORM 元数据）的索引判据。本机这一列和这一索引都是 Task 1 执行期提前落好的，所以首轮就应当全为真（`columns_added` 那格退化成 `[]`，见 Task 1 Step 9 处的修订）。
@@ -1554,6 +1604,11 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(backend): �
 3. 日志里应出现一行 `迁移完成: {...}`，`columns_added` 首次是 `[('documents', 'user_id')]`、第二次起是 `[]`，`documents_claimed` 首次 9、之后 0。
 
 > **2026-10-06 修订（第 3 条的本机预期）**：列和索引都已在 Task 1 执行期落到真实 MySQL（见 Task 1 Step 9 处的修订），所以本机这次重启的日志里 `columns_added: []`、`indexes_added: []`，**不要**期待首轮出现 `('documents', 'user_id')`——那条分支的活证已由 Task 3 的 `FakeConn` 单测（缺列/缺索引才发 DDL）与 Step 7 live 的"二次返回 `[]`"共同守住。本机唯一还活着的迁移证据是 `documents_claimed: 9 → 0` 与 `vectors_stamped`。字典键按修订 ① 是 5 个（`columns_added` / `indexes_added` / `default_user_id` / `documents_claimed` / `vectors_stamped`）。
+
+> **2026-10-07 修订（上面两条的本机预期值，按重钉后的新基线）**
+> 第 2 条按全局基线修订 ② 改判：`curl http://localhost:8000/api/health` 这次应当拿到 **`document_count: 4`** 与 **`vector_counts: {"parent": 4, "child": 10}`**（键名就是 `parent` / `child`，见 `core/vector_store.py:51-55`；`document_count` 走 `count_documents()`，只数 `is_active`，隐存那 9 行不在里面；`vector_counts` 才是物理计数）。
+> 第 3 条的实数预期（2026-10-07 直查 MySQL 得到，不是推算）：**首轮** `documents_claimed: 13`（13 行全 `user_id IS NULL`，含 9 行隐存）、`vectors_stamped: 14`（4 个父块向量 + 10 个子块向量，`vector_id 非空` 的计数实测就是 4 与 10）；**次轮** `documents_claimed: 0`、`vectors_stamped: 0`。
+> 这一格与 Step 3 那条顺序修订是**同一枚证据的两面**：按原文顺序（先归户 commit、后读 NULL 清单）首轮 `vectors_stamped` 会是 **0** 而不是 14，而这在纯逻辑判据里照不出来。所以本次手工确认**必须把日志原文抄进台账**，`vectors_stamped: 0` 首轮即视为失败，不要当成"这台机器不需要补戳"。
 
 ### Task 4: `documents` 侧的归属——写进去带上主人，读出来只给主人
 
@@ -2081,6 +2136,8 @@ cd backend && python -m pytest -m live -q
 ```
 预期：在原条数上 **+2**，0 failed。基线三条（`/api/health` 与 `test_chroma_data.py`）必须仍是 9 / 11 / 22。
 
+> **2026-10-07 修订（上面这行的预期值按新基线改判）**：旧 9/11/22 作废，本轮的基线形状是**活文档 4 / 父块 4 / 子块 10**（`test_chroma_data.py` 已按 `PARENT_COUNT = 4` / `CHILD_COUNT = 10` 重钉，它才是那条常驻的自动入口）。`/api/health` 那一格在 Task 1–7 按纪律**没有服务在跑**，`curl` 会拿到 Vite/代理的 502 或连接失败，不许把它当"基线被伤了"的证据；要看 health 的实数请留到 Task 8 重启之后。`-m live` 的当轮实数是 **14 passed / 2 skipped / 211 deselected**（`test_live_stream.py:34/:64` 那两条无服务时 skip），Task 4 加完两条应当是 **16 passed / 2 skipped**，且 `0 failed`。
+
 - [ ] **Step 9: 全量门 + 提交**
 
 ```bash
@@ -2149,7 +2206,7 @@ def test_health_stays_open():
     """/api/health 是运维探针，spec 3.2 明写不上门。
 
     这条看着像"没测东西"，其实测的是"没把门多加到 health 上"——
-    它是项目记忆与现有判据里那条基线计数（9/11/22）唯一的自动入口。
+    它是项目记忆与现有判据里那条基线计数（活文档 4 / 父块 4 / 子块 10，2026-10-07 重钉）唯一的自动入口。
     health 依赖 get_config/get_db/get_vector_store 三格，make_isolation_client 全部覆盖，
     所以这里能硬断言 200，而不是"只要不是 401 就行"。
     """
@@ -3559,6 +3616,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(frontend): 
 > **本 Task 的三条纪律**
 > 1. **只重启、绝不多起一个 uvicorn**（Global Constraints）。`core/*.py`、`api/*.py`、`main.py` 都改了，且没有热重载——现存那个 :8000 实例跑的是改造前的代码，**不重启的话本 Task 所有 live 判据都在测旧二进制**，绿灯是假的。
 > 2. **基线 9 / 11 / 22 不许动**：探针一律用新文件名、新账号。探针文档由 A 在判据⑤当场删（登出之后就删不掉了），`finally` 只兜异常路径；UI 阶段那两枚账号与文档另有 Step 5 的清理块。`/api/health` 是全局物理计数，它是"我没伤到既有数据"的唯一常驻证据。
+>    **2026-10-07 修订**：数字换成 **活文档 4 / 父块 4 / 子块 10**（`documents` 物理行 13，含 9 行隐存），"不许动"这条纪律本身不变——尤其 `deepseek简介.docx` 与 `baseline-a/b/c.txt` 这四篇的块一律不许删。同时改判后半句：`/api/health` **不是**全局物理计数，它的 `document_count` 只数 `is_active` 的 4 篇，隐存那 9 行它照不到；所以它是"没伤到**活**数据"的常驻证据，物理行那一半要靠 Step 5 的 `total_docs` SQL 并读。
 > 3. **口令与令牌不入证据**：`DEFAULT_USER_PASSWORD` 只从 `Config` 读、脚本里只出现变量名；打印判据时令牌只打前 6 位（够定位即可，全库扫描的人不该从台账里再捡一枚票）。探针账号自己造的一次性口令（`probe-pass-123` / `ui-pass-123`）不在此列——它们只对两行即删的临时账号有效，写进计划是为了让 Step 5 能重新登录回收文档。
 
 - [ ] **Step 1: 五条门（先跑，跑完再动服务）**
@@ -3611,7 +3669,8 @@ cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```bash
 curl -s http://127.0.0.1:8000/api/health
 ```
-预期：`document_count: 9`、`parent_chunk_count: 11`、`child_chunk_count: 22`（与重启前逐字相同）。
+预期：**`document_count: 4`、`vector_counts: {"parent": 4, "child": 10}`**（与重启前逐字相同）。
+> **2026-10-07 修订**：原文这里写的是 `document_count: 9`、`parent_chunk_count: 11`、`child_chunk_count: 22`——两个数字随基线重钉作废（见 Global Constraints 处的 2026-10-07 修订），两个键名则**从来就不存在**：`/api/health` 只返回 `status` / `chroma_dir` / `document_count` / `vector_counts` 四个顶层键，向量那两格在 `vector_counts` 里面、键名是 `parent` / `child`（`main.py:84-89` + `core/vector_store.py:51-55`）。照原名取值会拿到 `None`，然后误判成"基线被伤了"。
 
 - [ ] **Step 3: HTTP + SQL 判据（`_probe_auth_isolation.py`，含 spec 7.3 的 A/B 五步）**
 
@@ -3763,15 +3822,15 @@ try:
        sql_one("SELECT COUNT(*) FROM information_schema.COLUMNS "
                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'documents' "
                "AND COLUMN_NAME = 'user_id'") == 1)
-    ok("旧数据 9 篇全归默认用户",
+    ok("旧数据 13 行全归默认用户（含 9 行 is_active=0 的隐存行，不是活文档数 4）",
        sql_one("SELECT COUNT(*) FROM documents WHERE user_id = "
-               f"(SELECT id FROM users WHERE identifier = '{DEFAULT_IDENTIFIER}')") == 9)
+               f"(SELECT id FROM users WHERE identifier = '{DEFAULT_IDENTIFIER}')") == 13)
     ok("无主文档 0 篇（重启前迁移已跑过一轮）",
        sql_one("SELECT COUNT(*) FROM documents WHERE user_id IS NULL") == 0)
 
     # ---------- ⑤ spec 7.3 第 3 步：A 自己删探针文档 ----------
     # 必须在这里删，不能留到 finally：下面⑥一登出，ha 这枚令牌就失效了，
-    # 届时 DELETE 必回 401，探针文档永远留在共享库里（基线 9 篇变 10 篇）。
+    # 届时 DELETE 必回 401，探针文档永远留在共享库里（基线活文档 4 篇变 5 篇）。
     dele = client.delete(f"/api/documents/{doc_id}", headers=ha)
     ok("A 删除探针文档 → 2xx", dele.status_code in (200, 204), f"{dele.status_code} {dele.text[:120]}")
     ok("删后 A 的列表回 0 篇（spec 7.3 第 3 步）",
@@ -3805,8 +3864,10 @@ finally:
     print(f"清理完成：探针文档 {DOC} 已删，探针账号 {A} / {B} 已删（若上面没有 WARN）")
 
 h = client.get("/api/health").json()
-ok("收尾后基线回到 9 / 11 / 22",
-   (h.get("document_count"), h.get("parent_chunk_count"), h.get("child_chunk_count")) == (9, 11, 22), h)
+ok("收尾后基线回到新基线：活文档 4 / 父块向量 4 / 子块向量 10 / documents 物理行 13",
+   (h.get("document_count"), (h.get("vector_counts") or {}).get("parent"),
+    (h.get("vector_counts") or {}).get("child"),
+    sql_one("SELECT COUNT(*) FROM documents")) == (4, 4, 10, 13), h)
 print(f"\n全部判据通过：{checked} 条")
 ```
 
@@ -3856,7 +3917,7 @@ cd backend && PYTHONIOENCODING=utf-8 python _probe_auth_isolation.py
 
 - [ ] **Step 5: 清场与基线核对**
 
-**顺序不能反：先清场，再对基线。** `/api/health` 数的是全局物理行，判据 9 那篇 UI 探针文档还在库里时打它，只会拿到一个吓人的 10/12/24，然后怀疑错方向。
+**顺序不能反：先清场，再对基线。** `/api/health` 的 `document_count` 数的是活文档、`vector_counts` 数的是物理向量行，判据 9 那篇 UI 探针文档还在库里时打它，只会拿到一个吓人的 `document_count: 5` / `vector_counts.parent: 5` / `vector_counts.child` 大于 10（新基线是 **4 / 4 / 10**），然后怀疑错方向。
 
 ```bash
 cd frontend && npm prune
@@ -3916,6 +3977,7 @@ from config.config import Config
 e = create_engine(f'mysql+pymysql://{Config.MYSQL_USER}:{Config.MYSQL_PASSWORD}@{Config.MYSQL_HOST}:{Config.MYSQL_PORT}/{Config.MYSQL_DATABASE}?charset=utf8mb4')
 conn = e.connect()
 print('active_docs', conn.execute(text('SELECT COUNT(*) FROM documents WHERE is_active=1')).scalar())
+print('total_docs', conn.execute(text('SELECT COUNT(*) FROM documents')).scalar())
 print('unowned', conn.execute(text('SELECT COUNT(*) FROM documents WHERE user_id IS NULL')).scalar())
 print('probe_users_left', conn.execute(text(\"SELECT COUNT(*) FROM users WHERE identifier LIKE 'probe-%@local.test'\")).scalar())
 print('total_users', conn.execute(text('SELECT COUNT(*) FROM users')).scalar())
@@ -3923,8 +3985,9 @@ print('total_users', conn.execute(text('SELECT COUNT(*) FROM users')).scalar())
 ```
 
 > 标签一律 ASCII：`python -c "…"` 的字符串要经过 Git Bash 的参数传递，中文会被按 cp936 转一遍再交给解释器，打出来是乱码。
-> 这里的四个词就是判据本身，乱码等于自断证据。
-预期：`/api/health` **9 / 11 / 22**（与 Step 2 重启后逐字相同）、`active_docs` **9**、`unowned` **0**、`probe_users_left` **0**、`total_users` **1**（只剩默认用户）。若 `total_users` 大于 1，把多出来那几行的 `identifier` 记进台账再决定删不删——**不要按 id 猜**。判据 4/13 那两个 UI 账号要靠上面那段清理块（先经 API 删文档、再 SQL 删账号）才算真清干净；阶段一**没有"删除账号"的端点**，也**没有"删整篇文档"的界面入口**，这两条都是设计选择，不是漏。
+> 这里的**五个**词就是判据本身，乱码等于自断证据。
+预期：`/api/health` **`document_count: 4` + `vector_counts: {"parent": 4, "child": 10}`**（与 Step 2 重启后逐字相同）、`active_docs` **4**、`total_docs` **13**、`unowned` **0**、`probe_users_left` **0**、`total_users` **1**（只剩默认用户）。
+> **2026-10-07 修订（这一格的数字与那条 `total_docs`）**：原文写的是 health **9 / 11 / 22** 与 `active_docs` **9**，随基线重钉作废（见 Global Constraints 处的修订），而且 health 那三个键名原文就不存在。`total_docs` 这一行是本轮**新增**的第五个词：`document_count` / `active_docs` 数的是活文档 4，隐存那 9 行（`is_active=0`、块数 0）在界面上永远看不见，却同样要被迁移归户——只看 4 就无法证明"13 行都归了户、也没多出行"。所以 **4 与 13 必须并读**：`total_docs - active_docs == 9` 是这次重钉后共享库的形状，任何一边变大都要在台账里解释清楚是哪一篇。若 `total_users` 大于 1，把多出来那几行的 `identifier` 记进台账再决定删不删——**不要按 id 猜**。判据 4/13 那两个 UI 账号要靠上面那段清理块（先经 API 删文档、再 SQL 删账号）才算真清干净；阶段一**没有"删除账号"的端点**，也**没有"删整篇文档"的界面入口**，这两条都是设计选择，不是漏。
 
 `chat_history` 这一轮**预期不留残留**：判据 11「清空即换 id」排在判据 10 之后，`DELETE /api/history/{旧 session}` 会把「你好」那一轮一起收走。若中途某条判据失败、留下一个没人认领的探针 session（自己造的 uuid，与既有会话不撞），记下它的 `session_id` 前 8 位进台账即可，**不必手工删行**——它是"当时跑到哪一步"的证据，删了反而说不清。
 
@@ -3938,18 +4001,19 @@ print('total_users', conn.execute(text('SELECT COUNT(*) FROM users')).scalar())
 ## 阶段一：用户注册登录 + 文档按用户隔离（2026-10-06）
 
 - 提交清单：Task 1..7 各一条（7 个 short SHA 逐个列出，每条后面跟上当时的门禁实数），本条 ledger 是第 8 条。
-- 五条门的实数：`pytest -q` = **N passed / 0 skipped / 1 deselected**（基线 176）；
+- 五条门的实数：`pytest -q` = **N passed / 0 skipped / 1 deselected**（基线 176；**2026-10-07 无服务实跑 224 passed / 2 skipped / 1 deselected**，Task 8 这一轮服务在跑，那 2 条 `test_live_stream` 应当转为 pass ⇒ 预期 **226 / 0 / 1**）；
   `-m live` = **N passed**（基线 14）；`-m migration` = **2 passed**（基线 1）；
   `npm test` = **N passed / 11 文件**（基线 84/7）；`npm run build` exit 0（js/css 字节数照抄一轮）。
-- 迁移首轮与次轮：`迁移完成: {columns_added: [...], documents_assigned: 9, vectors_stamped: N}` →
-  重启后 `{columns_added: [], documents_assigned: 0, ...}`。**把两轮的原始日志各贴一行**。
+- 迁移首轮与次轮：`迁移完成: {columns_added: [...], documents_claimed: 13, vectors_stamped: 14}` →
+  重启后 `{columns_added: [], documents_claimed: 0, ...}`。**把两轮的原始日志各贴一行**。
   > 2026-10-06 修订：键名按仓库实为 `documents_claimed`（外加 `indexes_added`，共 5 键）；本机首轮 `columns_added: []`、`indexes_added: []`（列与索引在 Task 1 就落好了）。**照实抄日志**，不要为了对上原文去改历史——台账的价值在于它是量测，不是因为它对齐了计划。
+  > 2026-10-07 修订：原文这两格写的是 `documents_assigned: 9`。键名按上面那条勘误，**数字**随基线重钉改成 **13**（= 4 活 + 9 隐存的物理行），`vectors_stamped` 的本机实数预期是 **14**（4 父块向量 + 10 子块向量，直查得来）。首轮就报 `vectors_stamped: 0` 说明 Step 3 那条顺序修订没落地，按失败处理。
 - HTTP/SQL 判据：**照抄脚本末尾那一行 `全部判据通过：N 条`**（计划写就时 N = 31：① 组 for 循环实发 8 条 + try 内其余 22 条 + 收尾基线 1 条），
-  逐档列关键条（401 先于 422、防枚举逐字节相同、A 1 篇 / B 0 篇、越权 404、default 拥有 9 篇、A 删后回 0 篇、登出立刻 401）。
+  逐档列关键条（401 先于 422、防枚举逐字节相同、A 1 篇 / B 0 篇、越权 404、default 拥有 13 行、A 删后回 0 篇、登出立刻 401）。
 - 浏览器判据：**wide N/N、narrow N/N**（条数只抄探针输出的汇总行，不许凭印象——
   上一轮就发生过把 16/16 报成 13/13 的事）。视口回读值一并记（1280 / 375）。
 - UI 阶段清场：两个 `probe-ui%` 账号已 SQL 删除、`ui-probe-<ts>.txt` 已经 API 删除，
-  收尾自查四值照抄（`active_docs` / `unowned` / `probe_users_left` / `total_users` = 9 / 0 / 0 / 1）。
+  收尾自查五值照抄（`active_docs` / `total_docs` / `unowned` / `probe_users_left` / `total_users` = 4 / 13 / 0 / 0 / 1）。
 - 红过的地方与为什么（这一节最值钱，别写成"一次通过"）：`make_client` 少覆盖一格导致整文件 500、
   `DetachedInstanceError` 那次的改判、`ensure_columns` 在 sqlite 上不可测（MEDIUMTEXT）改 inspect 表形、
   ……逐条写"症状 → 机制 → 判据怎么改"。
