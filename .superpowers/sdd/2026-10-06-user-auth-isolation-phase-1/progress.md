@@ -157,3 +157,25 @@
   ⑤ 两条 live 流式判据本轮只做到"编辑正确 + 干净 skip"，真跑证据顺延 Task 8——**这正是预飞改判要的口径**，实施者没有伪绿，赞。
   ⑥ 保留了 Task 4 那条 `assert get_current_user not in ...` 的牙（brief 的新 snippet 把它丢了）——**接受**，那是"gate=False 真走依赖而非覆盖"的唯一守卫。
 - 计划文另修一处全局口径：那 2 条允许 skip **不再按行号认**（Task 5 插了 `login_token()`，`test_live_stream.py` 的两条从 `:34/:64` 漂到 `:53/:87`），改按函数名点名；并给 Task 8 留了一手——服务活着时这两条还可能因大模型不可用各自再 skip 一次（`:73`/`:106`），届时"0 skipped"被打破先查 LLM 再查代码。
+- **台账更正（上面第 ② 条写窄了）**：不是"三条 GET"，是 **8 条臂里 5 条**——httpx 0.28.1 的 `Client.get` **与 `Client.delete` 都没有 `json` 形参**（`inspect.signature` 实测：`json` 只在 `post`/`put`/`patch`/`request` 上）。我第一版核对用了 `"json=" in str(sig)`，那个探针本身就是错的（对 `post` 也报 False），所以差点把更正写歪。计划文已按实数改判，并追加一条连带后果：Step 2 那次"跑红"的头一批红因里这 5 条是 `TypeError` 而非 `200 == 401`，报数必须把两类红因分开写，不许拿 `TypeError` 冒充"门没上"的证据。提交 `6876803`（纯文档，1 行）。校验：围栏 246 行成对、0 条修订块落在围栏内。
+- **Task 5 修正轮 1**（评审 `task-5-review.md`：Approved、0 Critical / 0 Important / 9 Minor，采纳 5 条 G1–G5，其余 4 条记为终审分诊）派发 `ageneral-purpose-5230795438e32ef5`。门禁口径钉死为 **257 passed / 2 skipped / 2 deselected / 0 failed**（+G1 那条新判据），`-m live` 仍 **18/2**；禁并跑 pytest、禁起 uvicorn、禁 amend。
+
+## Task 6 开工前预飞（控制器 2026-10-07）
+
+- brief 重新抽过（`scripts/task-brief … 6` → 395 行），Task 5 期间计划文动过两处，旧副本作废。Task 7（796 行）/ Task 8（444 行）也一并抽出备用，派发前若计划文再被回写就重抽。
+- **前端基线实测**：`npm test` = **84 passed / 7 文件**（`client.test.js` 17、`useChat` 16、`useChunkSelection` 10、`ChatInput` 5、`reference-list` 6、`chunk-selection` 24、`documents-api` 6）。计划写的"84 → 约 96（+12）"与 brief 自己的 `it()` 数对得上（client +4、documents-api +1、useAuth +7）。
+- **jsdom 从哪来**：`frontend/vitest.config.js:9` 全局 `environment: 'jsdom'`（不在 `vite.config.js` 里，两边互不干扰）。这一格必须核，因为 Task 6 的两条新判据都靠它：`useAuth.test.js` 用 `localStorage`，`documents-api.test.js` 那条用 `global.XMLHttpRequest` 造桩。核过 = 无需在测里加 `@vitest-environment` 文档块。
+- **跨端契约实测**（`backend/api/auth.py`，Task 6 的 vitest 全用桩，这类形状错位它测不出来）：`POST /register` → **201** + `{token, user, session_id}`；`POST /login` → 200 + 同形状；`POST /logout` → **204** 且 `return None`；`GET /me` → `{user: {...}}`。与 `api/auth.js` 的四个封装、`bootstrap()` 里那句 `body.user`、以及"204 不能走 `res.json()`"那条判据逐字一致。注册回 201 而 `request` 只看 `res.ok`（2xx 全收），不设 200 硬闸。
+- **一处"看着像缺陷、其实不是"**：`useAuth.signIn/signUp` 内部只有 `try/finally`、没有 catch，坏凭证不会写进 `authError`。计划 `2845` 行已明写这是分工——"会抛"是契约的一部分，接住并把文案写进 `authError` 是 **Task 7 的 App.vue** 的事（`3437-3440`）。所以本 Task **不得**为了某条测变绿而在 composable 里加 catch。
+- 预飞未发现需回写计划的缺陷（与 Task 5 那两处不同）。派发时要额外交代：`documents.js` 现有导入是 `{ detailFromText, request }`，brief 那行加 `authHeaders` 之后三者都在，别把 `request` 删了（它仍被 `listDocuments` 等用着）。
+
+## Task 5 修正轮 1 与收口（控制器 2026-10-07；时间上在上一节预飞之后）
+
+- 修正轮 1 提交 `ea01bd0`（**2 个测试文件 +41/−8，0 生产文件**）。实跑：全量门 **257 passed / 2 skipped / 2 deselected / 1 warning / 0 failed**（57.43s；那条 warning 仍是 `core/database.py:12` 的 SQLAlchemy `MovedIn20Warning`，既有），`-m live` **18 passed / 2 skipped / 241 deselected**（deselected 240→241 只因 G1 多了一条离线测），聚焦对 46 passed。未 amend `582f1b7`，没碰我的 `progress.md` 与计划文。
+- **G1 的两段变异（本轮唯一"必须有牙"的一条，两段都按要求跑出相反结果）**：把 `api/chat.py:28` 右边改成不去重的 `len(parent_ids)` → `1 failed, 256 passed`，红在 `test_ownership_isolation.py:293` 的 `assert 404 == 200`（洞确实存在）；把整个 `if` 删掉 → 新判据**仍绿**、只有两条越权红（`2 failed, 14 passed`）。这两段合起来才说明那条测钉的是"**去重口径**"而不是"有没有检查"——只有第一段证据的话，写谁都一样。
+- **G5 的红因诚实重跑**（本轮最有价值的过程证据）：实施者没有誊抄，而是真把四个端点的门临时摘掉重跑 Step 2。旧 `getattr` 脚手架 → `9 failed, 7 passed` = **5 条 `TypeError`（3 GET + 2 DELETE）** + 2×`200==401` + 2×`200==404`；落地用的 `client.request` 脚手架 → `6 failed, 10 passed` = 4×401 + 2×404。原报告 §2 那句"3 条 TypeError"是错的，已在测的注释与报告里撤回并改正。
+- 复评（scoped re-review，round 1）派发后台代理，报告已落盘 `task-5-rereview-round1.md`，裁定 **G1–G5 全部 ADDRESSED，0 新增 Critical/Important**。它没有采信报告，自己独立做了三件事：① 从 diff 的 Files-changed 只列出两个测试文件**反证**三次变异窗口确已还原，并回读 `api/chat.py:25-30`、`deps.py:49-53`、`git status --porcelain backend/` 空来确认落地态；② 顺着 `OwnerAwareDB.owned_parent_ids`（`:78-85`）与真库 `core/database.py:436` **两边都去重**这个事实推出 G1 那条测的判别性确实成立，并 grep 确认全仓只有 `:292` 一处重复 `parent_ids`；③ 把每一处加数对了一遍——隔离文件 16 条（4 documents + 8 参数化 + 1 health + 2 越权 + 1 G1）、`46 = 16 + 30`、`257 = 256 + 1`、变异 B 的 `2 failed, 14 passed` = 16，无相互矛盾。它还独立重跑 `inspect.signature` 确认 `get`/`delete` 都不收 `json`。
+- **Controller 裁定（复评新增的 1 条 Minor，不改、交终审）**：`test_ownership_isolation.py:294` 的 `assert res.json()["mode"] == "rag"` **不具判别性**——`api/chat.py:37` 的 `mode` 是 `mode_of(payload.parent_ids)` 直接回显，与真正走了哪条链无关，所以它抓不到"白名单放行却进了 `normal_chat`"。承重的 `:293`（200）完好、G1 的要求已满足，为一句"读起来比实际更强"的辅助断言再开一轮不划算。**终审若判要删，删这一行即可，别动 `:293`。**
+- 复评记为 out-of-scope、由我处置的：`task-5-report.md` 前半（修正前那两节，`:35-42`/`:51-52`）仍留着已被 §B 取代的"GET 没有 `json=` / 3 条 TypeError"文字。工单要求**只追加不覆盖**，所以不改写历史；本节即为那条错误结论的现场更正入口。
+- Task 5: **complete**（commits `582f1b7` 实现 + `ea01bd0` 修正轮 1 + `bed2827`/`053d093`/`6876803` 文档；门禁 **257 passed / 2 skipped / 2 deselected / 0 failed**，`-m live` **18 passed / 2 skipped**；评审 Approved 9 Minor → 采纳 5 条全 ADDRESSED、4 条按裁定顺延终审、复评新增 1 条 Minor 顺延终审）
+- **后端到此齐了**：八个业务端点全部要求 Bearer 令牌，问答允许池过 `owned_parent_ids` 白名单，`/api/health` 保持开放。剩下的 Task 6/7 只是把这套契约接到界面上，Task 8 走双端门禁与真服务验收。
