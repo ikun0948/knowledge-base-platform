@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from core.document_processor import DocumentProcessor
 from deps import get_db, get_doc_processor, get_vector_store
 from exceptions import UnsupportedDocumentType
-from fakes import FakeDocProcessor, FakeVectorStore
+from fakes import FakeDocProcessor, FakeUser, FakeVectorStore, with_auth
 from main import create_app
 
 
@@ -17,14 +17,19 @@ class RecordingDB:
         self.save_chunks_error = save_chunks_error
         self.deleted_docs = []
         self.saved_docs = []
+        self.saved_user_ids = []
         self.rows = []
         self.saved_doc_id = 42
         self.chunks_saved = False
         # get_document 回显这一行，201 响应里的 filename 才是"库里的值"而不是请求字面量
         self.saved_filename = "a.txt"
 
-    def save_document(self, filename, file_path, content, chunk_count=0):
+    # 这一组替身的 user_id 都给默认值 None：那 20 条判据一句都不用改。
+    # 端点接上登录门之后所有调用都带真 id，None 只可能来自"端点漏传"——
+    # 真库上那些方法是不给默认值的（忘了就 TypeError），两种形状的差别见 tests/fakes.py 的同名注释。
+    def save_document(self, filename, file_path, content, chunk_count=0, *, user_id=None):
         self.saved_docs.append((filename, chunk_count))
+        self.saved_user_ids.append(user_id)
         self.saved_filename = filename
         return self.saved_doc_id
 
@@ -33,7 +38,7 @@ class RecordingDB:
             raise self.save_chunks_error
         self.chunks_saved = True
 
-    def get_document(self, doc_id):
+    def get_document(self, doc_id, *, user_id=None):
         return type("Doc", (), {"id": doc_id, "filename": self.saved_filename, "chunk_count": 1,
                                 "created_at": datetime(2026, 9, 30, 12, 0)})()
 
@@ -41,15 +46,16 @@ class RecordingDB:
         self.deleted_docs.append(doc_id)
         return 1
 
-    def get_all_documents(self):
+    def get_all_documents(self, *, user_id=None):
         return list(self.rows)
 
 
-def make_client(db, processor=None, vector_store=None):
+def make_client(db, processor=None, vector_store=None, user=None):
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_doc_processor] = lambda: processor or FakeDocProcessor()
     app.dependency_overrides[get_vector_store] = lambda: vector_store or FakeVectorStore()
+    with_auth(app, user or FakeUser(user_id=1))
     return TestClient(app)
 
 
@@ -77,6 +83,16 @@ def test_saved_chunk_count_is_the_child_block_count():
     res = client.post("/api/documents", files={"file": ("a.txt", "内容".encode("utf-8"), "text/plain")})
     assert res.status_code == 201
     assert db.saved_docs == [("a.txt", 3)]
+
+
+def test_upload_records_the_owner_id_on_the_document_row():
+    """端点漏传 user_id 时替身收到的是 None——那一行就写进库里成了无主文档，出现在所有人的池子里。
+    这条判据是这 20+9 条里唯一为新归属加断言的（其余靠默认值 None 原样不动）。"""
+    db = RecordingDB()
+    client = make_client(db, user=FakeUser(user_id=77))
+    res = client.post("/api/documents", files={"file": ("a.txt", "内容".encode("utf-8"), "text/plain")})
+    assert res.status_code == 201
+    assert db.saved_user_ids == [77]
 
 
 def test_unsupported_type_returns_415_with_detail():
@@ -209,9 +225,9 @@ class RecordingVectorStore(FakeVectorStore):
         super().__init__()
         self.added = []
 
-    def add_documents(self, parent_docs, child_docs, document_id):
+    def add_documents(self, parent_docs, child_docs, document_id, *, user_id=None):
         self.added.append((parent_docs, child_docs))
-        return super().add_documents(parent_docs, child_docs, document_id)
+        return super().add_documents(parent_docs, child_docs, document_id, user_id=user_id)
 
 
 # 客户端能自己决定 multipart 里的 filename，浏览器只会给 basename，curl/脚本不会
@@ -346,7 +362,7 @@ class PartialAddVectorStore(FakeVectorStore):
         self.error = error or RuntimeError("chroma 写子集合时掉线")
         self.calls = []
 
-    def add_documents(self, parent_docs, child_docs, document_id):
+    def add_documents(self, parent_docs, child_docs, document_id, *, user_id=None):
         for doc in parent_docs + child_docs:
             doc.metadata["document_id"] = str(document_id)
         raise self.error
@@ -394,20 +410,20 @@ class ChunkDB(RecordingDB):
         self.plan_calls = []
         self.chunk_deletes = []
 
-    def plan_chunk_deletion(self, document_id, parent_id):
+    def plan_chunk_deletion(self, document_id, parent_id, *, user_id=None):
         self.plan_calls.append((document_id, parent_id))
         self.log.append(("plan", document_id, parent_id))
         if self.plan is None:
             return None
         return dict(self.plan, document_id=document_id, parent_id=parent_id)
 
-    def delete_parent_chunk(self, document_id, parent_id):
+    def delete_parent_chunk(self, document_id, parent_id, *, user_id=None):
         self.chunk_deletes.append((document_id, parent_id))
         self.log.append(("rows", document_id, parent_id))
         return {"deleted_children": 2, "chunk_count": self.remaining_children,
                 "document_hidden": self.remaining_children == 0}
 
-    def get_document(self, doc_id):
+    def get_document(self, doc_id, *, user_id=None):
         return type("Doc", (), {"id": doc_id, "filename": "a.txt",
                                 "chunk_count": self.remaining_children,
                                 "created_at": datetime(2026, 9, 30, 12, 0)})()

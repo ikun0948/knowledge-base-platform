@@ -72,11 +72,18 @@ class VectorStore:
         if child_ids:
             self.child_vectorstore.delete(ids=child_ids)
 
-    def add_documents(self, parent_docs, child_docs, document_id):
-        """添加文档到向量存储"""
+    def add_documents(self, parent_docs, child_docs, document_id, *, user_id):
+        """添加文档到向量存储，顺手给每个向量打上主人。
+
+        user_id 存成字符串：`document_id` 早就这么干了（下一行），两个键形态一致才不会出现
+        "一个能等值比、一个不能"的坑（Chroma 的 where 是标量相等）。
+        这一期只补戳、不做读侧过滤（spec 2.5 勘误）：parent_id 全库唯一，
+        读侧那道 $and 在阶段一不是承重墙，等阶段二收窄召回池时一起接。
+        """
         # 为所有文档添加document_id元数据
         for doc in parent_docs + child_docs:
             doc.metadata['document_id'] = str(document_id)
+            doc.metadata['user_id'] = str(user_id)
         # 存储父文档和子文档
         parent_ids = self.parent_vectorstore.add_documents(parent_docs)
         child_ids = self.child_vectorstore.add_documents(child_docs)

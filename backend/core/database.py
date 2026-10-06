@@ -163,15 +163,21 @@ class DatabaseManager:
     def get_session(self):
         return self.SessionLocal()
 
-    def save_document(self, filename, file_path, content, chunk_count=0):
-        """保存文档主记录，返回doc_id"""
+    def save_document(self, filename, file_path, content, chunk_count=0, *, user_id):
+        """保存文档主记录，返回doc_id
+
+        user_id 做成 keyword-only 且无默认值：忘记传归属必须是 TypeError 当场炸，
+        不能是"写出一行 user_id IS NULL，于是它出现在所有人的候选池里"。
+        NULL 只属于迁移前的旧行（Task 3 会把它们归给默认用户）。
+        """
         session = self.get_session()
         try:
             doc = Document(
                 filename=filename,
                 file_path=file_path,
                 content=content,
-                chunk_count=chunk_count
+                chunk_count=chunk_count,
+                user_id=user_id
             )
             session.add(doc)
             session.commit()
@@ -222,24 +228,38 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_all_documents(self):
-        # 返回Document表中is_active == True的所有数据
+    def get_all_documents(self, *, user_id):
+        """当前用户的活动文档列表。原来那句 `filter(is_active == True)` 一个条件都没减，
+        只是前面多了一道主人——列表类端点的隔离成本就是这样，一行 WHERE。"""
         session = self.get_session()
         try:
-            docs = session.query(Document).filter(Document.is_active == True).all()
-            return docs
+            return (session.query(Document)
+                    .filter(Document.is_active == True, Document.user_id == user_id)
+                    .all())
         finally:
             session.close()
 
-    def get_document(self, doc_id):
+    def get_document(self, doc_id, *, user_id):
+        """按 id 取文档，但只取属于这个用户的。越权与不存在都回 None。
+
+        不用 `session.get` 再看属性：那样写要多一次对象访问，而且把"先确认存在、再说没权限"
+        的顺序带进了 SQL——404 的语义要求在**同一条** WHERE 里同时比 id 和主人。
+        """
         session = self.get_session()
         try:
-            return session.get(Document, doc_id)
+            return (session.query(Document)
+                    .filter(Document.id == doc_id, Document.user_id == user_id)
+                    .first())
         finally:
             session.close()
 
     def delete_document(self, doc_id):
-        """回滚专用：删 documents 行，parent/child_chunks 由 ORM cascade 带走。"""
+        """回滚专用：删 documents 行，parent/child_chunks 由 ORM cascade 带走。
+
+        不加归属是**有意为之的不对称**（Task 4 计划文 Step 4 明写）：它只服务两处——上传失败的
+        自我回滚（那一行刚由这个请求自己写出来）和 live 测试的清理。给它补 user_id 只会让回滚
+        多出一条"删除失败因为查不到"的歧义路径，而那条路径不可能发生。读到这儿别手痒去"补全"它。
+        """
         session = self.get_session()
         try:
             doc = session.get(Document, doc_id)
@@ -254,18 +274,20 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def _find_parent_chunk(self, session, document_id, parent_id):
-        """删块唯一的定位钥匙是 (document_id, parent_id) 这一对。
+    def _find_parent_chunk(self, session, document_id, parent_id, user_id):
+        """定位父块要 (document_id, parent_id) 这一对，外加"这块的主人是你"。
 
-        parent_id 由清洗后的文件名拼出来，同名文档（不同 id）能造出同样的字符串，
-        单靠它查就会把别人的块删掉。
+        parent_id 由清洗后的文件名拼出来，同名文档能造出同样的字符串；而 user_id 这一道
+        挡的是另一件事：拿着别人 document_id 的请求。两者都要，缺一不可。
         """
-        return session.query(ParentChunk).filter(
-            ParentChunk.document_id == document_id,
-            ParentChunk.parent_id == parent_id,
-        ).first()
+        return (session.query(ParentChunk)
+                .join(Document, Document.id == ParentChunk.document_id)
+                .filter(ParentChunk.document_id == document_id,
+                        ParentChunk.parent_id == parent_id,
+                        Document.user_id == user_id)
+                .first())
 
-    def search_parent_chunks(self, query="", suffix="", parent_ids=(), limit=50):
+    def search_parent_chunks(self, *, user_id, query="", suffix="", parent_ids=(), limit=50):
         """父块候选池：模糊搜文件名/块内文本，或按 parent_id 批量点查（后者优先）。
 
         三条不能反的规矩：
@@ -274,6 +296,9 @@ class DatabaseManager:
         * 子块数用 outerjoin + GROUP BY 一次聚合。写成 len(chunk.child_chunks) 是 N+1，
           几百个块时弹窗会转圈。
         * 批量模式不吃 limit：hydrate 最多问 50 个 id，limit 插手会把选中项截没。
+
+        上面三条一条没变，只在 is_active 旁边多了一道主人（spec 3.3）：候选池是所有人的入口，
+        这一行 WHERE 就是列表类隔离的全部成本。
         """
         session = self.get_session()
         try:
@@ -287,7 +312,7 @@ class DatabaseManager:
                 )
                 .join(Document, Document.id == ParentChunk.document_id)
                 .outerjoin(ChildChunk, ChildChunk.parent_chunk_id == ParentChunk.id)
-                .filter(Document.is_active == True)
+                .filter(Document.is_active == True, Document.user_id == user_id)
             )
             ids = list(dict.fromkeys(parent_ids))
             if ids:
@@ -309,11 +334,14 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def plan_chunk_deletion(self, document_id, parent_id):
-        """只读一步：把父块与其子块的 vector_id 交出去，好让端点先清向量再动行。"""
+    def plan_chunk_deletion(self, document_id, parent_id, *, user_id):
+        """只读一步：把父块与其子块的 vector_id 交出去，好让端点先清向量再动行。
+
+        查不到就是 None——"不存在""已删过""是你的"三种情况在这里合流，端点据此统一回 404。
+        """
         session = self.get_session()
         try:
-            chunk = self._find_parent_chunk(session, document_id, parent_id)
+            chunk = self._find_parent_chunk(session, document_id, parent_id, user_id)
             if chunk is None:
                 return None
             return {
@@ -325,11 +353,11 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_parent_chunk(self, document_id, parent_id):
+    def delete_parent_chunk(self, document_id, parent_id, *, user_id):
         """删父块行（cascade 带走子块），按剩余子块重算 chunk_count，归零则隐存文档。"""
         session = self.get_session()
         try:
-            chunk = self._find_parent_chunk(session, document_id, parent_id)
+            chunk = self._find_parent_chunk(session, document_id, parent_id, user_id)
             if chunk is None:
                 return None
             deleted_children = len(chunk.child_chunks)
@@ -339,7 +367,12 @@ class DatabaseManager:
 
             remaining = session.query(ChildChunk).filter(
                 ChildChunk.document_id == document_id).count()
-            doc = session.get(Document, document_id)
+            # 原来这里是 session.get(Document, document_id)：只比 id 不比主人。
+            # 同一条 WHERE 里带上 user_id（与 _find_parent_chunk 同一口径），并且它本来就在
+            # 这个 session 里，不用新开一次查询——所以不另设 _owned_document 小助手，一种写法只留一处。
+            doc = (session.query(Document)
+                   .filter(Document.id == document_id, Document.user_id == user_id)
+                   .first())
             # 重算而不是 chunk_count -= deleted_children：库里计数一旦漂过，减法会把它带进负数，
             # 重算顺手把已经不存在的事实修正掉。
             doc.chunk_count = remaining
@@ -393,6 +426,26 @@ class DatabaseManager:
             if doc_id is not None and doc_id not in doc_ids:
                 doc_ids.append(doc_id)
         return doc_ids
+
+    def owned_parent_ids(self, parent_ids, *, user_id):
+        """父块白名单：只回"确实属于这个用户"的那些 id。
+
+        按入参顺序去重、库里没有的静默少回——与 document_ids_for_parents 同一口径。
+        端点拿它和原始列表比长度，少一个就说明有人递了别人的 parent_id，回 404。
+        """
+        ids = list(dict.fromkeys(parent_ids))
+        if not ids:
+            return []
+        session = self.get_session()
+        try:
+            rows = (session.query(ParentChunk.parent_id)
+                    .join(Document, Document.id == ParentChunk.document_id)
+                    .filter(ParentChunk.parent_id.in_(ids), Document.user_id == user_id)
+                    .all())
+        finally:
+            session.close()
+        allowed = {r.parent_id for r in rows}
+        return [pid for pid in ids if pid in allowed]
 
     # 获取历史聊天记录
     def get_chat_history(self, session_id, limit=10):

@@ -25,7 +25,10 @@ class FakeVectorStore:
     def delete_by_document_id(self, document_id):
         self.deleted_by_doc.append(document_id)
 
-    def add_documents(self, parent_docs, child_docs, document_id):
+    def add_documents(self, parent_docs, child_docs, document_id, *, user_id=None):
+        # user_id 给默认值 None 是为同时服务新旧两组判据：test_api_documents.py 那 20 条不传，
+        # 端点改完（Task 4 Step 6）之后所有调用都带真值，None 只剩"端点漏传"这一种坏情况。
+        self.stamped_user = user_id
         return [f"p{i}" for i in range(len(parent_docs))], [f"c{i}" for i in range(len(child_docs))]
 
 
@@ -88,3 +91,26 @@ class FakeRAG:
                 raise self.error
             yield ("token", token)
             emitted += 1
+
+
+class FakeUser:
+    """认证依赖在端点测试里的最小替身。
+
+    业务代码只读 `.id`（归属）与 `.nickname`/`.avatar`（出参），所以这里只给这几个字段：
+    多给一个用不到的字段，就多一个"测试通过但真 ORM 行里没有它"的坑。
+    """
+
+    def __init__(self, user_id=1, identifier="probe@local", nickname="探针"):
+        self.id = user_id
+        self.identifier = identifier
+        self.identifier_type = "email"
+        self.nickname = nickname
+        self.avatar = "auto"
+
+
+def with_auth(app, user=None):
+    """spec 7.1：各模块自己的 make_client 都要覆盖这一格，写成一函数免得五处各写各的。"""
+    from deps import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: user or FakeUser()
+    return app

@@ -12,6 +12,7 @@ from api.documents import _suffix_of
 from api.documents import router as documents_router
 from core.database import _escape_like
 from deps import get_db
+from fakes import FakeUser, with_auth
 from main import create_app
 from schemas.common import SNIPPET_LIMIT, snippet_of
 
@@ -44,14 +45,17 @@ def test_suffix_of_takes_the_last_dot_and_lowercases():
 
 
 class ChunkSearchDB:
-    """只记录入参、回显预置行：端点的职责是把参数原样交给 db，并把行拼成 ChunkOut。"""
+    """只记录入参、回显预置行：端点的职责是把参数原样交给 db，并把行拼成 ChunkOut。
+
+    user_id 与那四个查询参数记在同一格里——它就是"原样交给 db"的那件新东西。
+    """
 
     def __init__(self, rows=()):
         self.rows = list(rows)
         self.calls = []
 
-    def search_parent_chunks(self, query="", suffix="", parent_ids=(), limit=50):
-        self.calls.append({"query": query, "suffix": suffix,
+    def search_parent_chunks(self, *, user_id=None, query="", suffix="", parent_ids=(), limit=50):
+        self.calls.append({"user_id": user_id, "query": query, "suffix": suffix,
                            "parent_ids": list(parent_ids), "limit": limit})
         return self.rows
 
@@ -64,13 +68,14 @@ def row(parent_id="a.txt_parent_0", document_id=3, filename="a.txt", content="�
 def make_client(db):
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
+    with_auth(app, FakeUser(user_id=9))
     return TestClient(app)
 
 
 def test_chunks_endpoint_forwards_defaults_and_returns_chunk_shape():
     db = ChunkSearchDB([row(content="x" * 200)])
     body = make_client(db).get("/api/documents/chunks").json()
-    assert db.calls == [{"query": "", "suffix": "", "parent_ids": [], "limit": 50}]
+    assert db.calls == [{"user_id": 9, "query": "", "suffix": "", "parent_ids": [], "limit": 50}]
     assert len(body) == 1
     out = body[0]
     assert out["parent_id"] == "a.txt_parent_0"
@@ -83,7 +88,7 @@ def test_chunks_endpoint_forwards_defaults_and_returns_chunk_shape():
 def test_chunks_endpoint_passes_query_and_suffix_through():
     db = ChunkSearchDB()
     make_client(db).get("/api/documents/chunks", params={"query": "手册", "suffix": "pdf", "limit": 7}).json()
-    assert db.calls[0] == {"query": "手册", "suffix": "pdf", "parent_ids": [], "limit": 7}
+    assert db.calls[0] == {"user_id": 9, "query": "手册", "suffix": "pdf", "parent_ids": [], "limit": 7}
 
 
 def test_chunks_endpoint_dedupes_parent_ids_but_keeps_order():
