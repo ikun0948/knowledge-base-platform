@@ -221,3 +221,16 @@
 - 修正轮 1 派发 `ageneral-purpose-877938abb2cfbcee`（后台），工单 `task-7-findings-round1.md`。门禁硬口径：**0 failed**、约 117/13、build exit 0、四条 grep（沿用两条 + 本轮新增两条）、五段变异各贴真实 RED。
 - **流程偏差两条（本轮工单里已明令纠正）**：① `0d7674b` 带了 `--no-gpg-sign`（全局约束第 5 行禁止自行加绕过开关；本机 `commit.gpgsign` 未开所以无实际后果，仍记一次）；② 上一轮变异脚本**先改坏后备份**、中间态一度把注入痕迹留在 `StatusBar.vue`（终态我复核干净，`src/` grep 注入标记 0 命中），且脚本与备份放进了 `frontend/node_modules/`。这一轮要求：备份放 `%TEMP%`、动手前先复制、收尾后 grep 0 命中的输出进报告。
 - **模型选择偏差照记**：本机仍不暴露可选模型 id，本轮继承会话模型。
+
+## Task 7 修正轮 1 落地（控制器 2026-10-07，实测核验）
+
+- 两条提交：`c8d8140`（`AuthPanel.vue` + `AuthPanel.test.js`，+59/−37）、`79902a2`（`App.vue` + 新建 `tests/App.auth-gate.test.js` 181 行 + `layout.css`，+202/−3）。**文件范围与工单一致，没夹带计划文与台账。**
+- **我自己复跑的门禁**（不是转抄）：`npm test` = **117 passed / 13 files / 0 failed**（与计划 Step 9 再修订的"约 117 / 13"完全吻合，加数就是新测的 3 条），`npm run build` exit 0。四条 grep 我复核：`@click` 在 `AuthPanel.vue` 只剩 `:83`/`:89` 两个 `.picker-tab`，提交按钮 `:138` 已无处理器；变异残留 grep 0 命中。
+- X-1 落地的形状我逐行看过：登录分支整个 `else if` 连同那四行注释删除，注册分支的 `EMAIL_RE`/`PHONE_RE` 校验**一字未动**；文件顶部的正则注释改写成"只有注册分支用这两条正则 + `default@local` 的来历 + 阶段二新增登录入口别顺手补校验"——这正是工单要求的 M-2 收尾方式。`:90-93` 的模板注释换成"只有一个提交入口"的生产事实，7 行 jsdom 说明搬进测文件。
+- X-3/X-4 都按要求落了（`handleSignOut` 里 `authError.value = ''` 一处、`enterWorkspace()` 在 `onMounted` 与 `handleAuth` 两处各包 try，文案 `'工作台加载失败，请刷新重试'`）。X-4 按工单**不要求判据**，实施者没有为了造 reject 而塞 `vi.mock`——**这是纪律被遵守的证据**，不是漏做。
+- **六段变异全部出过真实 RED**（工单要求五段，实施者多跑了一段 X-3 的）：X-1 加回分支 `1 failed | 7 passed`；I-1 锯内部 `return` `3 failed | 5 passed`（**上一轮同款变异是全绿**——评审判定"附带收益"确实兑现）；I-2 三条各红一次；X-3 摘掉清理红在 `expected '上一次失败的文案' to be ''`。
+- **顺序无关性做到了超出要求的程度**：`--sequence.shuffle` 全量三种子（117/13）+ 打出 seed=3/seed=8 的实际执行序证明真乱序 + 物理倒序临时副本 3 passed。收口方式选 `beforeEach` 显式归零、**拒绝 `vi.resetModules()`**，理由是"会换成第二份 vue 运行时、跨份 ref 不再触发重渲染 → 变成坏绿"（这条理由我交给复评独立判）。
+- **Controller 裁定（本轮最值钱的诚实）**：实施者**自报**"登出后 `documents/queue/messages = []` 三句至今无自动化判据"——它跑了摘一句、摘三句两段变异，全量都 117 全绿，根因是登出后 `.app-shell` 整棵卸载、DOM 上不可观测。**它没有为了凑绿编造判据、也没有放宽断言**，而是把这条按事实交回。同类自报还有两条：判据 3 只钉住 `session_id` 半边（`auth_token` 由 `clearAuth()` 独立清）、X-3 的 DOM 半边断言单独无牙（有牙的是 `authError.value` 那句）。这三条我都接受为事实，最终处置等复评的独立判断。
+- **第二个复评代理死亡与重派**：首个复评代理 `ageneral-purpose-434adec37c020661` 在 **24 次工具调用 / 363 秒 / 943k tokens** 后返回 `failed: Sorry, something went wrong`。**增量写盘的纪律又一次保住了局面**：报告骨架已在盘上（含复核对象、门禁基线与结论表框架），且 `git status --porcelain` 为空——它没来得及做变异，所以没有残留。重派 `ageneral-purpose-65000d87a8db6dd7`，工单里额外写死五条 efficiency 要求（沿用骨架别覆盖、`task-7-report.md` 970 行只读 `# 修正轮 1` 那一节、只跑聚焦 vitest、变异前先备份到 `%TEMP%` 且还原后附 `git status` 证据、结尾只回 200 字）。
+- **Task 8 brief 新鲜度已核**（不必重抽）：与计划文 Task 8 段逐行 diff，**共享部分 0 处差异**，旧副本只是尾部多带了 Self-Review 一节（445 vs 436 行）。计划文本轮五处修订全在 Task 7 段内，不影响 Task 8 的读法。派发前若无新的计划文回写，这份 brief 可直接用。
+- **模型选择偏差照记**：修正轮与两次复评派发都只能继承会话模型（本机不暴露可选模型 id）。
