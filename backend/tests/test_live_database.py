@@ -504,25 +504,58 @@ def test_default_user_exists_and_owns_the_baseline_documents(db):
     assert owned == 13, f"基线 13 行应全归 default，实得 {owned}"
 
 
+# 假 key／假路由（计划指定的探针串，不是任何真凭证）。提成模块级常量是为了**单独成句比对**：
+# 与别的断言用 `and` 合并时 pytest 会把整条表达式的实际值打出来，将来这一格换成真凭证，
+# 日志与终端里就会多出它。拆开写还能在红的时候直接看出是哪一格漂了。
+PROBE_API_KEY = "sk-probe-abcdefg1234"
+PROBE_BASE_URL = "https://probe.example/v1"
+
+
 def test_user_settings_round_trip(db, probe_user):
     """两列 + 名单四种行级操作在真库上的语义。fake 给不出 unique 键与 is_default 互斥的证据。"""
     assert db.update_user_profile(probe_user.id, nickname="改名了") == 1
-    assert db.update_user_llm(probe_user.id, "sk-probe-abcdefg1234", "https://probe.example/v1") == 1
+    assert db.update_user_llm(probe_user.id, PROBE_API_KEY, PROBE_BASE_URL) == 1
     fresh = db.get_user_by_id(probe_user.id)
-    assert fresh.nickname == "改名了" and fresh.api_key == "sk-probe-abcdefg1234"
+    assert fresh.nickname == "改名了"
+    assert fresh.api_key == PROBE_API_KEY
+    # base_url 也要回读：update_user_llm 一次写两格，只回读 api_key 时"`_update_user` 的 dict
+    # 少写 base_url"这一整类退化测不出来（实测离线与 live 双双全绿），而 database.py:632-634
+    # 那句 docstring 论证的恰恰是"key 与路由必须一起写，否则造出必 401 上游的半套配置"。
+    assert fresh.base_url == PROBE_BASE_URL
 
     assert db.add_user_model(probe_user.id, "probe-max") is True
     assert db.add_user_model(probe_user.id, "probe-max") is False      # unique 键那一条
     assert db.add_user_model(probe_user.id, "probe-mini") is True
     assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", False)]
 
+    # 先立 probe-max：这一步的唯一作用是把"名单里已经有一个人是默认"这个**前置态**造出来。
+    # 没有它，下面那次 set_default 里的清场句（把别人的 is_default 洗成 False）没有任何可
+    # 观察效果——整段删掉判据照样绿（实测：删掉后 live 20 passed）。
+    assert db.set_default_user_model(probe_user.id, "probe-max") is True
+    assert db.list_user_models(probe_user.id) == [("probe-max", True), ("probe-mini", False)]
+    # 第二次设默认才是清场句的证据：probe-max 必须由 True 翻成 False。
     assert db.set_default_user_model(probe_user.id, "probe-mini") is True
     assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", True)]
     assert db.set_default_user_model(probe_user.id, "早没了") is False
 
+    # 第三枚：名字**字母序排最前、添加序排最后**，两种排序才分得开。
+    # 上面两枚 probe-max/probe-mini 的字母序恰好等于插入序，把 order_by(UserModel.id)
+    # 改成 order_by(UserModel.name) 这几条断言逐字不变 ⇒ 测不出来（实测全绿）。
+    # "按添加序"不是洁癖：spec 3.4 的"没有 default 就取名单第一个"是问答链的兜底，
+    # 排序口径漂了，用户在界面上选中的和实际打出去的就对不上。
+    assert db.add_user_model(probe_user.id, "a-probe-later") is True
+    assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", True),
+                                                  ("a-probe-later", False)]
+
+    # 同值重写（原样重存同一套 key/路由）回 1：这是本机实测值，口径与它的来由见
+    # `update_user_llm` 的 docstring——rowcount 数的是"匹配到的行"，不是"真被改的行"。
+    # 把它钉成断言，是为了让"哪天换了驱动/客户端标志"这件事在这里先红，而不是让端点悄悄长出 404。
+    assert db.update_user_llm(probe_user.id, PROBE_API_KEY, PROBE_BASE_URL) == 1
+
     assert db.delete_user_model(probe_user.id, "probe-mini") == 1      # 删的是当前默认
-    # 删默认不自动提升（写入侧不动别人的 is_default），读侧靠"没有 default 就取第一个"兜
-    assert db.list_user_models(probe_user.id) == [("probe-max", False)]
+    # 删默认不自动提升（写入侧不动别人的 is_default），读侧靠"没有 default 就取第一个"兜。
+    # 名单顺序仍是添加序：probe-max 在前、a-probe-later 在末。
+    assert db.list_user_models(probe_user.id) == [("probe-max", False), ("a-probe-later", False)]
     assert db.delete_user_model(probe_user.id, "probe-mini") == 0      # 幂等：第二次是 0 不是异常
 
 
@@ -531,4 +564,11 @@ def test_empty_profile_update_touches_nothing(db, probe_user):
     before = db.get_user_by_id(probe_user.id).nickname
     assert before, "对照失去输入：探针账号昵称已是空值，这条绿不说明任何事"
     assert db.update_user_profile(probe_user.id) == 0
+    assert db.get_user_by_id(probe_user.id).nickname == before
+    # 同值重写的实测口径（钉的是**本机这套驱动**的实数，不是 MySQL 的默认行为）：
+    # 裸 MySQL 的 UPDATE affected_rows 只数"真被改变"的行 ⇒ 这里本该回 0；但本项目走
+    # SQLAlchemy 的 MySQL 方言，它在连接时硬编码或上 CLIENT_FOUND_ROWS
+    # （site-packages/sqlalchemy/dialects/mysql/base.py:709-715 与 mysqldb.py:244-251），
+    # rowcount 的口径被标准化成"匹配到的行数" ⇒ 实测回 1。口径全文见 update_user_llm 的 docstring。
+    assert db.update_user_profile(probe_user.id, nickname=before) == 1
     assert db.get_user_by_id(probe_user.id).nickname == before

@@ -25,7 +25,9 @@ DEFAULT_NICKNAME = "默认用户"
 # has-no-password") 那种写法——那是一枚源码里看得见的可用凭证。
 UNUSABLE_PASSWORD_HASH = "unusable-no-password-set"
 
-# (表, 列, DDL 类型)。阶段一只加 documents.user_id；chat_history.user_id 归阶段二
+# (表, 列, DDL 类型)。阶段一：documents.user_id；阶段二：users.api_key/base_url（spec 2.1，
+# 与 core/database.py 的 User 两列同源，长度由 tests/test_user_models_db.py 钉成一处）。
+# chat_history.user_id 归本阶段后续 Task
 # （spec 2.2 勘误：历史的读写过滤和 RAGSystem 四方法要一起重接，分两轮改同一文件不值）。
 MIGRATED_COLUMNS = [
     ("documents", "user_id", "INTEGER"),

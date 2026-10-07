@@ -634,6 +634,23 @@ class DatabaseManager:
         return self._update_user(User, user_id, {"api_key": api_key, "base_url": base_url})
 
     def _update_user(self, model, user_id, fields: dict) -> int:
+        """按主键更新这几格，返回 rowcount。三枚公共方法的返回值口径都出自这里。
+
+        **`0` 的含义是"这一行没被改动"**，而它有两种来路：**用户不存在**，或者
+        **这次没带来任何变化**（同值重写昵称、原样重存 api_key）。
+        裸 MySQL 在不带 `CLIENT_FOUND_ROWS` 时 UPDATE 的 affected_rows 只数**真被改变**的行，
+        那种驱动下同值重写会回 `0`；但本项目走 SQLAlchemy 的 MySQL 方言，它在连接时
+        **硬编码**把 `CLIENT_FOUND_ROWS` 或进 client_flag
+        （site-packages/sqlalchemy/dialects/mysql/base.py:709-715、mysqldb.py:244-251），
+        rowcount 被标准化成"匹配到的行数"。本机 2026-10-07 实测：不存在的 id 回 `0`，
+        同值重写回 `1`（真值表与判据见 tests/test_live_database.py 的
+        `test_empty_profile_update_touches_nothing`）。
+
+        不管哪种驱动，**端点都不要拿这个返回值判 404**：它既不等于"成功"也不等于"存在"。
+        用户存在性由 auth 依赖保证（令牌换出的行已在库里），计划 Task 2 的端点正文确实不读
+        这个返回值——这句是给后来人的护栏，别顺手写成 `if not rows: raise HTTPException(404)`。
+        真要区分"没这行"与"值原样未变"，去 get_user_by_id，不要在这里加一次 SELECT。
+        """
         session = self.get_session()
         try:
             updated = session.query(model).filter(model.id == user_id).update(fields)
