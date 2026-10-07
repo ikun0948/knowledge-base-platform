@@ -1372,6 +1372,12 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task4.tx
 - Consumes: Task 4 的 `RunContext`、`LLMConfig`、`build_llm`、`build_compressor`
 - Produces: `RAGSystem(db_manager, vector_store, llm_factory=build_llm, compressor_factory=build_compressor)`（**`config` 形参删除**）；`normal_chat(ctx, question, session_id)`、`chat_with_documents(ctx, question, parent_ids, session_id)`、`normal_chat_stream(ctx, question, session_id)`、`chat_with_documents_stream(ctx, question, parent_ids, session_id)`；`create_retriever(parent_ids, user_id)`、`get_parent_documents(child_docs, user_id)`。Task 6 在这四个方法里补落库归属，Task 7 把 ctx 的来源换成用户行。
 
+> **修订（2026-10-07，Task 5 预检实测）**，三条：
+> ① Files 里的 **`backend/main.py:57` 已过期**：Task 3 把原来的两行 `run_migrations(...)` 调用并成一行（`:55`），`RAGSystem(config, app.state.db, app.state.vector_store)` 因此**前移到 `:56`**。改的时候按**内容**定位（那一行里带 `RAGSystem(config,`），别按行号盲改——否则会把 `:57` 的 `logger.info("后端初始化完成…")` 改坏。
+> ② `backend/api/chat.py` 的四处 rag 调用 `:41/:50/:75/:79` 与 `import` 行 `:7` **实测仍准**（该文件从阶段一收口后没被动过），按行号改没问题。
+> ③ `tests/fakes.py` 的 `FakeConfig`（现只有 `CHROMA_PERSIST_DIR` 一键）与 `tests/test_migrations.py:175` 的局部 `FakeConfig`（Task 3 新建，四键）**现在并存**：本 Task 只扩**共用那份**（补三键 + 口令，供 chat/rag 两组测试用），`test_migrations.py` 的局部那份不动。两份同名类重复一事记全分支终审（可否改成 import 共用）。
+
+
 - [ ] **Step 1: 写读侧过滤的 RED（只改 `test_vector_store.py`）**
 
 `:127-141` 两条 pin 整段换成三条：
@@ -1788,6 +1794,9 @@ spec 2.2 勘误点名的"同一批工作量"的另一半：Task 5 把 ctx 灌进
 **Interfaces:**
 - Consumes: Task 5 的 `ctx`（`ctx.user_id` 是这里唯一的主人来源）、Task 1/3 的迁移骨架
 - Produces: `get_chat_history(session_id, *, user_id, limit=10)`、`save_chat_history(session_id, user_message, assistant_message, document_ids=None, used_chunks=None, *, user_id)`、`delete_chat_history(session_id, *, user_id)`（三枚都**强制关键字**）、`backfill_chat_history(conn, user_id) -> int`、`summary["chat_rows_claimed"]`。Task 7 不改这套签名。
+
+> **修订（2026-10-07，Task 6 预检实测）**：Files 里凡是落在 `backend/core/migrations.py` 与 `backend/tests/test_migrations.py` 的行号**全部已因 Task 3 漂移**，按内容定位、别按行号盲改。实测现值：`MIGRATED_COLUMNS` 在 `migrations.py:33`（原计划说 `:30`）、`MIGRATED_INDEXES` 在 `:41`（原说 `:34`）；那条 `MIGRATED_COLUMNS` 逐字 pin 现在在 `tests/test_migrations.py:371-375`（原说 `:243`），它断言**恰好三行** `("documents","user_id","INTEGER") / ("users","api_key","VARCHAR(255)") / ("users","base_url","VARCHAR(500)")`——本 Task 要把它改成四行；`FakeConn` 现在跨 `:17-113`（原说 `:15-84`），`execute` 的通用 `SELECT COUNT` 分支在 **`:60`**（原说 `:56`），新分支仍必须插在它**之前**（first-match 规矩不变，理由与本 Task 原文一字不差）。`test_error_model.py:154` 那处位置参数调用与 `test_live_database.py` 的两处行号区间**另需在开工前实测**（本 Task 之前它们没被前面的 Task 动过，但阶段一之后没复核过）。
+
 
 - [ ] **Step 1: 写迁移侧的 RED**
 
