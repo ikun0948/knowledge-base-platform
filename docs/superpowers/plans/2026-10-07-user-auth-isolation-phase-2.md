@@ -3004,6 +3004,10 @@ beforeEach(() => {
 Run: `cd frontend && npx vitest run tests/SettingsModal.test.js`
 Expected: 整文件红（组件不存在，`Failed to resolve` / 无法 import）。记下当轮汇总行。
 
+> **修订（2026-10-08 实跑，Step 1）**：RED 实数 `Test Files 1 failed (1)` / `Tests no tests`，红的理由是 `Failed to resolve import "../src/components/SettingsModal.vue"`——与原文预测一致。**但同一轮里先出现过一次假红**：`Failed to resolve import "../composables/useAuth.js" from "tests/SettingsModal.test.js"`。
+> **这条不是计划的缺陷，是我的抄写错误**：本 Step 的测试片段 `:2939` 一直写着 `'../src/composables/useAuth.js'`（正确），而 Step 2 的**组件**片段 `:3016` 写 `'../composables/useAuth.js'`（在 `src/components/` 下也正确）——我建测试文件时把后一句抄进了 `tests/`，两处相对深度不同，必然解析不到。**因此已提交信息（`6f920c3`）末尾"计划 Step 1 的 import 少写 src/ 一段"那句是错的**（仓库规矩不许 amend，就在这里更正，并写进台账）；计划原文一个字都不许照那句改。教训同一族：**指认"计划有缺陷"之前，先把原文那一行贴出来和自己的行逐字 diff**，否则会把自发笔误记成上游缺陷，下一个人照着改计划就改坏了。
+> 落地时相对原文的四处扩充（都不改判据本体）：① `mountModal(overrides = {})`——原文的 `mountModal()` 只能从整行 `ME` 起步，而判据 #7 需要"两行名单、默认排在第二行"这种前置，参数化一处比在测里手写整行更不容易走样；② 两个密码框**只有 `aria-label` 可分辨**（原文没给它们类名，也不该为一条测新增类名），选择器写成 `input[aria-label="原密码"] / "新密码"`；③ 判据 #7 里"第一行没有默认标记"**不许**用 `w.find('.settings-model-row .settings-default')`——`find` 是**全子树搜索**，第二行的命中会把第一行的 `exists() === false` 顶掉（实测红在 `expected true to be false`），改成 `w.findAll('.settings-model-row')` 逐行 `rows[i].find(...)`；④ 判据 #1 加了"纯空白一发都不发"的变体（连带 `updateProfile` 调用次数恰好一次的记账），原文只描述了本地拦截、没给判据。
+
 - [ ] **Step 2: 实现 SettingsModal.vue**
 
 ```vue
@@ -3348,6 +3352,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 ```
 > ⚠️ 这条测**依赖 `ME.user` 的形状**：Task 8 之前该文件的 `ME` 是五键（`:36`），本 Task 之后 `.rail-avatar`/弹窗回填都要读 `models`/`api_key_masked`，所以 Step 5 的**第一句动作**就是把 `ME.user` 扩成十键（形状见 spec 3.1 与 Task 2 的 `UserOut`）。十键的最终版由 Task 11 定稿（它要再加"未配置"变体），本 Task 先扩到十键即可，别在两个 Task 里各改一半。
 
+> **修订（2026-10-08 实跑，Step 5）——上面那段代码片段有一处真缺陷**：头像测里两次 `user.value = { ...user.value, ... }` 之后**各少一句 `await nextTick()`**。照抄原文得到的红不是判据红，而是 `AssertionError: expected '小' to be '🤖'`：`railAvatar` 这个 computed 确实是同步重算的，但 `app.find('.rail-avatar').text()` 读的是**已打补丁的 DOM**，补丁排在 Vue 的渲染队列里，不冲这一拍就读到上一拍的渲染（第一次赋值后读到的是 `'auto'` 那一路的"小"）。实跑补两句后本文件 `6 passed`。**注意第一句 `expect(...).toBe('小')` 不需要 nextTick**——`mountApp()` 自带一拍 `flushPromises()`。给下一个 Task 的通用口径：**测里直接写模块级 ref 再读 DOM，中间必须过 nextTick**；只有走 `trigger()` 那条路才由 VTU 自动冲（`await` 返回的就是 nextTick 的 promise）。另外该文件因此新增一句 `import { nextTick } from 'vue'`（原文片段没提）。
+
 - [ ] **Step 6: 全量门禁 + 样式门禁**
 
 ```bash
@@ -3356,6 +3362,11 @@ cd frontend && npm test && npm run build
 grep -rn "#[0-9a-fA-F]\{3,8\}\b\|rgba(\|rgb(" src/styles/layout.css | grep -v "var(" | wc -l
 ```
 Expected: 三条都绿。`npm test` 汇总行 = Task 8 的实数 + **10 条**（`SettingsModal.test.js` 8 + `App.auth-gate.test.js` 2）；文件数 **14**（新增 `SettingsModal.test.js`）。⚠️ Step 5 第二条 emoji 测里的 `user.value = {...}` 是**直接写模块级 ref**，它会留给下一个 `it()`——该文件既有口径是"每条 `it()` 自己建立前置条件"（`:19-21`），`seedLoggedIn()` + `mountApp()` 会重新走 `bootstrap()` 用 `ME.user` 覆盖 `user`，所以顺序不敏感；**别在 `beforeEach` 里加 `user.value = null` 之外的补偿逻辑**。
+
+> **实跑记录（2026-10-08，Step 6）**：`Test Files 14 passed (14)` / `Tests 141 passed (141)` = Task 8 的 131 + 10，与本节设计数一致；`npm run build` exit 0（`dist/assets/index-B0QRINQ4.js 99.69 kB`，比 Task 8 那一轮 +7 kB，多的就是弹窗）；G-4 那条 grep 实数 **0**。⚠️ 计划别处写的"基线 117"从本 Task 起一律过期，**Task 10/11 的起点是 141**。
+> 变异自证五条（**原文 Task 9 全节没有列变异自证**，这五条是按仓内"凡'这条断言会红'必须实测"的口径自加的）：① `applyModels` 改整行覆盖 `patchMe(out)` → `1 failed | 7 passed (8)`，红的正是 #5 的 `api_key_masked`（`Received: undefined`）；② 删 `run()` 里 password 成功后的清空 → 1 红，#4 的 `oldPw` 那格残留 `+ old-pass`；③ ⚙ 加回 `disabled` → 1 红（App 那条 `attributes('disabled')`，`Received: ""`）；④ `Array.from(avatar)[0]` 换 `charAt(0)` → 1 红，头像测那一格收到的是**半个代理对**（终端把它显示成替换字符，故不誊抄原文报错）；⑤ 删 `resetWorkspace` 里 `settingsOpen.value = false` → 1 红（开着弹窗登出那条 `expected true to be false`）。**顺带证实**：⑤ 那一红只落在 Step 5 第一条，Step 4.4 让补进 401 测的那句 `settingsOpen === false` 照初值绿、单独不构成牙——所以我在测里写明了这件事，而不是让它冒充清理动作的判据。
+> 全程手工 `Edit` 变异 + `cp` 备份还原 + `sha256` 双向核对：`SettingsModal.vue a3eee956…`、`App.vue e153309f…` 两轮还原后与基线一致。行尾普查（按字节，不信 grep 计数）：`App.vue`/`layout.css` 全 CRLF 零 lone-LF；新建的 `SettingsModal.vue` 与两个测试文件是 LF（`core.autocrlf=true`，入库统一成 LF，`git diff --stat` 只有 113/12 的窄口，无整文件重排）。
+> ⚠️ Step 4 原文给的 App.vue 行号（`:182-183`、`:188-194`、`:95-98`、`:186`）在 Task 8 插入 `resetWorkspace`/401 回调之后**又整体下漂**（实跑落在 `:207-211`、`:216-222`、`:123-126`、`:214`）——照旧按内容指认，不按行号。
 
 - [ ] **Step 7: 提交**
 
