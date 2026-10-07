@@ -14,12 +14,13 @@
 //     并回一个 200 空数组兜底——这样"多打了一枪"表现为记账里多一条 unknown，
 //     而不是变成一条 JSON 解析报错（那种红查起来只会让人以为测写坏了）。
 //   - useAuth 的 user/authError/authBusy（useAuth.js:15-17）、useSession 的 sessionId
-//     （useSession.js:20）、api/client.js 的 authToken 都是**模块级**状态，同一个文件里三个
+//     （useSession.js:20）、api/client.js 的 authToken 都是**模块级**状态，同一个文件里六个
 //     it() 共享它们。收口方式：不用 vi.resetModules() 重取模块（那会连 vue 一起换成第二份运行时，
 //     跨份的 ref 不再触发重渲染），而是 **beforeEach 显式归零 + 每条 it() 自己建立前置条件**
 //     （清 localStorage / 塞令牌）。it() 的书写顺序因此不承载任何判据——
 //     --sequence.shuffle 与物理倒序两个方向都验过（见报告）。
 //   - jsdom 原生 window.confirm 只在 handleClear 里用，本轮不碰那条路径，也没往 stub 里塞 confirm。
+import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
@@ -33,7 +34,16 @@ const TOKEN = 'a'.repeat(43)
 const SID = '3f2b1c00-1111-2222-3333-444455556666'
 const CHUNK = { parent_id: '手册.pdf_parent_0', document_id: 7, filename: '手册.pdf',
                 suffix: 'pdf', snippet: '片段一', child_count: 3 }
-const ME = { user: { id: 1, identifier: 'a@b.com', identifier_type: 'email', nickname: '小明', avatar: 'auto' } }
+// 十键 = backend/schemas/auth.py 的 UserOut 一字不差（阶段二起后五键由 _user_out 组装）。
+// 本 Task 之后 `.rail-avatar` 读 avatar、设置弹窗回填读 models/api_key_masked，
+// 少给一键就是让判据在"字段不存在"上变绿或变红，理由都不干净。取值与 SettingsModal.test.js 同套。
+const ME = {
+  user: {
+    id: 1, identifier: 'a@b.com', identifier_type: 'email', nickname: '小明', avatar: 'auto',
+    llm_configured: true, llm_base_url: 'https://fake/v1', api_key_masked: 'sk-****7890',
+    models: ['qwen-max'], default_model: 'qwen-max',
+  },
+}
 // 上一个账号的文档与历史：登出的"不残留"就靠它们做探针
 const DOC = { id: 42, filename: '上一个账号的文档.pdf', size: 1 }
 const HISTORY_ROWS = [
@@ -225,6 +235,11 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
       // vm 层：DOM 此时已整棵卸载，屏上没有残留可断——这条口径见上面 :183 那段注释
       expect({ docs: app.vm.documents.length, msgs: app.vm.messages.length })
         .toEqual({ docs: 0, msgs: 0 })
+      // Task 9：settingsOpen 与 pickerOpen 同组清理。这一句单独**不是牙**——401 发生在
+      // onMounted 的三拍里，弹窗在此之前没有开过的机会，照初值绿；有牙的是 Step 5
+      // 第一条「开着弹窗登出」。留着的价值是：将来谁往 handleSessionLost 走一条不开弹窗的
+      // 清理分支（比如拆掉 resetWorkspace 复用），这里与那条测一起红。
+      expect(app.vm.settingsOpen).toBe(false)
       // 判据的另一半：自动登出**不许**补发 logout（那一枪必再 401，回调就成了环）
       expect(calls.filter((c) => c.url.startsWith('/api/auth/logout'))).toEqual([])
     } finally {
@@ -233,5 +248,40 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
         route.body = body
       }
     }
+  })
+
+  it('⚙ 点得开、弹窗能关，且退出后不再留着上一个账号的表单', async () => {
+    seedLoggedIn()
+    const app = await mountApp()
+    // 前置事实：⚙ 不再是 disabled（阶段一那条 disabled 是"点出空白弹窗更糟"的占位）
+    const gear = app.find('.rail-settings')
+    expect(gear.attributes('disabled')).toBeUndefined()
+    expect(app.find('.settings-panel').exists()).toBe(false)
+
+    await gear.trigger('click')
+    expect(app.find('.settings-panel').exists()).toBe(true)
+    // 弹窗里此刻是**这个人**的资料（回填来自模块级 user，不是空表单）
+    expect(app.find('.settings-nickname-input').element.value).toBe('小明')
+
+    // Task 9 的关键接线：开着弹窗登出，ref 必须跟着归位
+    await app.find('.rail-signout').trigger('click')
+    await flushPromises()
+    expect(app.vm.settingsOpen).toBe(false)
+    expect(app.find('.settings-panel').exists()).toBe(false)
+  })
+
+  it('头像列的三种值都渲染得出来：auto 取昵称首字母、预设表情是整枚、空昵称退回标识首字母', async () => {
+    const { user } = useAuth()
+    seedLoggedIn()
+    const app = await mountApp()                        // me 回的是 ME.user（avatar: 'auto'）
+    expect(app.find('.rail-avatar').text()).toBe('小')  // 昵称「小明」的首字母，中文不需要 toUpperCase
+    // 每改一次都要 nextTick：computed 是同步的，但它只重算值，DOM 补丁排在渲染队列里，
+    // 不冲这一拍读到的还是上一拍的渲染（计划 Step 5 的片段少了这两句，实测第一个红就是这么来的）。
+    user.value = { ...user.value, avatar: '🤖' }
+    await nextTick()
+    expect(app.find('.rail-avatar').text()).toBe('🤖')   // 整枚，不是半个代理对
+    user.value = { ...user.value, avatar: 'auto', nickname: '', identifier: 'z@b.com' }
+    await nextTick()
+    expect(app.find('.rail-avatar').text()).toBe('Z')
   })
 })

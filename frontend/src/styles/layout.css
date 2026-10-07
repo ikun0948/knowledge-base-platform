@@ -342,3 +342,44 @@
   .user-rail { flex-wrap: wrap; }
   .auth-panel { padding: 16px; }
 }
+
+/* ---- 阶段二 Task 9：设置弹窗 ----
+   外壳照抄 .picker-backdrop / .picker-modal（遮罩、66vh、纵向 flex 都已被文档块弹窗验过），
+   这里只补内部的纵向排布与四个小件。G-4 口径：本块一个颜色字面量都不写。 */
+.settings-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px; padding-right: 2px;
+}
+.settings-section { display: flex; flex-direction: column; gap: 8px; }
+.settings-heading { margin: 0; font-size: 14px; color: var(--text-muted); }
+.settings-input {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--panel-bg); color: var(--text-main); font-size: 13px;
+}
+.settings-input:focus { outline: 2px solid var(--focus-ring); border-color: var(--brand-1); }
+.settings-avatars { display: flex; gap: 6px; flex-wrap: wrap; }
+.settings-avatar {
+  width: 32px; height: 32px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 50%;
+  background: var(--panel-bg); color: var(--text-main); font-size: 16px; line-height: 1;
+}
+.settings-avatar-active { border-color: var(--brand-1); background: var(--status-rag-bg); }
+.settings-error { font-size: 13px; color: var(--fail-fg); }
+.settings-hint { font-size: 12px; color: var(--text-muted); }
+.settings-masked { font-size: 13px; color: var(--text-muted); }
+.settings-models { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.settings-model-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+/* 名单项名字可能长到吃掉整行（模型名上界 100 字）：不 min-width:0 就会把两个按钮挤出弹窗 */
+.settings-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-default {
+  flex-shrink: 0; padding: 1px 8px; border-radius: var(--radius-pill);
+  background: var(--status-normal-bg); color: var(--status-normal-fg); font-size: 12px;
+}
+.settings-add-model { display: flex; gap: 8px; }
+.settings-add-model .settings-input { flex: 1; min-width: 0; }
+
+@media (max-width: 768px) {
+  /* 窄屏上"名字 + 默认 + 设为默认 + 删除"一行四件，375px 必塌：让按钮组换行到第二行 */
+  .settings-model-row { flex-wrap: wrap; }
+  .settings-avatar { width: 28px; height: 28px; font-size: 14px; }
+}

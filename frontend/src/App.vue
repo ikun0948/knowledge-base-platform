@@ -8,6 +8,7 @@ import ChatInput from './components/ChatInput.vue'
 import ChunkPickerModal from './components/ChunkPickerModal.vue'
 import DocumentPanel from './components/DocumentPanel.vue'
 import MessageList from './components/MessageList.vue'
+import SettingsModal from './components/SettingsModal.vue'
 import StatusBar from './components/StatusBar.vue'
 import { useAuth } from './composables/useAuth.js'
 import { useChat } from './composables/useChat.js'
@@ -32,6 +33,9 @@ const question = ref('')
 const clearing = ref(false)
 // 宽屏侧栏常驻，panelOpen 只在 ≤768px 起作用
 const panelOpen = ref(false)
+// 设置弹窗的开关留在 App 这一层而不是弹窗内部：⚙ 在 `.user-rail` 里、弹窗在 `.chat-body` 里，
+// 两头都归 App 的模板管，开关放谁那儿都会逼出一次跨组件透传。
+const settingsOpen = ref(false)
 
 // 改造前 onMounted 的三拍原样搬进这个函数：顺序是既有不变式，不许重排。
 // hydrate 要打一枪 /api/documents/chunks：放在 restore 之前，
@@ -90,6 +94,8 @@ function resetWorkspace() {
   clearSelection()
   error.value = ''
   pickerOpen.value = false
+  // 同 pickerOpen 的理由：v-if 会把弹窗卸载，但 ref 活在 App 实例上，不清就是留给下一个人的半截表单。
+  settingsOpen.value = false
 }
 
 async function handleSignOut() {
@@ -117,11 +123,14 @@ function handleSessionLost() {
 onMounted(() => setUnauthorizedHandler(handleSessionLost))
 onBeforeUnmount(() => setUnauthorizedHandler(null))
 
-// 头像：`users.avatar` 这一期恒为 'auto'（预设表情的选择器随 SettingsModal 在阶段二接入），
-// 所以这里只做昵称首字母；昵称为空才退回账号标识，再空才是 '我'。
-const avatarChar = computed(() => {
+// 头像这一列现在有两个来源（Task 9 起了选择器）：'auto' = 昵称首字母，预设表情直接照抄。
+// 取"首字母"用 Array.from 而不是 charAt(0)：emoji 是一个代理对，charAt 会切出半个、
+// 渲染成乱码方块（阶段一顺延清单 M-4 说的就是这类半字符）。
+const railAvatar = computed(() => {
+  const avatar = user.value?.avatar
+  if (avatar && avatar !== 'auto') return Array.from(avatar)[0] ?? '我'
   const name = (user.value?.nickname || user.value?.identifier || '').trim()
-  return name ? name.charAt(0).toUpperCase() : '我'
+  return name ? Array.from(name)[0].toUpperCase() : '我'
 })
 
 async function handleClear() {
@@ -205,19 +214,17 @@ function dismissError() {
       <div class="side-panel-inner">
         <!-- 需求 3：原先这里的「session_id 调试区」整块删除（那行的 <code> 展示与
              「换一个 session_id」按钮一起走），原位置换成 `.user-rail`——sessionId 在界面上
-             只剩读的地方，没有显示的地方；换 id 的动作留在 handleClear 里。
-             ⚙ 这一期是 disabled 的占位：设置弹窗（改昵称/密码/api_key）在阶段二，
-             现在点出一个空白弹窗比点不动更糟。title 说明"什么时候有"。 -->
+             只剩读的地方，没有显示的地方；换 id 的动作留在 handleClear 里。 -->
         <hr class="panel-hr" />
         <div class="user-rail">
-          <span class="rail-avatar" aria-hidden="true">{{ avatarChar }}</span>
+          <span class="rail-avatar" aria-hidden="true">{{ railAvatar }}</span>
           <span class="rail-name" :title="user?.identifier">{{ user?.nickname }}</span>
           <button
             class="btn btn-ghost btn-small rail-settings"
             type="button"
-            disabled
-            title="设置项将在下一阶段开放"
+            title="账号设置"
             aria-label="打开设置"
+            @click="settingsOpen = true"
           >⚙</button>
           <button class="btn btn-ghost btn-small rail-signout" type="button" @click="handleSignOut">退出登录</button>
         </div>
@@ -247,6 +254,9 @@ function dismissError() {
             @chunk-deleted="handleChunkDeleted"
             @close="pickerOpen = false"
           />
+          <!-- 与选块弹窗同位：两者都是 position: fixed 的浮层，挂到 .app-shell 直接子级
+               会重新引入"多出一轨"的疑问（layout.css 的 L-1/L-2 注释就是为此写的） -->
+          <SettingsModal v-if="settingsOpen" @close="settingsOpen = false" />
         </div>
       </div>
     </main>
