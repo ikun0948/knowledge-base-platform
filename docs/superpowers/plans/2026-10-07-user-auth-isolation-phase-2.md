@@ -797,6 +797,11 @@ def _models_out(db, user) -> ModelsOut:
 Run: `cd backend && python -m pytest -q`
 Expected: 全绿；条数比基线 **257** 多约 13–14（以当轮汇总行为准）。
 
+> **修订（2026-10-07，Task 2 预检 + 实跑回写）**，三处：
+> ① **起点不是 257。** Task 1 已经加了 5 条，本 Task 开工时的全量实数是 **262 passed / 2 skipped / 2 deselected**，`test_api_auth.py` 起点 **34**。终态实数：**`test_api_auth.py` 43 passed / 全量 271 passed, 2 skipped, 2 deselected / live 单文件 20 passed（真跑无 skip）**，RED 阶段 `8 failed, 34 passed`。三门各带 1 warning，出处是既有 `core/database.py:13` 的 `declarative_base()` MovedIn20Warning，非本轮引入。
+> ② **Step 4 的"首个模型自动置默认"会打断 Task 1 已提交的 live 判据，这一句 brief/计划正文没写。** `core/database.py` 的 `add_user_model` 加进 `is_default` 之后，`tests/test_live_database.py:529` 的 `[("probe-max", False), ("probe-mini", False)]` 必然红——新真值是 `[("probe-max", True), ("probe-mini", False)]`，而这一句从此就是那条新逻辑的直接判据。同时 `:532-535` 那段注释（"先立 probe-max 的唯一作用是把前置态造出来"）说的是假话了：前置态现在由 `add` 自己造，`set_default(probe-max)` 退成同值重设，清场句的证据只剩第二次设默认那一句。**改断言 + 改注释都属于执行本计划，不是改计划**（Step 7 的文件清单本来就含这个文件）。
+> ③ `is_first` 的判空必须是**另一次不带 `name` 过滤**的查询。复用上面那次 `hit`（它按名字过滤）等于把"名单里没这个名字"当"名单是空的"，第二枚也会被标成默认、两个默认并存；实测这种退化**只有 live 红，离线全绿**（fake 自己用 `not rows` 算，口径不受影响）。
+
 - [ ] **Step 7: 提交**
 
 ```bash
@@ -1081,6 +1086,11 @@ def test_run_migrations_stamps_after_documents_are_claimed():
 
 Run: `cd backend && python -m pytest -q`
 Expected: 全绿（`-m "not migration"` 是默认；`test_chroma_data.py` 整组被 deselect，本轮不跑它，只保证它导入与新签名一致——真跑搬家守卫时按台账记实数）。
+
+> **修订（2026-10-07，Task 3 预检裁定）**，三处：
+> ① **`test_chroma_data.py` 本轮必须真跑，"只保证导入一致"在本机等于零验证。** 它整组带 `@pytest.mark.migration`，离线门禁默认 deselect，而那两处调用点（`:97`/`:108`）正是 `stamp_vector_owner` 新形状 `(vid, uid)` 的消费者——不跑就是把"签名改了但没人验过"留在树上。跑法：`cd backend && python -m pytest tests/test_chroma_data.py -m migration -q`。它只在 `tmp_path` 的 Chroma **副本**上开客户端、绝不写 `Config.CHROMA_PERSIST_DIR`，仍然是一个 pytest 进程、不起 uvicorn。**若因本机环境跑红（副本不完整等），如实记"本轮迁移组未跑通 + 实数"，不许转述成绿。**
+> ② 现存 `run_migrations` 里有一句正文未提的 **`if not docs: pending = {"parent": [], "child": []}`**（归户零行就把清单清空）。新实现必须删掉它——新语义下清单读的是"**已**有主人的向量"，那句的前提已不存在，留着恰好会把 advisory ① 要修的自愈清单重新清空。评审若问"为什么少了一句"，答案在这里。
+> ③ `tests/test_chroma_data.py:86` 的注释里还写着旧名 `vector_ids_without_owner`，改名后它是过期文字；与 `migrations.py` 顶部注释同一口径顺手改（纯文字）。另实测 `UserModel`（`database.py:150-163`）只有 `id`/`user_id`/`name`/`is_default` 四列、**没有 `created_at`**，所以 `seed_default_llm` 那句裸 `INSERT INTO user_models (user_id, name, is_default)` 不会撞 NOT NULL；将来若给这表补时间戳列，这句要同步改。
 
 - [ ] **Step 6: 提交**
 
