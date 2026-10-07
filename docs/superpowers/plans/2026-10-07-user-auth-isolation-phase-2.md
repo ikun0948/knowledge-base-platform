@@ -2530,6 +2530,8 @@ import 行补 `ApiError, setUnauthorizedHandler`（`client.js` 的导出面从�
 Run: `cd frontend && npx vitest run tests/client.test.js`
 Expected: 新增五条里除"403 不触发"那种天然成立的之外都红（`ApiError is not a function` / `setUnauthorizedHandler is not a function`）。**记下当轮汇总行**。
 
+> **修订（2026-10-08 实跑，Step 1）**：① **RED 实数 `Tests 5 failed | 21 passed (26)`**——五条全红。这个数字是事后精确重建测出来的（`git show da641fa~1:frontend/src/api/client.js` 覆盖回旧实现、只留新测跑一轮），当轮我抄进提交信息的那句"4 failed | 22 passed"是凭记忆写的、**错了**；`da641fa` 已提交且不 amend（本项目的铁规矩），所以错数字留在提交信息里，以本块与台账为准。② 本节原文把"三条出口都算"写成 `request / postStream / XHR`，但代码块里只走 `request` 一条——XHR 那条本来另有归属（`documents-api.test.js`），而 **postStream 一格都没碰**，于是"回调只在 JSON 出口生效"这种坏法照样绿。实跑在同一句 `it()` 内补了 postStream 的 401（`stubFetch(jsonResponse(..., 401))` 后 `postStream(...)` 再断 `seen` 变成两条 `'cleared'`），标题随之改成"401 触发回调、403 不触发；request 与 postStream 两条出口都算（XHR 那条在 documents-api.test.js）"。**条数没变**，仍是本节 5 条。
+
 - [ ] **Step 2: 实现 client.js —— 一个构造点 + 一个回调槽**
 
 在 `detailFromText`（`:20-35`）之后、`request`（`:37`）之前插入：
@@ -2740,6 +2742,8 @@ describe('api/auth.js 的六个设置封装（Task 8）', () => {
 })
 ```
 
+> **修订（2026-10-08 实跑，Step 4）**：原文四条判据覆盖了 `updateProfile` / `updatePassword` / `updateLlmConfig` / `removeModel` / `setDefaultModel` 五枚封装，**`addModel` 一格都没测**——而本节标题写的是"六个设置封装"。漏掉它不是抽象的"少测一个"：`addModel` 是唯一走 `POST /api/auth/me/models`（名单集合本身）的那一枚，路径写成 `/api/auth/me/model` 或 body 多塞一个 `is_default` 都不会被这四条咬住。实跑把它的断言并进第四条（标题改为"三枚模型封装：删除编码路径段、设默认打 /default、添加只发 name"，断言 `request.mock.calls[0..2]` 三枪的 path/method/body），**条数不变**，仍是本节 4 条。
+
 > **带 `/` 的模型名是已知窄口，不是本 Task 的 bug**：`encodeURIComponent` 送出 `%2F`，Starlette 会把它当一段路径收进来（路由的 `[^/]+` 匹配的是编码后的串）。但若某天 Vite 代理或线上 nginx 归一化 `%2F`，删除就会 404。Task 12 的浏览器判据里手测一次带斜杠的模型名，失败就**记进台账当已知边界**，不许改道成 query 参数（后端路由 `DELETE /me/models/{name}` 已在 Task 2 钉死）。
 
 - [ ] **Step 5: useAuth —— `clearAuth` 提到模块级 + `patchMe`**
@@ -2791,6 +2795,8 @@ export function useAuth() {
     })
   })
 ```
+
+> **修订（2026-10-08 实跑，Step 5）**：RED 实数 `Tests 1 failed | 8 passed (9)`，红的只有 `patchMe is not a function` 那条。**照实说第二条**："clearAuth 是模块级的同一份"那条在把 `clearAuth` 移出函数体**之前就已经是绿的**——原实现虽是函数内的函数声明，它闭包到的 `user` / `TOKEN_KEY` / `setAuthToken` 全是模块级，两次 `useAuth()` 调用拿到的本就是同一份账。所以那条不是 RED 驱动，是**防回归**：钉住"以后有人把它改成函数内 `const clearAuth = () => {…}` 并往里塞实例态"时的行为。它顺带证明本 Step 的"提到模块级"是一次零行为变化的移动。
 
 - [ ] **Step 6: App.vue —— `resetWorkspace()` 抽出来，401 与登出共用**
 
@@ -2877,12 +2883,16 @@ onBeforeUnmount(() => setUnauthorizedHandler(null))
 
 > `ROUTES`（`:47-53`）是模块级常量数组，改元素再还原是这条测唯一可行的注入方式——别换成 `vi.stubGlobal` 重写 fetch，那会绕过真实的 `client.js`，`status`/回调这两个本 Task 的交付物就都没被测到。
 
+> **修订（2026-10-08 实跑，Step 6）**：原文的注入只翻 `/api/documents` 一拍，**这样 `msgs: 0` 那条断言永久红**——红得像是"清理没清干净"，其实是被测代码没错、注入方式漏了后半程：`handleSessionLost` 跑完之后 `enterWorkspace()` 并不会停（三拍各自吞错是既有设计），它继续拿 `clearSession()` 刚换出来的新 uuid 去打 `restore`，而桩对 `/api/history/` 仍回 200 两行 ⇒ `messages` 又被上一个账号的历史填满。**这句也实测过**：把 `flips` 数组临时只留 `/api/documents` 重跑本文件，红的正是那条组合断言，实数 `expected { docs: +0, msgs: 2 } to equal { docs: +0, msgs: +0 }`，其余三条全绿（`1 failed | 3 passed (4)`）。实跑把 `/api/documents` 与 `/api/history/` **两拍一起**翻成 401（真实场景里一枚过期票就是每一枪都 401，这才是要模拟的事实），并顺带把"三拍都可能撞 401"的重入压给了被测代码——`resetWorkspace` 的幂等因此不是纸面承诺。另外 `mountApp()` 后多冲一拍 `flushPromises()`：落回登录页是 `clearAuth()` 置 `user = null` 触发的重渲染。**这句实测过是不必要的**——删掉它重跑本文件仍是 `4 passed`，`mountApp()` 自带的那一拍就够了；留着它是因为它把"落回登录页要等一次重渲染"这件事写在了测里，代价一拍。条数不变，本文件 3 → 4 条。
+
 - [ ] **Step 7: 全量门禁**
 
 Run: `cd frontend && npm test`
 Expected: 全绿。**基线核对**：阶段一终态是 `117 passed / 13 文件`（`2026-10-07` 实测），本 Task 设计上新增 **14 条**（`client.test.js` 5、`documents-api.test.js` 2、`api-auth.test.js` 4、`useAuth.test.js` 2、`App.auth-gate.test.js` 1）⇒ 汇总行应为 **131 passed**。不符就以当轮汇总行为准、把差异记进台账（`docs/superpowers/plans/` 里这份计划用 `>` 修订块回写），**不许改测凑数**。
 
 变异自证三条（台账记实数）：① 把 `httpError` 里的 `notifyUnauthorized(status)` 删掉 → 那条 401 测与"运行中撞 401"整条红；② 把 `:81` 换回 `new Error(...)` → `status` 断言红；③ 把 `handleSessionLost` 里的 `clearAuth()` 删掉 → `.auth-screen` 那句红（工作区还在），证明"落回登录页"确实只由它开关。
+
+> **实跑记录（2026-10-08，Step 7）**：门禁实数 `Test Files 13 passed (13)` / `Tests 131 passed (131)`，与本节设计数完全一致（117 + 14，无凑数）；`npm run build` 通过（`dist/assets/index-*.js 92.59 kB`）。三条变异的**实红数**：① **3 条、跨 3 个文件**——比原文预测多一条，多的正是上传那条 XHR（`documents-api.test.js` 的"上传撞 401 同样触发登出回调"），三条出口各有判据这件事因此是被测出来的、不是写在注释里的；② **2 条**——"流开始前的 409"与"401 触发回调"那半句，后者红是因为回退成 `new Error` 连 `notifyUnauthorized` 一起绕过了（原文只预测了 `status` 那一条）；③ **1 条**——`.auth-screen` 那句 `expected false to be true`，其余三条照绿。原文写的 `:81` 在 Task 8 自己插进 `ApiError` 之后已漂到 **`:121`**（postStream 的流前失败那一格），变异按格子不按行号。三次变异都用 `cp` 备份 + 还原后 `sha256` 双向核对（`client.js 7fd956b4…`、`App.vue c562559b…` 还原后与变异前一致），行尾经全量普查确认 CRLF 三文件零 lone-LF、LF 七文件零 CR。
 
 - [ ] **Step 8: 提交**
 
