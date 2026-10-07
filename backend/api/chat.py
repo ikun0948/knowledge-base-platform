@@ -18,10 +18,6 @@ def _require_owned_parents(db, parent_ids, user) -> list[str]:
 
     放在端点而不是 RAGSystem：链子只管问答，"能不能问这几个块"是门口的事（spec 3.4 同款分工）。
     也比在链子里查更便宜——越权请求一次都不该打到 embedding 与 LLM 上。
-
-    返回值这一期**不往链子里传**：`RAGSystem` 四个方法的签名保持不变，端点仍把原始 parent_ids 递给它。
-    这不是遗漏——校验已经发生，把收窄后的集合再传一遍只是少一次无谓比较，
-    而那件事得和阶段二的 `chat_history.user_id`、RAGSystem 重接一起改才划算（spec 2.2 勘误）。
     """
     if not parent_ids:
         return []

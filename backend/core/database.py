@@ -100,10 +100,14 @@ class ChatHistory(Base):
     document_ids = Column(String(500))  # 存储使用的文档ID，逗号分隔
     used_chunks = Column(Text)  # JSON格式存储使用的文档块信息
     created_at = Column(DateTime, default=datetime.now)
+    # 阶段二才有的归属列。裸 DDL（migrations.add_column）不会加出外键约束，
+    # 这里的 ForeignKey 只为 create_all 与关系可读服务——documents.user_id 从阶段一起就是同一状态。
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
 
     # 索引
     __table_args__ = (
         Index('ix_chat_history_session_id_created_at', 'session_id', 'created_at'),
+        Index('idx_chat_history_user_id', 'user_id'),
         # 如果需要单独为 created_at 建立索引（例如全局清理旧数据时按时间查询）：
         # Index('ix_chat_history_created_at', 'created_at'),
     )
@@ -472,19 +476,27 @@ class DatabaseManager:
         return [pid for pid in ids if pid in allowed]
 
     # 获取历史聊天记录
-    def get_chat_history(self, session_id, limit=10):
-        # 获取数据库操作游标
+    def get_chat_history(self, session_id, *, user_id, limit=10):
+        """读侧的 user_id 不是优化，是边界：session_id 由后端 uuid4() 铸造只让它**难猜**，
+        而难猜从来不是访问控制（spec 2.2 的原话）。加列之前这句话没处落地，加列之后漏掉就是漏洞。
+        """
         session = self.get_session()
         try:
             chats = session.query(ChatHistory).filter(
-                ChatHistory.session_id == session_id
+                ChatHistory.session_id == session_id,
+                ChatHistory.user_id == user_id,
             ).order_by(ChatHistory.id.desc()).limit(limit).all()
             return list(reversed(chats))
         finally:
             session.close()
 
     # 保存历史聊天记录
-    def save_chat_history(self, session_id, user_message, assistant_message, document_ids=None, used_chunks=None):
+    def save_chat_history(self, session_id, user_message, assistant_message,
+                          document_ids=None, used_chunks=None, *, user_id):
+        """user_id 必填且强制关键字：漏传不是"这行暂时没主人"，是这一轮**永远读不回来**
+        （NULL 不满足任何 `user_id = ?`）。位置参数会让十个调用点各自有机会漏，
+        关键字参数让漏传在导入期就 TypeError。
+        """
         session = self.get_session()
         try:
             chat = ChatHistory(
@@ -492,7 +504,8 @@ class DatabaseManager:
                 user_message=user_message,
                 assistant_message=assistant_message,
                 document_ids=document_ids,
-                used_chunks=used_chunks
+                used_chunks=used_chunks,
+                user_id=user_id,
             )
             session.add(chat)
             session.commit()
@@ -504,10 +517,13 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_chat_history(self, session_id):
+    def delete_chat_history(self, session_id, *, user_id):
         session = self.get_session()
         try:
-            deleted = session.query(ChatHistory).filter(ChatHistory.session_id == session_id).delete()
+            deleted = session.query(ChatHistory).filter(
+                ChatHistory.session_id == session_id,
+                ChatHistory.user_id == user_id,
+            ).delete()
             session.commit()
             return deleted
         except Exception:

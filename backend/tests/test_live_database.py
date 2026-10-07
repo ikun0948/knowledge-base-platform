@@ -118,25 +118,27 @@ def test_get_filenames_by_ids_is_one_in_query(db, probe_user):
         db.delete_document(chinese)
 
 
-def test_used_chunks_round_trips_through_json(db):
+def test_used_chunks_round_trips_through_json(db, probe_user):
     ref = Reference(document_id=999, parent_id="p", filename="中文名.txt", snippet="含 <script> 的片段")
     db.save_chat_history(session_id="probe-live", user_message="问", assistant_message="答",
                          document_ids="999",
-                         used_chunks=json.dumps([ref.model_dump()], ensure_ascii=False))
-    db.save_chat_history(session_id="probe-live", user_message="第二问", assistant_message="第二答")
+                         used_chunks=json.dumps([ref.model_dump()], ensure_ascii=False),
+                         user_id=probe_user.id)
+    db.save_chat_history(session_id="probe-live", user_message="第二问", assistant_message="第二答",
+                         user_id=probe_user.id)
     try:
-        rows = db.get_chat_history("probe-live")
+        rows = db.get_chat_history("probe-live", user_id=probe_user.id)
         # 旧→新：历史窗口 [-3:] 取的就是这个顺序
         assert [r.user_message for r in rows] == ["问", "第二问"]
         assert Reference(**json.loads(rows[0].used_chunks)[0]) == ref
         assert rows[1].used_chunks is None
-        assert db.delete_chat_history("probe-live") == 2
+        assert db.delete_chat_history("probe-live", user_id=probe_user.id) == 2
     finally:
-        db.delete_chat_history("probe-live")
-    assert db.get_chat_history("probe-live") == []
+        db.delete_chat_history("probe-live", user_id=probe_user.id)
+    assert db.get_chat_history("probe-live", user_id=probe_user.id) == []
 
 
-def test_emoji_survives_the_history_round_trip(db):
+def test_emoji_survives_the_history_round_trip(db, probe_user):
     """4 字节字符必须写得进、读得出：连接串回退成 `charset=utf8` 时这条会红。
 
     表是 utf8mb4，但 PyMySQL 按连接串的 charset 协商**会话**字符集——utf8 即 utf8mb3，
@@ -148,14 +150,14 @@ def test_emoji_survives_the_history_round_trip(db):
     question = "用一个表情符号跟我打个招呼 😀"
     answer = "你好 😀 😊 ✅ 🚀"  # 中文与 4 字节字符混排
     db.save_chat_history(session_id="probe-emoji", user_message=question,
-                         assistant_message=answer)
+                         assistant_message=answer, user_id=probe_user.id)
     try:
-        rows = db.get_chat_history("probe-emoji")
+        rows = db.get_chat_history("probe-emoji", user_id=probe_user.id)
         assert [(r.user_message, r.assistant_message) for r in rows] == [(question, answer)]
-        assert db.delete_chat_history("probe-emoji") == 1
+        assert db.delete_chat_history("probe-emoji", user_id=probe_user.id) == 1
     finally:
-        db.delete_chat_history("probe-emoji")
-    assert db.get_chat_history("probe-emoji") == []
+        db.delete_chat_history("probe-emoji", user_id=probe_user.id)
+    assert db.get_chat_history("probe-emoji", user_id=probe_user.id) == []
 
 
 def test_deleting_a_parent_chunk_takes_its_children_and_hides_the_document(db, probe_user):
@@ -579,3 +581,30 @@ def test_empty_profile_update_touches_nothing(db, probe_user):
     # rowcount 的口径被标准化成"匹配到的行数" ⇒ 实测回 1。口径全文见 update_user_llm 的 docstring。
     assert db.update_user_profile(probe_user.id, nickname=before) == 1
     assert db.get_user_by_id(probe_user.id).nickname == before
+
+
+def test_chat_history_is_invisible_to_another_user(db):
+    """跨用户证据只能来自真库：fake 那三枚桩不真过滤，WHERE 少写一句在它们身上照样绿。
+
+    A 写得进、读得出；B 读回空、删掉 0 行。B 的删除返回 0 而不是 1 是本条的牙——
+    "GET 加了过滤、DELETE 忘了"是这类改造最常见的半截交付。
+    """
+    from core.security import hash_password
+
+    a = db.create_user(identifier=f"hist-a-{new_tag()}@local", identifier_type="email",
+                       nickname="甲", password_hash=hash_password("p-a"))
+    b = db.create_user(identifier=f"hist-b-{new_tag()}@local", identifier_type="email",
+                       nickname="乙", password_hash=hash_password("p-b"))
+    sid = f"probe-shared-{new_tag()}"
+    try:
+        db.save_chat_history(session_id=sid, user_message="甲的问", assistant_message="甲的答",
+                             user_id=a.id)
+        assert [r.user_message for r in db.get_chat_history(sid, user_id=a.id)] == ["甲的问"]
+        assert db.get_chat_history(sid, user_id=b.id) == []
+        assert db.delete_chat_history(sid, user_id=b.id) == 0
+    finally:
+        # 先删行再删账号：真库上 create_all 会把 chat_history.user_id 的 FK 约束建出来，
+        # 留着引用行就删不掉 users 那一行（AssertionError 中途抛出时也走这里）
+        db.delete_chat_history(sid, user_id=a.id)
+        _drop_probe_account(db, a.id)
+        _drop_probe_account(db, b.id)

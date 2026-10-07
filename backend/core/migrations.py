@@ -27,18 +27,21 @@ DEFAULT_NICKNAME = "默认用户"
 UNUSABLE_PASSWORD_HASH = "unusable-no-password-set"
 
 # (表, 列, DDL 类型)。阶段一：documents.user_id；阶段二：users.api_key/base_url（spec 2.1，
-# 与 core/database.py 的 User 两列同源，长度由 tests/test_user_models_db.py 钉成一处）。
-# chat_history.user_id 归本阶段后续 Task
-# （spec 2.2 勘误：历史的读写过滤和 RAGSystem 四方法要一起重接，分两轮改同一文件不值）。
+# 与 core/database.py 的 User 两列同源，长度由 tests/test_user_models_db.py 钉成一处）；
+# 以及 chat_history.user_id（spec 2.2 勘误：历史的读写过滤和 RAGSystem 四方法一起重接）。
 MIGRATED_COLUMNS = [
     ("documents", "user_id", "INTEGER"),
     ("users", "api_key", "VARCHAR(255)"),
     ("users", "base_url", "VARCHAR(500)"),
+    ("chat_history", "user_id", "INTEGER"),
 ]
 
 # (表, 列, 索引名)。spec 2.2 要求 documents.user_id 带索引，而 create_all 对已存在的表
 # 整表跳过 ⇒ 已部署库会永远带着一个无索引的外键列，这条长期收拢靠这里。
-MIGRATED_INDEXES = [("documents", "user_id", "idx_documents_user_id")]
+MIGRATED_INDEXES = [
+    ("documents", "user_id", "idx_documents_user_id"),
+    ("chat_history", "user_id", "idx_chat_history_user_id"),
+]
 
 
 def column_exists(conn, table: str, column: str) -> bool:
@@ -130,6 +133,22 @@ def backfill_documents(conn, user_id: int) -> int:
                  {"uid": user_id})
     conn.commit()
     return len(unowned)
+
+
+def backfill_chat_history(conn, user_id: int) -> int:
+    """老历史整批归默认用户：改造前只有一的人在用，行里没有任何别的归属线索。
+
+    为什么不学 documents 那边先 SELECT 一份清单：documents 的清单是给向量补戳用的
+    （第二份存储在 Chroma），chat_history 只有 MySQL 一份，读行数只为让日志会说人话。
+    """
+    count = conn.execute(
+        text("SELECT COUNT(*) FROM chat_history WHERE user_id IS NULL")).fetchall()[0][0]
+    if not count:
+        return 0
+    conn.execute(text("UPDATE chat_history SET user_id = :uid WHERE user_id IS NULL"),
+                 {"uid": user_id})
+    conn.commit()
+    return count
 
 
 def seed_default_llm(conn, user_id: int, api_key, base_url, model) -> dict:
@@ -232,6 +251,7 @@ def run_migrations(engine, chroma_client, config) -> dict:
         indexes = ensure_indexes(conn)   # 顺序硬要求：列还没加出来就建索引会当场炸
         user_id = ensure_default_user(conn, config.DEFAULT_USER_PASSWORD)
         docs = backfill_documents(conn, user_id)
+        chats = backfill_chat_history(conn, user_id)
         seed = seed_default_llm(conn, user_id, config.OPENAI_API_KEY,
                                 config.OPENAI_BASE_URL, config.LLM_MODEL)
         # 补戳清单现在读的是"有主人的向量"，必须在归户之后：顺序一反，第一次开机就拿到空集
@@ -240,6 +260,7 @@ def run_migrations(engine, chroma_client, config) -> dict:
     vectors = stamp_vector_owner(chroma_client, pending)
     summary = {"columns_added": added, "indexes_added": indexes,
                "default_user_id": user_id, "documents_claimed": docs,
+               "chat_rows_claimed": chats,
                "llm_seeded": seed["llm_written"], "model_seeded": seed["model_added"],
                "vectors_stamped": vectors}
     logger.info("迁移完成: %s", summary)   # summary 里没有 api_key：多一个键就多一次泄漏机会

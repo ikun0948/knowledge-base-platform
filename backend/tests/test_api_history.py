@@ -25,20 +25,20 @@ class HistoryDB:
         self.cleared_with = None
         self.history_calls = []
 
-    def get_chat_history(self, session_id, limit=10):
-        self.history_calls.append((session_id, limit))
+    def get_chat_history(self, session_id, *, user_id, limit=10):
+        self.history_calls.append((session_id, limit, user_id))
         return self.rows
 
-    def delete_chat_history(self, session_id):
-        self.cleared_with = session_id
+    def delete_chat_history(self, session_id, *, user_id):
+        self.cleared_with = (session_id, user_id)
         return 2
 
 
 def make_client(db, user=None):
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
-    # 端点上了登录门，这批测就得覆盖它；user 在这一期只被"要不要令牌"读到，
-    # 阶段一没有按 user 过滤历史的判据（见端点 docstring），所以这里没有 user_id 相关的断言。
+    # 端点上了登录门，这批测就得覆盖它；阶段二起 user.id 会被读进两条 SQL
+    # （GET 读历史、DELETE 删历史各一处），所以断言现在也钉 user_id 那一格。
     with_auth(app, user or FakeUser())
     return TestClient(app)
 
@@ -70,7 +70,7 @@ def test_delete_returns_cleared_count():
     db = HistoryDB([])
     body = make_client(db).delete("/api/history/s1").json()
     assert body == {"cleared": 2}
-    assert db.cleared_with == "s1"
+    assert db.cleared_with == ("s1", 1)
 
 
 def test_every_row_becomes_a_user_then_assistant_pair():
@@ -98,11 +98,11 @@ def test_session_id_and_limit_are_forwarded_to_the_query():
     """limit 不转发就等于永远只取 DB 默认的 10 行，前端翻页会静默丢历史。"""
     db = HistoryDB([])
     make_client(db).get("/api/history/s42")
-    assert db.history_calls == [("s42", 50)]
+    assert db.history_calls == [("s42", 50, 1)]
 
     db = HistoryDB([])
     make_client(db).get("/api/history/s42?limit=200")
-    assert db.history_calls == [("s42", 200)]
+    assert db.history_calls == [("s42", 200, 1)]
 
 
 def test_limit_below_one_is_422():
@@ -134,3 +134,15 @@ def test_legacy_rows_read_as_normal_and_load_cleanly():
         .get("/api/history/0a6e5ed2-legacy").json()
     assert body[1]["mode"] == "normal"
     assert body[1]["references"][0]["filename"] == "a.txt"
+
+
+def test_history_reads_and_deletes_carry_the_logged_in_user_id():
+    """登录门只证明"有人"，user.id 才证明"是谁"。这两格漏传一个，
+    拿到别人 session_id 的人就能读走整段历史——uuid 难猜不是边界（spec 2.2）。"""
+    db = HistoryDB([])
+    make_client(db, user=FakeUser(user_id=99)).get("/api/history/s7")
+    assert db.history_calls == [("s7", 50, 99)]
+
+    db = HistoryDB([])
+    make_client(db, user=FakeUser(user_id=99)).delete("/api/history/s7")
+    assert db.cleared_with == ("s7", 99)

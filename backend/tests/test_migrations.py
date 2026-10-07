@@ -18,7 +18,7 @@ class FakeConn:
     """只实现 migrations 用到的那几件事：查 information_schema、执行 DDL、跑 SELECT/UPDATE。"""
 
     def __init__(self, existing_columns=(), user_rows=(), owned_doc_ids=(),
-                 existing_indexes=(), user_models=()):
+                 existing_indexes=(), user_models=(), chat_unowned=3):
         self.columns = set(existing_columns)          # {("documents", "user_id")}
         self.indexes = {(t, i) for (t, i) in existing_indexes}   # {("documents", "idx_documents_user_id")}
         self.users = list(user_rows)                  # [(id, identifier)]
@@ -26,6 +26,7 @@ class FakeConn:
         self.inserted = []                            # INSERT INTO users 的参数，用来验写了哪个哈希
         self.llm = {}                                 # 默认用户手上的 api_key/base_url（步骤 4 写它）
         self.user_models = list(user_models)          # [(user_id, name, is_default)]
+        self.chat_unowned = chat_unowned              # user_id IS NULL 的历史行数
         self.executed = []                            # 记 DDL/DML，SELECT 不记
 
     def execute(self, sql, params=None):
@@ -56,6 +57,12 @@ class FakeConn:
             self.executed.append(text)
             index = text.split()[2].strip("`")
             self.indexes.add((table, index))
+            return _Result([])
+        if head.startswith("SELECT COUNT(*) FROM CHAT_HISTORY"):
+            return _Result([(self.chat_unowned,)])
+        if head.startswith("UPDATE CHAT_HISTORY"):
+            self.executed.append(text)
+            self.chat_unowned = 0                   # 归户之后不再有 NULL 行：重跑零副作用
             return _Result([])
         if head.startswith("SELECT COUNT"):
             return _Result([(len(self.users),)])
@@ -184,24 +191,28 @@ def test_ensure_columns_alters_only_when_missing():
     conn = FakeConn(existing_columns=[])
     assert migrations.ensure_columns(conn) == [("documents", "user_id"),
                                                ("users", "api_key"),
-                                               ("users", "base_url")]
-    assert len(conn.executed) == 3
+                                               ("users", "base_url"),
+                                               ("chat_history", "user_id")]
+    assert len(conn.executed) == 4
     assert "ADD COLUMN" in conn.executed[0] and "`user_id`" in conn.executed[0]
 
     conn2 = FakeConn(existing_columns=[("documents", "user_id"), ("users", "api_key"),
-                                       ("users", "base_url")])
+                                       ("users", "base_url"), ("chat_history", "user_id")])
     assert migrations.ensure_columns(conn2) == []
     assert conn2.executed == []
 
 
 def test_ensure_indexes_creates_only_when_missing():
-    conn = FakeConn(existing_columns=[("documents", "user_id")], existing_indexes=())
-    assert migrations.ensure_indexes(conn) == [("documents", "idx_documents_user_id")]
-    assert len(conn.executed) == 1
+    conn = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")],
+                    existing_indexes=())
+    assert migrations.ensure_indexes(conn) == [("documents", "idx_documents_user_id"),
+                                               ("chat_history", "idx_chat_history_user_id")]
+    assert len(conn.executed) == 2
     assert "CREATE INDEX" in conn.executed[0] and "`idx_documents_user_id`" in conn.executed[0]
 
-    conn2 = FakeConn(existing_columns=[("documents", "user_id")],
-                     existing_indexes=[("documents", "idx_documents_user_id")])
+    conn2 = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")],
+                     existing_indexes=[("documents", "idx_documents_user_id"),
+                                       ("chat_history", "idx_chat_history_user_id")])
     assert migrations.ensure_indexes(conn2) == []
     assert conn2.executed == []
 
@@ -242,6 +253,24 @@ def test_backfill_documents_only_touches_unowned_rows():
     assert "WHERE user_id IS NULL" in conn.executed[0]
 
 
+def test_backfill_chat_history_claims_unowned_rows_only():
+    """老历史全归默认用户：改造前这套系统是单人使用的，行里除了 session_id 没有别的归属证据。
+
+    钉两件事：① 只捡 NULL 行（第二次跑零 UPDATE，与 backfill_documents 同一条幂等纪律）；
+    ② 归户发生在计数之后——返回的数字来自 COUNT，不是 UPDATE 的 rowcount，
+    因为 SQLAlchemy 的 Connection.rowcount 在假连接上根本没有，且真库上"改了几行"
+    与"看到几行无主"本该相等，用后者反而能把不一致暴露出来。
+    """
+    conn = FakeConn(chat_unowned=3)
+    assert migrations.backfill_chat_history(conn, 1) == 3
+    assert conn.chat_unowned == 0
+    assert any("UPDATE CHAT_HISTORY" in sql.upper() for sql in conn.executed)
+
+    idle = FakeConn(chat_unowned=0)
+    assert migrations.backfill_chat_history(idle, 1) == 0
+    assert not any("UPDATE CHAT_HISTORY" in sql.upper() for sql in idle.executed)
+
+
 def test_run_migrations_stamps_after_documents_are_claimed():
     """清单读的是"有主人的向量"：归户必须在补戳之前，且崩溃之后能自愈
     （对照同文件 `test_run_migrations_self_heals_a_crash_between_claim_and_stamp`）。
@@ -268,6 +297,7 @@ def test_run_migrations_stamps_after_documents_are_claimed():
     assert summary["documents_claimed"] == 9
     assert summary["llm_seeded"] is True and summary["model_seeded"] is True
     assert "sk-from-env" not in str(summary)     # 汇总进日志：种子 key 绝不能在里面
+    assert summary["chat_rows_claimed"] == 3
 
 
 def test_stamp_merges_existing_metadata_and_skips_stamped():
@@ -372,4 +402,9 @@ def test_default_identifier_is_the_one_the_spec_names():
         ("documents", "user_id", "INTEGER"),
         ("users", "api_key", "VARCHAR(255)"),
         ("users", "base_url", "VARCHAR(500)"),
+        ("chat_history", "user_id", "INTEGER"),
+    ]
+    assert migrations.MIGRATED_INDEXES == [
+        ("documents", "user_id", "idx_documents_user_id"),
+        ("chat_history", "user_id", "idx_chat_history_user_id"),
     ]

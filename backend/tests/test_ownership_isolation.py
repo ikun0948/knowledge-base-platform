@@ -84,10 +84,10 @@ class OwnerAwareDB:
             return []
         return [pid for pid in dict.fromkeys(parent_ids) if pid == "甲.txt_parent_0"]
 
-    def get_chat_history(self, session_id, limit=10):
+    def get_chat_history(self, session_id, *, user_id, limit=10):
         return []
 
-    def delete_chat_history(self, session_id):
+    def delete_chat_history(self, session_id, *, user_id):
         return 0
 
     def count_documents(self):

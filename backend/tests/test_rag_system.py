@@ -30,7 +30,7 @@ class StubDb:
         self.parents = parents or {}
         self.saved = []
 
-    def get_chat_history(self, session_id, limit=10):
+    def get_chat_history(self, session_id, *, user_id, limit=10):
         return self.history
 
     def get_filenames_by_ids(self, doc_ids):
@@ -103,7 +103,8 @@ def test_normal_chat_returns_answer_and_saves_plain_history():
     rag = build(db, StubVectorStore([]), ok_llm("普通回答"))
     answer = rag.normal_chat(CTX, "你好", "s1")
     assert answer == "普通回答"
-    assert db.saved == [{"session_id": "s1", "user_message": "你好", "assistant_message": "普通回答"}]
+    assert db.saved == [{"session_id": "s1", "user_message": "你好",
+                         "assistant_message": "普通回答", "user_id": 1}]
 
 
 def test_normal_chat_llm_failure_raises_instead_of_polluting_history():
@@ -164,6 +165,7 @@ def test_chat_empty_retrieval_persists_the_turn_exactly_once():
         "assistant_message": answer,
         "document_ids": "7",
         "used_chunks": None,
+        "user_id": 1,
     }]
 
 
@@ -300,7 +302,8 @@ def test_normal_stream_yields_tokens_only_and_saves_plain_history():
 
     assert [k for k, _ in events] == ["token", "token"]
     assert answer == "你好"
-    assert db.saved == [{"session_id": "s1", "user_message": "你好", "assistant_message": "你好"}]
+    assert db.saved == [{"session_id": "s1", "user_message": "你好",
+                         "assistant_message": "你好", "user_id": 1}]
 
 
 def test_rag_stream_empty_retrieval_is_notice_token_and_persists_once():
@@ -380,4 +383,23 @@ def test_retrieval_and_backtrack_ask_with_the_context_user_id():
                                        llm=LLMConfig("sk", "https://x/v1", "m")), "q", ["p0"], "s1")
 
     assert seen == [("retriever", ["p0"], 42), ("parents", None, 42)]
+
+
+def test_history_read_and_write_carry_the_context_user_id():
+    """历史的主人只能来自 ctx。假库不真过滤，把 `ctx.user_id` 写成常量 1 或者整段漏传，
+    其余 21 条照旧绿——只有这条会红（`CTX` 是人设 1，所以这里另造一枚 42）。"""
+    seen = []
+
+    class SpyDb(StubDb):
+        def get_chat_history(self, session_id, *, user_id, limit=10):
+            seen.append(user_id)
+            return super().get_chat_history(session_id, user_id=user_id, limit=limit)
+
+    db = SpyDb(filenames={7: "甲.txt"}, parents={"p0": 7})
+    rag = build(db, StubVectorStore([parent()]), ok_llm("答"))
+    rag.chat_with_documents(RunContext(user_id=42, llm=LLMConfig("sk", "https://x/v1", "m")),
+                            "q", ["p0"], "s1")
+
+    assert seen == [42]                    # rag 链读历史一次（:105 那一枪）
+    assert db.saved[0]["user_id"] == 42    # 和写一次
 

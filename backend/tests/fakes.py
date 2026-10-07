@@ -29,10 +29,10 @@ class FakeOwnedParentsDB:
         self.calls.append((tuple(parent_ids), user_id))
         return list(dict.fromkeys(parent_ids))
 
-    def get_chat_history(self, session_id, limit=10):
+    def get_chat_history(self, session_id, *, user_id, limit=10):
         return []
 
-    def delete_chat_history(self, session_id):
+    def delete_chat_history(self, session_id, *, user_id):
         return 0
 
 

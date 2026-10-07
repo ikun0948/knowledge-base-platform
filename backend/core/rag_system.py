@@ -46,7 +46,7 @@ class RAGSystem:
 
     def normal_chat(self, ctx, question, session_id):
         """普通对话（不使用文档）。"""
-        chat_history = self.db_manager.get_chat_history(session_id)
+        chat_history = self.db_manager.get_chat_history(session_id, user_id=ctx.user_id)
         messages = []
         for chat in chat_history[-5:]:
             messages.append(f"Human: {chat.user_message}")
@@ -61,7 +61,8 @@ class RAGSystem:
             raise LLMError(LLM_FAILED) from exc
 
         self.db_manager.save_chat_history(
-            session_id=session_id, user_message=question, assistant_message=answer
+            session_id=session_id, user_message=question, assistant_message=answer,
+            user_id=ctx.user_id,
         )
         return answer
 
@@ -97,13 +98,14 @@ class RAGSystem:
                 assistant_message=EMPTY_RETRIEVAL_ANSWER,
                 document_ids=",".join(map(str, doc_ids)),
                 used_chunks=None,
+                user_id=ctx.user_id,
             )
             return EMPTY_RETRIEVAL_ANSWER, []
 
         context = "\n\n".join(d.page_content for d in compressed_docs)
         logger.debug("最终检索上下文长度: %d", len(context))
 
-        chat_history = self.db_manager.get_chat_history(session_id)
+        chat_history = self.db_manager.get_chat_history(session_id, user_id=ctx.user_id)
         history_msgs = []
         for chat in chat_history[-3:]:
             history_msgs.append(HumanMessage(content=chat.user_message))
@@ -125,6 +127,7 @@ class RAGSystem:
             assistant_message=answer,
             document_ids=",".join(map(str, doc_ids)),
             used_chunks=json.dumps([r.model_dump() for r in references], ensure_ascii=False),
+            user_id=ctx.user_id,
         )
         return answer, references
 
@@ -147,7 +150,7 @@ class RAGSystem:
         """normal 链流式版（spec 6.4）：只产 token；生成完成后落库一次。
         断流时消费方 close() 使 GeneratorExit 落在 yield 点——它不是 Exception，
         不会被下面的 except 捕获，落库自然执行不到（残缺答案绝不进历史）。"""
-        chat_history = self.db_manager.get_chat_history(session_id)
+        chat_history = self.db_manager.get_chat_history(session_id, user_id=ctx.user_id)
         messages = []
         for chat in chat_history[-5:]:
             messages.append(f"Human: {chat.user_message}")
@@ -166,7 +169,8 @@ class RAGSystem:
             raise LLMError(LLM_FAILED) from exc
 
         self.db_manager.save_chat_history(
-            session_id=session_id, user_message=question, assistant_message="".join(pieces)
+            session_id=session_id, user_message=question, assistant_message="".join(pieces),
+            user_id=ctx.user_id,
         )
 
     def chat_with_documents_stream(self, ctx, question, parent_ids, session_id):
@@ -192,6 +196,7 @@ class RAGSystem:
                 assistant_message=EMPTY_RETRIEVAL_ANSWER,
                 document_ids=",".join(map(str, doc_ids)),
                 used_chunks=None,
+                user_id=ctx.user_id,
             )
             yield ("references", references)
             yield ("token", EMPTY_RETRIEVAL_ANSWER)
@@ -201,7 +206,7 @@ class RAGSystem:
         yield ("references", references)
 
         context = "\n\n".join(d.page_content for d in compressed_docs)
-        chat_history = self.db_manager.get_chat_history(session_id)
+        chat_history = self.db_manager.get_chat_history(session_id, user_id=ctx.user_id)
         history_msgs = []
         for chat in chat_history[-3:]:
             history_msgs.append(HumanMessage(content=chat.user_message))
@@ -226,4 +231,5 @@ class RAGSystem:
             assistant_message="".join(pieces),
             document_ids=",".join(map(str, doc_ids)),
             used_chunks=json.dumps([r.model_dump() for r in references], ensure_ascii=False),
+            user_id=ctx.user_id,
         )

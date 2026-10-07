@@ -151,7 +151,7 @@ def test_save_chat_history_wraps_db_failure_into_curated_storage_error():
     session = _BoomSession()
     mgr.get_session = lambda: session
     with pytest.raises(StorageError) as exc:
-        mgr.save_chat_history("s1", "问", "答")
+        mgr.save_chat_history("s1", "问", "答", user_id=1)
     assert "保存对话历史失败" in str(exc.value)
     assert session.rolled_back is True, "策展文案不能吃回滚"
     assert session.closed is True

@@ -25,14 +25,13 @@ def _parse_references(raw: str | None) -> list[Reference]:
 @router.get("/{session_id}", response_model=list[HistoryMessage])
 def get_history(session_id: str, limit: int = Query(50, ge=1, le=200),
                 db=Depends(get_db), user=Depends(get_current_user)):
-    """登录门有，user 过滤没有——阶段一的对话隔离靠两件事：
-    ① session_id 由后端 uuid4() 铸造（Task 2），外人猜不到；
-    ② 这四个端点要求 Bearer 令牌。
-    真正的 chat_history.user_id 列与读写过滤在阶段二（spec 2.2 勘误：它和 RAGSystem
-    四个方法、34 处调用点是同一批工作量，分两轮改同一个文件只会两次踩同一个坑）。
+    """读写都按 user.id 收窄（阶段二 Task 6）：登录门只证明"有人"，user_id 才证明"是谁"。
+
+    session_id 由后端 uuid4() 铸造，猜中它是小概率，但"难猜"不是访问控制（spec 2.2）：
+    令牌泄漏、日志里躺着的 id、浏览器历史都能把 id 交出去，而 chat_history 是全库共享的一张表。
     """
     messages: list[HistoryMessage] = []
-    for row in db.get_chat_history(session_id, limit=limit):
+    for row in db.get_chat_history(session_id, limit=limit, user_id=user.id):
         mode = mode_of(row.document_ids)
         messages.append(HistoryMessage(role="user", content=row.user_message,
                                        references=None, created_at=row.created_at))
@@ -44,5 +43,4 @@ def get_history(session_id: str, limit: int = Query(50, ge=1, le=200),
 
 @router.delete("/{session_id}")
 def clear_history(session_id: str, db=Depends(get_db), user=Depends(get_current_user)):
-    # 与 GET 同一口径：只上门、不加 user 过滤，阶段二边界见 get_history 的 docstring。
-    return {"cleared": db.delete_chat_history(session_id)}
+    return {"cleared": db.delete_chat_history(session_id, user_id=user.id)}
