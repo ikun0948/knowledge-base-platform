@@ -75,11 +75,14 @@ class SpyRAG(FakeRAG):
 
 def test_rag_chain_receives_the_payload_in_the_right_positions():
     rag = SpyRAG(answer="基于文档", refs=[REF])
-    make_client(rag).post(
+    # user_id 显式取 5：这个文件的默认人 id 是 1。端点若把 `user.id` 换成字面常量 1，
+    # 位置断言（calls）仍绿，只有下面这条 seen_user_ids 会红 —— 读侧过滤按谁走的唯一来源（评审 I1）。
+    make_client(rag, user=FakeUser(user_id=5)).post(
         "/api/chat", json={"session_id": "s9", "question": "营收多少",
                            "parent_ids": ["丙_p_0", "甲_p_0"]}
     )
     assert rag.calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9")]
+    assert rag.seen_user_ids == [5], "端点必须把当前用户的 id 装进 ctx 再交给链子"
 
 
 def test_normal_chain_receives_question_and_session_only():
@@ -315,11 +318,13 @@ def test_stream_payload_is_forwarded_in_the_right_positions():
             return super().normal_chat_stream(ctx, question, session_id)
 
     rag = SpyStreamRAG(tokens=["x"])
-    post_stream(stream_client(rag), {"session_id": "s9", "question": "营收多少",
-                                     "parent_ids": ["丙_p_0", "甲_p_0"]})
-    post_stream(stream_client(rag), {"session_id": "s9", "question": "你好", "parent_ids": []})
+    # user_id 显式取 5（默认人是 1）：端点若把 `user.id` 换成字面常量 1，只有这条会红（评审 I1）。
+    client = make_client(rag, user=FakeUser(user_id=5))
+    post_stream(client, {"session_id": "s9", "question": "营收多少",
+                         "parent_ids": ["丙_p_0", "甲_p_0"]})
+    post_stream(client, {"session_id": "s9", "question": "你好", "parent_ids": []})
     assert rag.stream_calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9"), ("normal", "你好", "s9")]
-    assert rag.seen_user_ids == [1, 1], "ctx 传错 = 读侧过滤按别人的边界走"
+    assert rag.seen_user_ids == [5, 5], "ctx 传错 = 读侧过滤按别人的边界走"
 
 
 def test_stream_frames_are_single_line_json_with_readable_chinese():

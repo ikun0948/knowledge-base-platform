@@ -65,10 +65,11 @@ class VectorStore:
 
         user_id 存成字符串：`document_id` 早就这么干了（下一行），两个键形态一致才不会出现
         "一个能等值比、一个不能"的坑（Chroma 的 where 是标量相等）。
-        这一期只补戳、不做读侧过滤（spec 2.5 勘误）：parent_id 全库唯一，
-        读侧那道 $and 在阶段一不是承重墙，等阶段二收窄召回池时一起接。
+        打戳与收窄分家：本方法只负责**写**（`str(user_id)` 戳），读侧的 `$and` 过滤在
+        `create_retriever` / `get_parent_documents_by_metadata` 里（阶段二 Task 5 已接上）；
+        两边都得是 `str()` 才对得上，所以迁移还要给老向量补戳。
         """
-        # 为所有文档添加document_id元数据
+        # 为所有文档添加 document_id 与 user_id 这两个元数据键
         for doc in parent_docs + child_docs:
             doc.metadata['document_id'] = str(document_id)
             doc.metadata['user_id'] = str(user_id)
@@ -81,8 +82,8 @@ class VectorStore:
     def create_retriever(self, parent_ids, user_id):
         """创建子文档检索器（只负责初始召回）。
 
-        filter 里恒有 `user_id` 那一半：阶段一只补戳不收窄（`add_documents` 的 docstring
-        记的就是这笔账），阶段二把它接上。存的形态是字符串——`add_documents` 与迁移补戳
+        filter 里恒有 `user_id` 那一半：阶段一只打戳没收窄，阶段二（本 Task）把它接上，
+        此后按主人收窄是承重墙。存的形态是字符串——`add_documents` 与迁移补戳
         都写 `str(user_id)`，这里跟着 `str()` 才对得上（Chroma 的标量相等不做转换）。
         单条件时不套 `$and`：`{user_id: ...}` 是阶段一就在用的形状，少一层是一处少一个错。
         """
