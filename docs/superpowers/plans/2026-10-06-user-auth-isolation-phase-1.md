@@ -2851,6 +2851,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(frontend): 
 - Modify: `frontend/src/composables/useSession.js`（`sessionId` 上移到模块作用域，新增 `setSession` / `clearSession`）
 - Create: `frontend/src/components/AuthPanel.vue`、`frontend/tests/AuthPanel.test.js`、`frontend/tests/useSession.test.js`
 - Create: `frontend/tests/StatusBar.test.js`
+- Create: `frontend/tests/App.auth-gate.test.js`（**2026-10-07 修订补**：Step 7 的整屏门禁 / 请求顺序 / 登出清键原本零自动化覆盖，判据设计见 Step 7 之后的修订块 ①）
 - Modify: `frontend/src/components/StatusBar.vue`（`.session-chip` 与 `sessionId` prop 一起删）
 - Modify: `frontend/src/App.vue`（整屏 `v-if` 门禁、`.session-debug` → `.user-rail`、登录/登出编排）
 - Modify: `frontend/src/styles/layout.css`（新增 `.auth-*` 与 `.user-rail` 家族、删三条死规则、末尾补一个 ≤768 分支）
@@ -2858,6 +2859,7 @@ git -c user.name="31439" -c user.email="31439@local" commit -m "feat(frontend): 
 **Interfaces:**
 - Consumes：Task 6 的 `useAuth()` → `{ user, authError, authBusy, isLoggedIn, bootstrap, signUp, signIn, signOut }`。**`signUp/signIn` 会抛**（内部只有 `try/finally`，没有 catch），所以调用方必须接住并把文案写进 `authError`。
   - **2026-10-07 修订（Task 6 修正轮 1 已改，本 Task 的读法跟着变）**：**`signOut` 不属于"会抛"那一档**——它在 `finally` 前多了一个吃掉后端失败的 `catch`（理由与三条证据见 Task 6 Step 5 后的修订块）。所以 `handleSignOut` 里裸的 `await signOut()` 是**安全**的，而它**后面那五句清理（`clearSession()` / `documents` / `queue` / `messages` / `clearSelection()`）是承重的**：spec 5.3 要求"登出把 `auth_token` 与 `session_id` 一起清"，靠的正是这几句跑得完。请把那一行的注释写成事实（"后端失败已在 `useAuth` 里吞掉，所以这里一定能清到"），**不要照抄计划代码块里那句 `// 令牌一定清得掉（Task 6 的 finally）`**——`finally` 保证的是清理发生，不是不抛。
+  - **2026-10-07 修订（订正上面那行花括号）**：`useAuth()` 实际返回**九个**，上面漏了 `clearAuth`（`useAuth.js:106`）。但 App.vue **不该**解构它：登出的正确写法是 `await signOut()`，它内部的 `finally` 已经调过 `clearAuth()`；界面上直接调 `clearAuth` 等于只登出本地、不给后端删令牌的机会（阶段一没有别的用处，阶段二"改密码后旧令牌全失效"也用不到）。
 - Produces：
   - `useSession()` → `{ sessionId, setSession(next) -> string, resetSession() -> string, clearSession() -> string }`，其中 `sessionId` 是**模块级同一个 ref**
   - `AuthPanel.vue`：props 无，emit `submit`，载荷 `{ mode: 'login'|'register', payload: { identifierType, identifier, password, nickname } }`
@@ -3243,6 +3245,14 @@ cd frontend && npm test tests/AuthPanel.test.js
 ```
 预期：整个文件红在 `Failed to resolve import "../src/components/AuthPanel.vue"`（文件还不存在）。
 
+> **2026-10-07 修订（执行期发现 Step 5 与 Step 6 自相矛盾，裁定"改断言、不改组件"）**：上面代码块里有**两条断言打在登录 tab**（`:a@b` → 「邮箱格式不正确」，以及 `bad` 让后端文案退位），而 Step 6 的 `fieldError` 只在 `mode.value === 'register'` 分支校验账号形状——照 Step 6 写实现，这两条必红；照这两条写实现，就得给登录分支补一个 Step 6 没有的形状校验。**执行期第一版选了后者，于是撞上一个真账号：**`core/migrations.py:19` 的 `DEFAULT_IDENTIFIER = "default@local"` 是启动期迁移**直接 INSERT 进 users 表**的（不走 `/api/auth/register`，所以从没受过 `EMAIL_RE` 的检验），而 `default@local` 的域名**没有点**，既过不了 `EMAIL_RE`（`schemas/auth.py:11` 要求 `.` + ≥2 位 TLD）也过不了 `PHONE_RE`。后端 `LoginIn`（`schemas/auth.py:50-55`）对登录**完全不验形状**，只 strip + 含 @ 才小写，所以这个账号在 API 上是能登录的、也是 Task 3 那 13 行旧文档的主人。前端一给它加本地形状校验，就等于**把界面唯一的旧数据入口关死**，而且症状是"邮箱格式不正确"这种把人往错处引的文案。
+>
+> **裁定：登录 tab 不校验账号形状**（与后端 `LoginIn` 同宽），Step 6 那版 register-only 的 `fieldError` 才是对的。两条断言按下面改，`AuthPanel.vue` 里执行期补的那个 `else if (!PHONE_RE && !EMAIL_RE) return '邮箱格式不正确'` 分支**要删掉**：
+> - `坏邮箱 / 短密码各自出中文文案，点提交不 emit`：第一拍从"坏邮箱"换成**空账号**（`identifier.setValue('')` → 「请填写账号」），第二拍短密码不动。这样这条测仍然钉"本地坏值不发请求"，且不再依赖一个后端并不执行的形状判据。
+> - `后端文案（authError）在字段本地合法时才显示，一旦判出坏值立刻让位`：把让位的那一拍从 `setValue('bad')` 换成**密码改成 `'123'`**（「密码至少 6 位」是登录 tab 也成立的本地判据），先"合法时显示后端文案"那一拍不动。
+>
+> 顺带订正 `3190` 那句注释："不管测试库对 disabled 元素派发不派发事件，判据都成立"——**只成立一半**。本机 jsdom 30.1.1 对 `isTrusted=false` 的 click **不执行按钮的激活行为**，所以 `submit.trigger('click')` 根本不会变成 submit 事件；真实浏览器里 `disabled` 那道 DOM 防线确实把点击吞了，但**编程派发**能绕过它，而当前测法从没验证过 `submit()` 内部那道门禁（Step 6 变异 E 全绿即为证据）。手势改打 `wrapper.find('form').trigger('submit')`（本仓既有口径，见 `frontend/tests/chunk-selection.test.js:105`），理由与代价见 Step 6 后的修订块。
+
 - [ ] **Step 6: 写 `AuthPanel.vue`**
 
 ```vue
@@ -3388,6 +3398,8 @@ function submit() {
 cd frontend && npm test tests/AuthPanel.test.js
 ```
 预期：`8 passed`。
+
+> **2026-10-07 修订（执行期第二处偏离，裁定撤掉）**：执行期为了让 `submit.trigger('click')` 在 jsdom 里跑得通，给提交按钮加了 `@click.prevent="submit"`（`AuthPanel.vue:142`），并在生产 markup 里留了 7 行"jsdom 对 untrusted click 不执行激活行为"的环境说明（`:94-100`）。评审逐路径核过它在**真实浏览器里行为是对的**（点击：click → handler → `.prevent` 取消激活行为 → 表单不提交；回车：隐式提交就是对默认按钮派发 click，走的同一条；`requestSubmit()`：只走 `@submit.prevent`），但裁定**仍然撤掉**，三条理由：① 生产模板从此有**两个提交入口**，而"一次手势只 emit 一次"这条性质完全系于 `.prevent` 一个修饰符——把它删掉（真实浏览器里就是点一次登录发两次 POST，第二次撞 409），8 条测**全绿**，等于用一条没有判据守着的不变式换掉了原来的单入口；② 本仓既有口径是把提交手势打在 form 上（`frontend/tests/chunk-selection.test.js:105` 就是 `wrapper.find('form').trigger('submit')`），为测试环境改生产接线这件事在这里一开面就收不住；③ jsdom 下这条 `@click` 测的本来就不是"人点按钮"的手势（激活行为没跑），保真度没有提高，只是换了一条与浏览器不同的路径。**改法**：模板回到 Step 6 代码块的单一 `@submit.prevent="submit"`，测里把 `submit.trigger('click')` 全部换成 `wrapper.find('form').trigger('submit')`（tab 切换那两处仍是 `.picker-tab` 的 click，`submit.attributes('disabled')` 那句保留——它是 DOM 层防线的真判据），`:94-100` 那 7 行环境说明整段搬进测文件顶部的注释。**附带收益**：submit 事件绕过 `disabled` 直达 `submit()`，于是 `submit()` 里 `if (authBusy || fieldError) return` 这道内部门禁第一次有判据守着（变异 E 应当当场长出牙）；`toHaveLength(1)` 继续钉"不双发"。
 
 - [ ] **Step 7: `App.vue` 接线——整屏门禁 + `.user-rail` + 登录/登出编排**
 
@@ -3562,6 +3574,14 @@ async function handleClear() {
 
 同时删掉两处现在没人用的东西：`import { watch }` 的 `watch`（改成 `import { computed, onMounted, ref } from 'vue'`，上面已给），以及 `useSession()` 解构里没再用的名字。**`.session-debug` 那段整块删干净**，包括它外面那层 `<hr class="panel-hr" />` 之后到 `</div>` 的全部内容——留着 `sessionId` 的唯一读点就没了，需求 3 才算真做完。
 
+> **2026-10-07 修订（Step 7 执行后评审的三条补法，本 Task 内收）**：
+> ① **新增 `frontend/tests/App.auth-gate.test.js`**。Step 7 整段原本零自动化覆盖——而这里是 spec 5.3"登出把 `auth_token` 与 `session_id` 一起清 + 界面不残留上一个账号的东西"在界面上的**唯一**实现处，跨账号残留又正是整条改造的主题；谁删掉 `documents.value = []` 或把 `clearSelection()` 挪到 `await signOut()` 之前，今天没有测会红、build 也不会红。补法要求**只 `vi.stubGlobal('fetch', …)` 一个按 URL 记账的假实现，不 mock 任何 composable**（mock 五个 composable 断言调用次数测的是 mock；读源码字符串做包含断言会在重构时挡住正确改写——两种都不要）：
+> - 未登录（`localStorage.clear()` 后挂 `App` + `flushPromises`）：断 `.auth-screen` 在、`.user-rail` 不在，且记账里**一条非 `/api/auth/` 的请求都没有**——这条同时钉住整屏 `v-if` 门禁与"手上没令牌一个请求都不发"。
+> - 带一枚合法形状的 `auth_token` 重挂：断 `/api/documents/chunks` 的请求**早于** `/api/history/`，把 `enterWorkspace()` 的 refresh → hydrate → restore 不变式从注释升级成判据。
+> - 点 `.rail-signout`：断 `/api/auth/logout` 发过、`auth_token` 与 `session_id` 两个键都不在 localStorage、`.auth-screen` 回来。
+> ② **`handleSignOut` 里补一行 `authError.value = ''`**。`clearAuth()`（`useAuth.js:100-104`）不清 `authError`，而 `useAuth.js` 不在本 Task 的 Files 里——但 App.vue 在，一行就在范围内。（量级我按代码重算过：登出时 `<AuthPanel>` 因 `v-if` 换分支整棵重挂，`mode`/`form` 是组件局部状态 → 空表单的「请填写账号」会压住后端文案，可见窗口只有"下一个人把账号密码填到本地合法、还没点提交"那一刻，所以是 Minor 而非数据问题。）
+> ③ **`handleAuth` 里给 `await enterWorkspace()` 包 `try`**：登录已经成功（`user` 已置、令牌已落）之后若三拍里任何一拍 reject，用户停在**空白工作区**且无任何提示，只在控制台留一条 unhandled rejection。`refresh/hydrate/restore` 各自内部有 catch 所以现实概率低，但兜一句 `error.value = '工作台加载失败，请刷新重试'` 比让它裸着便宜。
+
 - [ ] **Step 8: CSS（末尾追加，不动 L-1/L-2 那两块）**
 
 `layout.css` 先**删三条已成死代码的规则**：`.session-debug`（第 24 行）、`.session-value`（第 25-31 行）、`.session-chip`（第 80 行）。然后在文件末尾追加：
@@ -3630,6 +3650,8 @@ cd frontend && npm run build
 预期：`npm test` 从 Task 6 后的约 **96 passed / 8 文件** 涨到约 **112 passed / 11 文件**（`useSession.test.js` +6、`StatusBar.test.js` +2、`AuthPanel.test.js` +8，共 +16；**以汇总行为准**）。`npm run build` exit 0。**0 failed 是硬要求。**
 
 > **2026-10-07 修订（Task 6 收口后的实测基数）**：上一段那两个"约"都低了——Task 6 落地时 Step 7 之后又补了修正轮，`api-auth.test.js`（2 条）是新文件，所以真实基数是 **98 passed / 9 文件**（HEAD `0278350` 实测）。+16 这个加数仍然正确（三个新文件的 `it()` 数逐个数过：6 / 2 / 8），因此本 Task 的目标是 **114 passed / 12 文件**。差一两条不奇怪，**照旧以汇总行为准**，但报告里必须写"实跑得到的是多少"，不许抄这一行交差。
+>
+> **2026-10-07 再修订（修正轮 1 之后）**：执行期实跑到的就是 **114 passed / 12 文件**（`af0878c` 上控制器实测，与上一段的预测一致），但评审后本 Task 内又收了三条补法（见 Step 7 之后的修订块），其中 ① 是**新测试文件** `frontend/tests/App.auth-gate.test.js`（3 个 `it()`：未登录门禁、请求顺序、登出清键），所以门禁目标改成 **约 117 passed / 13 文件**——照旧只钉 `0 failed`，**数字抄当轮汇总行**。`AuthPanel.test.js` 的条数**不变**（Step 5 那次改的是同一个 `it()` 里的断言，不是加用例），8 条仍是 8 条。下面 `git add` 那段要**多这一格**，少加一个文件就等于把新测留在未追踪状态。
 
 > **build 通过 ≠ 界面没问题**：这一段真正的验收（未登录不请求、左下角头像+昵称+⚙ 禁用、登录后进工作区、375px 下 rail 不塌）全在浏览器里，Task 8 Step 4 逐条打（主路是 browser-use，尺寸量测不好钉时才搬 Edge headless 探针）。这里不提前跑，是因为 `npm run dev` 起来之后与后端单实例的端口/进程纪律纠缠在一起（见 Global Constraints 的"只有一个 uvicorn"），一次性放在 Task 8 收口更省事。
 
