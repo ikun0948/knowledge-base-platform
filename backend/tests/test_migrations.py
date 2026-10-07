@@ -8,7 +8,8 @@ from core import migrations
 from core.security import verify_password
 
 # 向量 id → 所属文档 id。真库上这份对应关系由 `parent_chunks JOIN documents` 给出来，
-# 假连接只需要复述同一件事：文档归户之后，这些行就不再满足 `d.user_id IS NULL`。
+# 假连接复述的是新语义（advisory ①）：**文档已经归户**的那些向量才进补戳清单，
+# 并且按 SQL 里 `d.user_id IS NOT NULL` / `IS NULL` 哪一种来决定自己该收哪批行。
 UNOWNED_VECTOR_ROWS = {"parent": {"pv1": 3, "pv2": 4}, "child": {"cv1": 5}}
 
 
@@ -22,6 +23,8 @@ class FakeConn:
         self.users = list(user_rows)                  # [(id, identifier)]
         self.owned_docs = set(owned_doc_ids)          # 已有 user_id 的文档 id
         self.inserted = []                            # INSERT INTO users 的参数，用来验写了哪个哈希
+        self.llm = {}                                 # 默认用户手上的 api_key/base_url（步骤 4 写它）
+        self.user_models = []                         # [(user_id, name, is_default)]
         self.executed = []                            # 记 DDL/DML，SELECT 不记
 
     def execute(self, sql, params=None):
@@ -70,11 +73,32 @@ class FakeConn:
             self.executed.append(text)
             self.owned_docs |= {i for i in range(1, 10)}
             return _Result([])
-        if head.startswith("SELECT C.VECTOR_ID FROM"):
+        if head.startswith("SELECT API_KEY FROM USERS"):
+            uid = params["uid"]
+            for i, _ident in self.users:
+                if i == uid:
+                    return _Result([(self.llm.get("api_key"),)])
+            return _Result([])
+        if head.startswith("UPDATE USERS SET API_KEY"):
+            self.llm = {"user_id": params["uid"], "api_key": params["k"], "base_url": params["u"]}
+            self.executed.append(text)
+            return _Result([])
+        if head.startswith("SELECT ID FROM USER_MODELS"):
+            rows = [1 for (u, n, _d) in self.user_models
+                    if u == params["uid"] and n == params["n"]]
+            return _Result(rows)
+        if head.startswith("INSERT INTO USER_MODELS"):
+            self.user_models.append((params["uid"], params["n"], True))   # SQL 里 is_default 写死 1
+            return _Result([])
+        if head.startswith("SELECT C.VECTOR_ID"):
             key = "parent" if "PARENT_CHUNKS" in head else "child"
-            rows = [vid for vid, doc_id in UNOWNED_VECTOR_ROWS[key].items()
-                    if doc_id not in self.owned_docs]
-            return _Result([(vid,) for vid in rows])
+            # 假连接按 SQL 里的 WHERE 决定收哪批行：新语义（`d.user_id IS NOT NULL`）收**已归户**的，
+            # 阶段一那句 `d.user_id IS NULL` 收未归户的。生产码里这一格取反就是 advisory ① 的全部
+            # 内容，所以这里必须读条件、不能只看前缀——否则判据没牙。
+            owned_only = "D.USER_ID IS NOT NULL" in head
+            # 真 SQL 返回 (vector_id, d.user_id) 两列；这里的主人恒为 1，因为 FakeConn 只有一个用户
+            return _Result([(vid, 1) for vid, doc_id in UNOWNED_VECTOR_ROWS[key].items()
+                            if (doc_id in self.owned_docs) == owned_only])
         raise AssertionError(f"FakeConn 没料到的 SQL: {text[:120]}")
 
     def commit(self):
@@ -135,6 +159,14 @@ class FakeEngine:
 
     def __exit__(self, *exc):
         return False
+
+
+class FakeConfig:
+    """run_migrations 现在读 config 的四格：默认口令 + 迁移种子的三键。"""
+    DEFAULT_USER_PASSWORD = "secret-pass"
+    OPENAI_API_KEY = "sk-from-env"
+    OPENAI_BASE_URL = "https://dashscope/v1"
+    LLM_MODEL = "qwen3.7-flash"
 
 
 def test_ensure_columns_alters_only_when_missing():
@@ -199,26 +231,27 @@ def test_backfill_documents_only_touches_unowned_rows():
     assert "WHERE user_id IS NULL" in conn.executed[0]
 
 
-def test_run_migrations_stamps_the_vectors_read_before_documents_are_claimed():
-    """补戳清单必须在归户之前读：backfill_documents 自己会 commit，之后 NULL 行就不存在了。
+def test_run_migrations_stamps_after_documents_are_claimed():
+    """清单读的是"有主人的向量"：归户必须在补戳之前，且崩溃之后能自愈
+    （对照同文件 `test_run_migrations_self_heals_a_crash_between_claim_and_stamp`）。
 
-    只断言 `vectors_stamped > 0` 挡不住顺序写反——那在假连接下照样绿。这里的判据是
-    "fake client 收到的 id 清单 == 那条 `d.user_id IS NULL` SELECT 返回的行"：假连接收到
-    UPDATE documents 之后就把 1..9 全标成已归户，同一句 SELECT 从此返回空，
-    所以顺序一反，requested 里只剩空清单（或者一次都不发），断言当场红。
+    阶段一这条钉的是"清单必须在归户**之前**读"，那个前提本身就是 advisory ① 的病根。
+    换成反向判据后牙齿还在：假连接按 SQL 的 WHERE 条件决定收哪批行，`backfill_documents`
+    把 1..9 标成已归户之后清单才有内容——顺序一反，或者条件被改回 `IS NULL`，
+    requested 就只剩空清单，断言当场红。
     """
     parent = FakeCollection({"pv1": {"document_id": "3"}, "pv2": {"document_id": "4"}})
     child = FakeCollection({"cv1": {"document_id": "5"}})
     client = FakeChroma({"parent_document": parent, "child_document": child})
 
-    summary = migrations.run_migrations(FakeEngine(FakeConn()), client, password="secret-pass")
+    summary = migrations.run_migrations(FakeEngine(FakeConn()), client, FakeConfig())
 
-    assert parent.requested == [["pv1", "pv2"]], "补戳没拿到归户之前的父块清单"
-    assert child.requested == [["cv1"]], "补戳没拿到归户之前的子块清单"
+    assert parent.requested == [["pv1", "pv2"]] and child.requested == [["cv1"]]
     assert parent.items["pv1"] == {"document_id": "3", "user_id": "1"}
-    assert child.items["cv1"] == {"document_id": "5", "user_id": "1"}
     assert summary["vectors_stamped"] == 3
     assert summary["documents_claimed"] == 9
+    assert summary["llm_seeded"] is True and summary["model_seeded"] is True
+    assert "sk-from-env" not in str(summary)     # 汇总进日志：种子 key 绝不能在里面
 
 
 def test_stamp_merges_existing_metadata_and_skips_stamped():
@@ -228,17 +261,79 @@ def test_stamp_merges_existing_metadata_and_skips_stamped():
     })
     client = FakeChroma({"parent_document": parent, "child_document": FakeCollection({})})
     # 重跑第二遍必须是零写：判据靠返回值，不靠"看起来没报错"
-    assert migrations.stamp_vector_owner(client, {"parent": ["p1", "p2"], "child": []}, 7) == 1
+    assert migrations.stamp_vector_owner(client, {"parent": [("p1", 7), ("p2", 7)], "child": []}) == 1
     assert parent.items["p1"] == {"document_id": "3", "parent_id": "x_parent_0", "user_id": "7"}
-    assert migrations.stamp_vector_owner(client, {"parent": ["p1", "p2"], "child": []}, 7) == 0
+    assert migrations.stamp_vector_owner(client, {"parent": [("p1", 7), ("p2", 7)], "child": []}) == 0
 
 
 def test_stamp_never_rewrites_a_foreign_users_vector():
-    """已戳但戳的是**别人**的向量不该被动——迁移只补 NULL，不改归属。"""
+    """已戳但戳的是**别人**的向量不该被动——迁移只补空，不改归属。"""
     parent = FakeCollection({"p1": {"user_id": "9"}})
     client = FakeChroma({"parent_document": parent, "child_document": FakeCollection({})})
-    assert migrations.stamp_vector_owner(client, {"parent": ["p1"], "child": []}, 7) == 0
+    assert migrations.stamp_vector_owner(client, {"parent": [("p1", 7)], "child": []}) == 0
     assert parent.items["p1"] == {"user_id": "9"}
+
+
+def test_seed_copies_the_three_env_keys_once():
+    conn = FakeConn(user_rows=[(1, "default@local")])
+    out = migrations.seed_default_llm(conn, 1, api_key="sk-from-env",
+                                      base_url="https://dashscope/v1", model="qwen3.7-flash")
+    assert out == {"llm_written": True, "model_added": True}
+    assert conn.llm == {"user_id": 1, "api_key": "sk-from-env", "base_url": "https://dashscope/v1"}
+    assert conn.user_models == [(1, "qwen3.7-flash", True)]     # 首个模型即默认
+
+
+def test_seed_never_overwrites_a_key_the_user_set_himself():
+    """幂等在这里的含义是"第二次什么都不写"：用户改过自己的 key，重启不该把 .env 的值盖回去。"""
+    conn = FakeConn(user_rows=[(1, "default@local")])
+    migrations.seed_default_llm(conn, 1, "sk-first", "https://a/v1", "m-one")
+    second = migrations.seed_default_llm(conn, 1, "sk-second", "https://b/v1", "m-two")
+    assert second == {"llm_written": False, "model_added": False}
+    assert conn.llm["api_key"] == "sk-first"
+    assert [n for _, n, _ in conn.user_models] == ["m-one"]     # 没追加第二个
+
+
+def test_seed_does_nothing_when_env_has_no_key():
+    conn = FakeConn(user_rows=[(1, "default@local")])
+    assert migrations.seed_default_llm(conn, 1, None, None, "m") == {
+        "llm_written": False, "model_added": False}
+    assert conn.user_models == []      # 没有 key 却塞一个模型名 = 造一条必 409 的半套配置
+
+
+def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():
+    """advisory ①：MySQL 已归户、Chroma 还没戳之间挂掉，下次开机必须把这批向量补上。
+
+    同文件的 `test_run_migrations_stamps_after_documents_are_claimed`（阶段一那条判据"清单在
+    归户之前读"，本轮改名改写）钉住顺序，而正因为前提是这个，那次崩溃之后清单永远为空。
+    这里换成"以文档现在的主人为准"：连跑两遍，中间把那批 Chroma 的戳擦掉（MySQL 的归户留着，
+    这就是崩在补戳之前的现场），第二遍必须还能补上同样 3 枚。
+    """
+    parent = FakeCollection({"pv1": {"document_id": "3"}, "pv2": {"document_id": "4"}})
+    child = FakeCollection({"cv1": {"document_id": "5"}})
+    engine = FakeEngine(FakeConn())
+    first = migrations.run_migrations(engine, FakeChroma({"parent_document": parent,
+                                                          "child_document": child}),
+                                       FakeConfig())
+    assert first["vectors_stamped"] == 3
+    # 模拟崩在补戳之前：把 Chroma 的戳擦掉，documents 的 user_id 留着（MySQL 已经 commit 了）
+    for item in parent.items.values():
+        item.pop("user_id", None)
+    child.items["cv1"].pop("user_id", None)
+    second = migrations.run_migrations(engine, FakeChroma({"parent_document": parent,
+                                                           "child_document": child}),
+                                        FakeConfig())
+    assert second["vectors_stamped"] == 3, "归户之后就不再有补戳清单——advisory ① 回来了"
+    assert parent.items["pv1"] == {"document_id": "3", "user_id": "1"}
+
+
+def test_stamp_uses_each_documents_own_owner():
+    """每个向量按**自己文档**的主人补戳，不再假设"无主的都归默认用户"。"""
+    parent = FakeCollection({"p1": {"document_id": "3"}, "p2": {"document_id": "4"}})
+    client = FakeChroma({"parent_document": parent, "child_document": FakeCollection({})})
+    stamped = migrations.stamp_vector_owner(
+        client, {"parent": [("p1", 7), ("p2", 8)], "child": []})
+    assert stamped == 2
+    assert parent.items["p1"]["user_id"] == "7" and parent.items["p2"]["user_id"] == "8"
 
 
 def test_default_identifier_is_the_one_the_spec_names():

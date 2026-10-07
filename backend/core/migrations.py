@@ -1,4 +1,5 @@
-"""启动期一次性改造：建表之后补列、补索引、造默认用户、旧数据归户、旧向量补戳。
+"""启动期一次性改造：建表之后补列、补索引、造默认用户、旧数据归户、把 `.env` 的三键抄给
+默认用户、旧向量补戳。
 
 三句写在这里的话不能丢：
 ① 每一步都必须幂等——lifespan 每次开机都跑，开发者本地库和部署库进度不齐是常态；
@@ -131,8 +132,40 @@ def backfill_documents(conn, user_id: int) -> int:
     return len(unowned)
 
 
-def vector_ids_without_owner(conn) -> dict:
-    """补戳的输入清单：parent_chunks/child_chunks 里那些所属文档还没有 user_id 的向量 id。
+def seed_default_llm(conn, user_id: int, api_key, base_url, model) -> dict:
+    """迁移步骤 4（spec 6）：把 `.env` 的三键抄给默认用户——坑 9 成果的去向。
+
+    两个返回值都要**可数**，幂等这条判据不能吃日志。
+    只在默认用户手上还没有 key 时抄：运行期他改过配置，重启再把 `.env` 盖回去等于每次开机
+    偷走一次用户的修改。`api_key` 与 `base_url` 必须同时有值才抄（半套配置只会撞上游 401）。
+    """
+    if not (api_key and base_url):
+        return {"llm_written": False, "model_added": False}
+    row = conn.execute(text("SELECT api_key FROM users WHERE id = :uid"), {"uid": user_id}).fetchall()
+    if row and row[0][0]:
+        return {"llm_written": False, "model_added": False}
+    conn.execute(text("UPDATE users SET api_key = :k, base_url = :u WHERE id = :uid"),
+                 {"k": api_key, "u": base_url, "uid": user_id})
+    conn.commit()
+    added = False
+    if model:
+        exists = conn.execute(text("SELECT id FROM user_models WHERE user_id = :uid AND name = :n"),
+                              {"uid": user_id, "n": model}).fetchall()
+        if not exists:
+            conn.execute(text("INSERT INTO user_models (user_id, name, is_default) "
+                              "VALUES (:uid, :n, 1)"), {"uid": user_id, "n": model})
+            conn.commit()
+            added = True
+    return {"llm_written": True, "model_added": added}
+
+
+def vectors_needing_owner(conn) -> dict:
+    """补戳清单：**以文档现在的主人为准**，不再以"文档还没主人"为准（终审 advisory ①）。
+
+    阶段一写的是 `WHERE d.user_id IS NULL`，于是 `backfill_documents` 提交之后、
+    `stamp_vector_owner` 跑完之前挂掉 ⇒ 下次开机这条 SELECT 返回空集，那批向量**永远**补不上戳。
+    换成"所有有主人的向量都进清单"，幂等就交给 Chroma 侧的"已戳就跳过"，崩溃窗口一次开机自愈。
+    代价：每次开机多一次全量 id 的 `get()`（基线 4 父 + 10 子，见 tests/test_chroma_data.py，只读 metadata）。
 
     真库上这两列存的**就是** Chroma 的 id（2026-10-04 已 live 验过：用它删向量，
     计数如实下降），所以直接拿它当 get/update 的 ids，不需要任何映射。
@@ -140,16 +173,17 @@ def vector_ids_without_owner(conn) -> dict:
     out = {"parent": [], "child": []}
     for key, table in (("parent", "parent_chunks"), ("child", "child_chunks")):
         rows = conn.execute(text(
-            f"SELECT c.vector_id FROM {table} c "
+            f"SELECT c.vector_id, d.user_id FROM {table} c "
             "JOIN documents d ON d.id = c.document_id "
-            "WHERE c.vector_id IS NOT NULL AND c.vector_id <> '' AND d.user_id IS NULL"
+            "WHERE c.vector_id IS NOT NULL AND c.vector_id <> '' AND d.user_id IS NOT NULL"
         )).fetchall()
-        out[key] = [r[0] for r in rows]
+        out[key] = [(r[0], r[1]) for r in rows]
     return out
 
 
-def stamp_vector_owner(client, vector_ids: dict, user_id: int) -> int:
-    """把无主的旧向量补上 user_id 戳。get → merge → update，跳过已戳的。
+def stamp_vector_owner(client, vectors: dict) -> int:
+    """把 (向量 id, 主人) 补进 metadata。已戳的一律跳过，**哪怕戳的是别人**——
+    迁移只补空，改归属不是它的活。
 
     为什么不依赖"Chroma 的 update 只补提供的键"这个较新版本的语义：真依赖它的迁移，
     在语义变化时会静默清掉 document_id/parent_id 这类既有 metadata，而那两个键一丢，
@@ -158,43 +192,49 @@ def stamp_vector_owner(client, vector_ids: dict, user_id: int) -> int:
     from core.vector_store import COLLECTION_CHILD, COLLECTION_PARENT
 
     total = 0
-    for name, ids in ((COLLECTION_PARENT, vector_ids["parent"]),
-                      (COLLECTION_CHILD, vector_ids["child"])):
-        if not ids:
+    for name, rows in ((COLLECTION_PARENT, vectors["parent"]),
+                       (COLLECTION_CHILD, vectors["child"])):
+        if not rows:
             continue
         collection = client.get_collection(name)
-        found = collection.get(ids=ids, include=["metadatas"])
+        found = collection.get(ids=[vid for vid, _ in rows], include=["metadatas"])
+        owner = {vid: uid for vid, uid in rows}
         to_update, metadatas = [], []
         for vid, meta in zip(found["ids"], found["metadatas"]):
             meta = meta or {}
             if meta.get("user_id") not in (None, ""):
-                # 已戳就跳过，**哪怕戳的是别人**：迁移只补无主的，改归属不是它的活
+                # 已戳就跳过，**哪怕戳的是别人**：迁移只补空，改归属不是它的活
                 # （Interfaces 那句"已戳过的跳过"就是这个意思）。这一格同时让
-                # "每次开机重跑"退化成一次只读扫描。
+                # "每次开机重跑"退化成一次只读扫描，也是新清单敢包含已归户向量的前提。
                 continue
             to_update.append(vid)
-            metadatas.append({**meta, "user_id": str(user_id)})
+            metadatas.append({**meta, "user_id": str(owner[vid])})
         if to_update:
             collection.update(ids=to_update, metadatas=metadatas)
             total += len(to_update)
     return total
 
 
-def run_migrations(engine, chroma_client, password: str) -> dict:
-    """lifespan 唯一入口。返回一份可直接进日志的汇总，不返回秘密（没有令牌、没有哈希）。"""
+def run_migrations(engine, chroma_client, config) -> dict:
+    """lifespan 唯一入口。返回一份可直接进日志的汇总，不返回秘密（没有令牌、没有哈希、没有 api_key）。
+
+    第三个参数从阶段一的 `password: str` 换成 `config`：步骤 4 要读三个种子键，
+    再多加一个形参就是第五件要记顺序的事——`Config` 就在那儿，直接吃它。
+    """
     with engine.connect() as conn:
         added = ensure_columns(conn)
         indexes = ensure_indexes(conn)   # 顺序硬要求：列还没加出来就建索引会当场炸
-        user_id = ensure_default_user(conn, password)
-        # 清单必须在归户之前读：backfill_documents 自己会 commit，之后 NULL 行就不存在了
-        pending = vector_ids_without_owner(conn)
+        user_id = ensure_default_user(conn, config.DEFAULT_USER_PASSWORD)
         docs = backfill_documents(conn, user_id)
-        if not docs:
-            pending = {"parent": [], "child": []}
+        seed = seed_default_llm(conn, user_id, config.OPENAI_API_KEY,
+                                config.OPENAI_BASE_URL, config.LLM_MODEL)
+        # 补戳清单现在读的是"有主人的向量"，必须在归户之后：顺序一反，第一次开机就拿到空集
+        pending = vectors_needing_owner(conn)
     # 补戳放在连接之外：Chroma 那边可能是一次几秒的只读扫描，别把 MySQL 连接摁在它上面
-    vectors = stamp_vector_owner(chroma_client, pending, user_id)
+    vectors = stamp_vector_owner(chroma_client, pending)
     summary = {"columns_added": added, "indexes_added": indexes,
                "default_user_id": user_id, "documents_claimed": docs,
+               "llm_seeded": seed["llm_written"], "model_seeded": seed["model_added"],
                "vectors_stamped": vectors}
-    logger.info("迁移完成: %s", summary)
+    logger.info("迁移完成: %s", summary)   # summary 里没有 api_key：多一个键就多一次泄漏机会
     return summary

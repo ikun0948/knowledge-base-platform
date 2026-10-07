@@ -83,7 +83,7 @@ def test_old_vectors_get_a_user_id_stamp_on_a_copy(tmp_path):
               for i, meta in zip(snapshot["ids"], snapshot["metadatas"])}
     before_texts = snapshot["documents"]
 
-    # 前置条件归一（只写副本，绝不碰 Config.CHROMA_PERSIST_DIR）：把向量回到 `vector_ids_without_owner`
+    # 前置条件归一（只写副本，绝不碰 Config.CHROMA_PERSIST_DIR）：把向量回到 `vectors_needing_owner`
     # 交给迁移的那种"无主"状态。共享库那份已经被 lifespan 补过戳（2026-10-07 首轮
     # vectors_stamped: 14），不归一 `stamped == len(ids)` 就永远不成立，这条判据会退化成
     # "测这份库恰好还没被迁过"。必须 delete+add：本机这版 Chroma 的 update 与 upsert 都是
@@ -94,7 +94,8 @@ def test_old_vectors_get_a_user_id_stamp_on_a_copy(tmp_path):
                    documents=snapshot["documents"],
                    metadatas=[before[i] for i in snapshot["ids"]])
 
-    stamped = migrations.stamp_vector_owner(client, {"parent": ids, "child": []}, 1)
+    stamped = migrations.stamp_vector_owner(client, {"parent": [(vid, 1) for vid in ids],
+                                                     "child": []})
     assert stamped == len(ids)
 
     after = parent.get(ids=ids, include=["metadatas", "documents"])
@@ -105,4 +106,5 @@ def test_old_vectors_get_a_user_id_stamp_on_a_copy(tmp_path):
     assert after["documents"] == before_texts, "补戳把向量文本改了：这不是迁移，是重新灌库"
 
     # 重跑退化成只读扫描
-    assert migrations.stamp_vector_owner(client, {"parent": ids, "child": []}, 1) == 0
+    assert migrations.stamp_vector_owner(
+        client, {"parent": [(vid, 1) for vid in ids], "child": []}) == 0
