@@ -2172,6 +2172,16 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task6.tx
 - Consumes: Task 4 的 `llm_config_for`/`NotConfiguredError`/`RunContext`、Task 1 的 `list_user_models`、Task 2 的 `MODEL_NOT_IN_LIST`、Task 5 的四个 ctx 签名
 - Produces: `_llm_context(db, user, model_name) -> RunContext`、`ChatRequest.model_name`、`STATUS_BY_ERROR[NotConfiguredError] == 409`、`EMPTY_MODEL_LIST`。Task 10 的前端下拉把选中的模型名塞进 `model_name`；Task 11 的横幅吃 `llm_configured` + `models.length`。
 
+> **修订（2026-10-08，Task 7 预检实测 · 锚在 `c4bf475`）**，八条。行号一律**按内容定位**，本仓 `.py` 混 CRLF/LF，脚本改行号是坑。
+> ① **Files 段的行号有四处过期**：`MODEL_NOT_IN_LIST` 在 `schemas/auth.py:136`（正文写 `:602`，差 466 行）；`SpyRAG` 在 `test_api_chat.py:56`（正文 `:55`）；`SpyStreamRAG` 定义在 `:303` 那条测函数**内部**、`__init__` 从 `:305` 起（正文 `:297`）；`FakeUser` 在 `fakes.py:122-134`、`__init__` 在 `:129`（正文 `:117-129`）。Step 5 说"逐字比较那一份"的判据是 `test_api_chat.py:96` 的 `test_rag_question_passes_the_parent_pool_through_the_whitelist`，逐字断言在 `:108`（正文 `:101`）。
+> ② **`api/chat.py` 整体比正文写作时后移 3 行**（`177077c` 给 `_require_owned_parents` 的 docstring 补了两行 + 一空行）：import 块 `:7-10`、`_require_owned_parents` `:16-30`、`_ctx_from_config` `:33-41`、JSON 端点 `def chat :44-46`（`ctx = _ctx_from_config(user, config)` 在 `:48`、白名单在 `:51`）、流式端点 `def chat_stream :76-78`（`ctx=` 在 `:82`、白名单在 `:87`）。`main.py` 的 `STATUS_BY_ERROR` 确在 `:30-36`、领域异常 import 在 `:19-25`（正文✓）。
+> ③ **Step 1 的 `rag.stream_calls` 在 `SpyRAG` 上根本不存在**：`stream_calls` 只属于 `SpyStreamRAG`（`:307`），正文 `:2259` 那句"`self.stream_calls = []` 已存在"只对后者成立。⇒ 给 `SpyRAG` 补两枚流式覆写时**必须照 `SpyStreamRAG` 的形状写成 call-time 记录（append 后 `return super()…`），不能写成生成器**——生成体的 append 只在被迭代时才发生，"端点 raise 之前根本没碰链子"这条判据就退化成恒真。补完还要在覆写里各记一笔 `seen_user_ids`/`seen_llm`。
+> ④ **Step 1 顶部 import 少列一件**：`test_api_chat.py` 现在没有 `import pytest`（`:1` 是 `import json`），`@pytest.mark.parametrize` 要用它。
+> ⑤ **正文 `:2279` 那条追加断言的模型名算错**：`test_stream_payload_is_forwarded_in_the_right_positions` 用的是缺省 db（`user_models=None` ⇒ `[("fake-model", True)]`），不是 `configured_db()`，所以应断 `("sk-fake-user", "https://fake-user/v1", "fake-model")] * 2`。
+> ⑥ **裁定（同源）**：`api/chat.py` 不抄正文 `:2342` 那行 `next((n for n, is_default in rows if is_default), names[0])`，改用 `_default_of`——它的 docstring（`api/auth.py:47-48`）本来就写着"Task 7 的问答链兜的是第一项，两边必须在同一句上"，而正文 Step 4 自己的理由是"两处各写一遍迟早分叉"，凭证与默认模型是同一件事。放置点选 **`schemas/auth.py`**（与 `mask_api_key`、`MODEL_NOT_IN_LIST` 同居；`:135` 那条注释就是为"两处说同一句话"写的，而 `core/llm_factory.py:44` 明说"工厂不知道名单"，放工厂里正好撞它自己的边界）。`api/auth.py` 的 `_default_of` 改名 `default_model_of` 移过去（`api/auth.py:69/:96` 两处调用点随之改 import），两个 API 模块各自从 `schemas.auth` 取。代价：Files 段多一枚 `backend/api/auth.py`；若不认，退回正文原状只是 `chat.py` 里一行。
+> ⑦ **连带（跨任务冲击，不是可选项）**：`ctx = _llm_context(...)` 按正文要求停在白名单**之前**（`:48`/`:82`），所以 `test_ownership_isolation.py` 那两条 INTRUDER 越权判据会**先撞名单门禁**——`OwnerAwareDB` 不补 `list_user_models` 就红在 409 而不是 404（`:87/:90` 的 `get_chat_history`/`delete_chat_history` 是同一批连带）。`gate=False` 那 8 条参数化仍 401：门禁发生在函数体里，依赖注入先抛。
+> ⑧ **条数与既有缺口**：全量 295 → **304**（chat +8：7 条函数其中 `parametrize` 占 2；error model +1 格；live-stream +0，改的是 skip 守卫不是新条）。另记一笔：`test_api_auth.py:440` 的名字承诺"三处同源"（列宽 1..100）却只钉了设置侧两枪，`ChatRequest.model_name` 那一枪本 Task 之后仍无人断言——挂全分支终审，别为它加新条数。
+
 - [ ] **Step 1: 写 409 门禁与"翻转"的 RED**
 
 `backend/tests/test_api_chat.py` 末尾追加一节。先给两枚共用工件（`SpyRAG` 已在 `:55`，这里给它补 `seen_llm`；`SpyStreamRAG` 在 `:297` 那条测函数**内部**，同样补）：
