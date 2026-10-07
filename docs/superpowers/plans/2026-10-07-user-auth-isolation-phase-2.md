@@ -1802,6 +1802,21 @@ spec 2.2 勘误点名的"同一批工作量"的另一半：Task 5 把 ctx 灌进
 > **修订（2026-10-07，Task 6 预检实测）**：Files 里凡是落在 `backend/core/migrations.py` 与 `backend/tests/test_migrations.py` 的行号**全部已因 Task 3 漂移**，按内容定位、别按行号盲改。实测现值：`MIGRATED_COLUMNS` 在 `migrations.py:33`（原计划说 `:30`）、`MIGRATED_INDEXES` 在 `:41`（原说 `:34`）；那条 `MIGRATED_COLUMNS` 逐字 pin 现在在 `tests/test_migrations.py:371-375`（原说 `:243`），它断言**恰好三行** `("documents","user_id","INTEGER") / ("users","api_key","VARCHAR(255)") / ("users","base_url","VARCHAR(500)")`——本 Task 要把它改成四行；`FakeConn` 现在跨 `:17-113`（原说 `:15-84`），`execute` 的通用 `SELECT COUNT` 分支在 **`:60`**（原说 `:56`），新分支仍必须插在它**之前**（first-match 规矩不变，理由与本 Task 原文一字不差）。`test_error_model.py:154` 那处位置参数调用与 `test_live_database.py` 的两处行号区间**另需在开工前实测**（本 Task 之前它们没被前面的 Task 动过，但阶段一之后没复核过）。
 
 
+> **修订（2026-10-07，Task 6 预检实测 · 第二轮）**：上面那段修订测于**阶段二开工前**；此后 Task 3 与 Task 5 又动过 `migrations.py` / `rag_system.py` / `api/chat.py`，所以行号**整体又漂了一次**。下面是我在 `28928d7` 工作树（Task 5 实现提交，修正轮只改 docstring/测试、不动行号）上逐格重测的现值——**开工前以这份为准，一律按内容定位**：
+>
+> - `core/database.py`：`class ChatHistory` 在 **`:93`**（原文说 `:92-108`），索引块在 `:106`；三方法 `get/save/delete` 实测在 **`:475` / `:487` / `:507`**（原文说 `:451/:463/:483`）。
+> - `core/migrations.py`：`MIGRATED_COLUMNS` **`:33`**、`MIGRATED_INDEXES` **`:41`**（现值都是一元，本 Task 各加一行）、`def backfill_documents` **`:124`**、`def seed_default_llm` **`:135`**、`def run_migrations` **`:224`**、`summary = {…}` **`:241`**。`backfill_chat_history` 插在 `:124` 与 `:135` 之间（Step 4 说的"放在 backfill_documents 之后"就是这里）。
+> - `core/rag_system.py`：十处历史调用点实测为 **`:49`(读) `:63`(写) `:94`(写·空检索分支) `:106`(读) `:122`(写) `:150`(读) `:168`(写) `:189`(写·空检索分支) `:204`(读) `:223`(写)**；Step 5 表格那列（49/62/93/105/120/148/165/186/201/219）全部小幅漂移，**按顺序对、别按数字改**。
+> - `api/history.py`：`def get_history` 在 `:26`、过期 docstring 覆盖 `:27-33`（过期句在 `:31`）、`db.get_chat_history(...)` 调用在 `:35`；`def clear_history` 在 `:46`、过期注释在 `:47`、`db.delete_chat_history(...)` 在 `:48`。原文那组行号**逐字命中**。
+> - `api/chat.py:21-23` 过期三句**逐字命中**。**新增一条事实**：这三句里"`RAGSystem` 四个方法的签名保持不变"在 Task 5 之后**已经是假话**（四个方法确实加了 `ctx` 首参），整段删掉正好把这条假话一并清掉——别只删后两句、把中间那句留着。
+> - 生产侧历史方法的消费者穷举：`api/history.py` ×2 + `core/rag_system.py` ×10 = **12 处**，与 Files 完全一致，无第三个文件。
+> - `tests/fakes.py`：`class FakeOwnedParentsDB` 在 `:18`，`get_chat_history` **`:32`**、`delete_chat_history` **`:35`**（原文说 `:27/:30`）。该假库**没有** `save_chat_history`（与原文清单一致，不用补）。
+> - `tests/test_ownership_isolation.py:87/:90`、`tests/test_api_history.py:73/:101/:105`、`tests/test_error_model.py:154`（**位置参数**调用 `mgr.save_chat_history("s1", "问", "答")`）——这四处**逐字命中**。
+> - `tests/test_api_history.py`（原文说 `:28-34`/`:40-41`）：`cleared_with` 在 `:25`、`history_calls` 在 `:26`、两枚桩在 `:28`（get）/ `:32`（delete）、`make_client` 在 `:37`、过期注释在 `:41`。
+> - `tests/test_rag_system.py`：`class StubDb` 在 **`:23`**（原文说 `:29`），`get_chat_history` **`:33`**，`save_chat_history(**kwargs)` 在 `:48`（形状不用改），`CTX` 在 `:16`（`user_id=1`）；Step 7 说的三处**整字典**比较实测在 **`:106` / `:161` / `:303`**（原文说 `:98/:153-159/:295`）——其余 `db.saved == []`（`:114/:175/:183/:322/:333/:344/:352`）与 `db.saved[0][…]` 都是按键取，不受加键影响，**别顺手给它们加 `user_id`**。
+> - `tests/test_migrations.py`：`class FakeConn` 在 `:17`、`__init__` 在 `:20-21`，真实形参是 `existing_columns, user_rows, owned_doc_ids, existing_indexes, user_models`（**Step 1 的片段只列了前三格 + `chat_unowned=3`，别照抄片段把签名改窄**）；通用 `SELECT COUNT` 分支在 **`:60`**（新分支仍须插在它之前）；那条款逐字 pin 现在在 **`:371-375`**、位于 `def test_default_identifier_is_the_one_the_spec_names`（`:368`），断言**恰三行**。
+> - `tests/test_live_database.py`：`def test_used_chunks_round_trips_through_json(db)` 在 **`:121`**（6 处调用：`:123/:126/:128/:133/:135/:136`）、`def test_emoji_survives_the_history_round_trip(db)` 在 **`:139`**（5 处调用：`:150/:153/:155/:157/:158`）。**这 11 处现在全不带 `user_id`**，签名一收成 keyword-only 就会 `TypeError` ⇒ **Step 3（改签名）与 Step 7（补调用点）必须落在同一次提交**，不能先提交一半让门禁红着过夜。新判据要用的 `_drop_probe_account`（`:380`）与 `new_tag`（`:246`）都已存在，**不用新建辅助**；同文件另有 `PROBE_API_KEY`/`PROBE_BASE_URL` 两个模块常量（Task 1 的判据在用），**不要碰**。
+
 - [ ] **Step 1: 写迁移侧的 RED**
 
 `tests/test_migrations.py` 的 `FakeConn`（`:15-84`）先长出一格状态和两条分支。⚠️ **分支必须插在通用 `SELECT COUNT`（`:56`）之前**——`startswith("SELECT COUNT")` 会先吃掉 `SELECT COUNT(*) FROM chat_history ...`，插在后面就是那条通用分支拿到错的行数（这是 `FakeConn` 的 first-match 规矩，Task 3 的 `SELECT API_KEY...` 同一条理由）：
