@@ -3747,6 +3747,8 @@ const ME = { user: meUser() }
 ```
 > `models` 给**两项**、`default_model` 给一项：Task 10 那条下拉测需要两个可选项才能证明"换得动"。改完之后先跑一次全量——既有 7 条里唯一会读 `models` 的是 Task 10 那条，它现在有了真名单；其余各条不碰这些键。
 
+> **修订（2026-10-08 实跑，Step 1）**：起点不是"既有 7 条"而是 **8 条**（Task 10 的修正轮为变异 ① 的假绿补了一条回落测，见 Task 10 Step 7 的修订块），全量起点 **148 passed / 14 files** 不是 147。builder 抽完跑全量实测 `Test Files 14 passed (14)` / `Tests 148 passed (148)`，十条既有判据一条没踢翻（十键与取值原样搬进 `meUser()`，`models` 仍是两项）。行尾按字节复量：`App.vue` 302/302、`ChatInput.vue` 71/71、`layout.css` 422/422 全 CRLF；四个测试文件 CR 计数 0（通篇 LF）——与 Task 10 记的一致，本轮 Edit 未破。
+
 - [ ] **Step 2: RED —— App 层三条判据**
 
 ```js
@@ -3815,6 +3817,8 @@ const ME = { user: meUser() }
 
 Run: `cd frontend && npx vitest run tests/App.auth-gate.test.js tests/ChatInput.test.js`
 Expected: 三条 App + 一条 ChatInput 全红。
+
+> **修订（2026-10-08 实跑，Step 2）**：RED 实测 `Test Files 2 failed (2)` / `Tests 4 failed | 17 passed (21)`，四条新判据全红，与预期一致。**红的形状要照实记**：App 的第二、三条不是断言不匹配，而是 `Error: Cannot call text/trigger on an empty DOMWrapper.`（VTU 对不存在的节点直接抛）；第一条与 ChatInput 那条才是断言红（`expected undefined to be defined`）。这一区别只影响查红的方向——见到那两条先确认"横幅根本没渲染"，别去比对文案字符串。
 
 - [ ] **Step 3: 实现 —— App 的两道门合成一句人话，ChatInput 多一个 prop**
 
@@ -3897,6 +3901,8 @@ function submit() {
   })
 ```
 
+> **修订（2026-10-08 实跑，Step 4）**：钉档实测**今天即绿**（`tests/useChat.test.js` 由 17 → `Tests 18 passed (18)`），台账记 pin 不记 RED。两处计划没写、但不做就起不来的前置：① 该文件此前**没有** `ApiError` 的导入，必须补 `import { ApiError } from '../src/api/client.js'`——`client.js` 不在本文件的 `vi.mock` 名单里，导入的是真实形状（这正是这一格要钉的东西，mock 掉它等于没钉）；② 插入位置落在第一个 describe（`useChat.send：收流结局`）里"非取消的 throw"之后，那里有 `beforeEach(() => vi.clearAllMocks())`，`mockRejectedValue` 才不会被上一条测的 mock 残留污染。裁定 4 里"409 的唯一界面归宿是既有红色 `error` 横幅"这条事实成立，但引用行号已漂：`App.vue:206-209` 本轮复量是 **268-271**（`setupProblem` 在 :57，紫色横幅模板在 :279）——按旧行号去找会找到 `<main v-if="!isLoggedIn">` 那一段。
+
 - [ ] **Step 5: advisory ③ —— hydrate 失败路径的本地键判据（钉档）**
 
 `useChunkSelection.js:53-56` 的 catch 故意**不**清空本地选中池（"一次网络失败不该把面板清空"），于是 `selected_parent_ids` 原样留在 localStorage。这件事今天只有注释担保。加一条钉档（**今天即绿**）：
@@ -3920,6 +3926,8 @@ function submit() {
 
 > 后半句 `clearSelection()` 是这条判据的另一半：它把"失败路径不清"与"登出路径必清"钉在同一个 `it()` 里，这样将来有人把 `clearSelection()` 从 `resetWorkspace` 里删掉时，会先看见这里红，而不是等到跨用户残留才被发现。
 
+> **修订（2026-10-08 实跑，Step 5）**：钉档同样**今天即绿**（`tests/useChunkSelection.test.js` 10 → 11 条，含进 Step 6 的 154）。两点就地与该文件既有写法统一：键名用文件顶部既有的 `const KEY = 'selected_parent_ids'` 而不是再敲一遍字面量（其余各条都用 KEY）；该文件也没有 `ApiError` 导入，补一行（`documents.js` 被 mock 了，`client.js` 没有，所以导入是真实的）。另记一条支撑事实：`useChunkSelection()` 的三个 ref 是**函数内**作用域（与 `useAuth` 的模块级相反，那个的理由写在 useAuth.js:11-14），所以新实例必然从空集合开始——`expect(sel.selectedChunks.value).toEqual([])` 这一句才成立；将来谁把它挪到模块级，这条会红在内存集合上而不是红在 localStorage，那是提示不是 bug。计划写的 `useChunkSelection.js:53-56` 行号本轮复量**仍然准确**（catch 从 53 起）。
+
 - [ ] **Step 6: 全量门禁 + 样式门禁**
 
 ```bash
@@ -3930,6 +3938,8 @@ Expected: 全绿。新增 **6 条**（`App.auth-gate.test.js` 3、`ChatInput.tes
 
 变异自证三条：① 把 `submit()` 里的 `!props.allowSend` 删掉 → ChatInput 那条的 Enter 半句红；② 只删按钮的 `:disabled="!props.allowSend …"` 半句 → 前半句红、后半句仍绿（证明两条路各有牙）；③ 把 `setupProblem` 的第二个 `if` 删掉（名单为空也说 api_key 那句）→ App 层第二条红。
 
+> **修订（2026-10-08 实跑，Step 6）**：全量 `Test Files 14 passed (14)` / `Tests 154 passed (154)`（= 起点 148 + 新增 6，这一步的加法本身没偏，偏的只有上一轮留下的起点）；`npm run build` exit 0（`dist/assets/index-CUrklGmJ.css 13.49 kB │ gzip 3.20 kB`、`index-DQP49TXO.js 101.15 kB │ gzip 37.89 kB`）；G-4 颜色 grep = **0**。三条变异的实测：① `Tests 1 failed | 9 passed (10)`，红因 `AssertionError: expected [ [ '你好' ] ] to be undefined`（Enter 半句）。③ `Tests 1 failed | 10 passed (11)`，红的正是"凭证齐了但名单为空"那条。**② 是计划的方法缺陷**：写"前半句红、后半句仍绿"预设一次运行能同时看到两半，但 **vitest 在第一个失败断言处就中止该 `it()`**，那条测的 Enter 断言根本不会执行，"仍绿"在同一轮里不可观测。实测办法：临时加一次性探针文件（两条 `it`：变异下按钮**没有**被禁用 = 真判据前半句要抓的东西；Enter 仍发不出 `send` = 后半句），跑 `Test Files 1 failed | 1 passed (2)` / `Tests 1 failed | 11 passed (12)`（红的那 1 条是真判据前半句，探针 2 条全绿），随后**删除探针**，`git status` 干净、探针从未进暂存区。结论：两条路确实各有牙，但证据形状是"两次运行"而不是"一次运行的两半"。三次变异全部手工 Edit + `cp` 备份 + `sha256sum` 还原核对（`ChatInput.vue` 前后同为 `a5521afad5c4…`，`App.vue` 同为 `b2a7d930313e…`），未用脚本改写。
+
 - [ ] **Step 7: 提交**
 
 ```bash
@@ -3937,6 +3947,8 @@ git add frontend/src/App.vue frontend/src/components/ChatInput.vue frontend/src/
 git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task11.txt
 ```
 提交信息：`feat(frontend): 未配置横幅 + 发送禁用 + 409 归宿与两条钉档（阶段二 Task 11，含 advisory ③）`
+
+> **修订（2026-10-08 实跑，Step 7）**：代码提交 = **`7a1aa8e`**（`7 files changed, 144 insertions(+), 8 deletions(-)`，信息经 `git commit -F /tmp/fe2-task11.txt` 与当轮内容配对，数字全部抄自本轮汇总行）；提交后 `git status --short` 空。给 Task 12 的交接事实四条：① 全量起点现在是 **154 passed / 14 files**（`App.auth-gate.test.js` 11、`ChatInput.test.js` 10、`useChat.test.js` 18、`useChunkSelection.test.js` 11）；② `.setup-banner` 与 `.chat-input` **平级**（在 `.chat-body` 内、`MessageList` 之后），浏览器判据按"输入框正上方那条紫横幅，右边一个「去设置」"量，同时确认 `.chat-input` 仍是两个子节点（Task 10 的 `kids[1]` 结构判据依赖它）；③ 窄屏档（`margin: 0 12px` + `flex-wrap: wrap`）与 Task 10 的控件行一样**没有 jsdom 之外的量测**，Task 12 的视口判据要补横幅的 `scrollWidth <= innerWidth`；④ 真服务上要造"未配 key""名单为空"两档，只能走设置端点（清 api_key / 逐条删模型），**不许改库**——改了就把 Task 3 的补戳与基线数（活文档 4 / 父块 4 / 子块 10）搅了。
 
 ---
 
