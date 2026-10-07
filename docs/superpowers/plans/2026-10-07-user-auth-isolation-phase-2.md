@@ -2181,6 +2181,12 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task6.tx
 > ⑥ **裁定（同源）**：`api/chat.py` 不抄正文 `:2342` 那行 `next((n for n, is_default in rows if is_default), names[0])`，改用 `_default_of`——它的 docstring（`api/auth.py:47-48`）本来就写着"Task 7 的问答链兜的是第一项，两边必须在同一句上"，而正文 Step 4 自己的理由是"两处各写一遍迟早分叉"，凭证与默认模型是同一件事。放置点选 **`schemas/auth.py`**（与 `mask_api_key`、`MODEL_NOT_IN_LIST` 同居；`:135` 那条注释就是为"两处说同一句话"写的，而 `core/llm_factory.py:44` 明说"工厂不知道名单"，放工厂里正好撞它自己的边界）。`api/auth.py` 的 `_default_of` 改名 `default_model_of` 移过去（`api/auth.py:69/:96` 两处调用点随之改 import），两个 API 模块各自从 `schemas.auth` 取。代价：Files 段多一枚 `backend/api/auth.py`；若不认，退回正文原状只是 `chat.py` 里一行。
 > ⑦ **连带（跨任务冲击，不是可选项）**：`ctx = _llm_context(...)` 按正文要求停在白名单**之前**（`:48`/`:82`），所以 `test_ownership_isolation.py` 那两条 INTRUDER 越权判据会**先撞名单门禁**——`OwnerAwareDB` 不补 `list_user_models` 就红在 409 而不是 404（`:87/:90` 的 `get_chat_history`/`delete_chat_history` 是同一批连带）。`gate=False` 那 8 条参数化仍 401：门禁发生在函数体里，依赖注入先抛。
 > ⑧ **条数与既有缺口**：全量 295 → **304**（chat +8：7 条函数其中 `parametrize` 占 2；error model +1 格；live-stream +0，改的是 skip 守卫不是新条）。另记一笔：`test_api_auth.py:440` 的名字承诺"三处同源"（列宽 1..100）却只钉了设置侧两枪，`ChatRequest.model_name` 那一枪本 Task 之后仍无人断言——挂全分支终审，别为它加新条数。
+> ⑨ **实跑纠偏（2026-10-08，控制者自执行，锚在 `869360b`）**，五处与正文有出入，均已落进代码：
+> a. **`SpyStreamRAG` 整类删除**：它与 `SpyRAG` 是重复实现（四条覆写一一对应），合并成一枚 `SpyRAG` 更省，`:327` 那条流式判据随之改用 `SpyRAG`。⇒ 正文与本块 ①③⑤ 里凡写 `SpyStreamRAG` 的地方，一律按"`SpyRAG` 的 `stream_calls` / `seen_llm`"读。
+> b. **"链子根本没跑"拆成两行断言**：正文那句 `assert rag.calls == [] and rag.stream_calls == []` 红起来不指向端点，改成非流式一条、流式一条各自 assert，净条数不变。
+> c. **Step 2 的 RED 实为 40 failed / 7 passed**（`pytest tests/test_api_chat.py tests/test_error_model.py -q`，67.50s），不是"新判据那 8 条红"：这一步同时删了 `dependency_overrides[get_config]`，旧的 `_ctx_from_config` 还在读 `app.state.config` ⇒ 38 条 chat 全红在 `AttributeError: 'State' object has no attribute 'config'`。删依赖注入必然连带换函数体，属正常红，不是假红。
+> d. **变异自证三轮实数**（手工 Edit、逐字节回退、sha256 与基线一致）：把凭证来源换成别人 ⇒ **恰好 2 红**（`test_the_callers_own_credentials_reach_the_chain` + `:338` 的 `seen_llm`，正文说 1 红是漏算了流式那条）；`default_model_of` 回落 `rows[0]`→`rows[-1]` ⇒ **恰好 1 红**，且设置侧没有一条判据能区分第一个与最后一个（⑧ 那笔缺口的第二面，一并挂终审）；摘 `STATUS_BY_ERROR[NotConfiguredError]` ⇒ **5 红**（3 条问答门禁被兜底 handler 洗成 500 + error-model 的探针行与覆盖率 pin）。
+> e. **live 侧补的其实是两样**：除正文那枚 409 环境差异守卫之外，新增 `logged_in()` 上下文把 `login_token()` 的"只登不出"收掉（advisory ④），实测 `auth_tokens` 默认用户残留 0→0；真服务上手验名单外 `gpt-9` ⇒ 两个端点各 409 +「模型不在你的名单里」、历史 0 行。
 
 - [ ] **Step 1: 写 409 门禁与"翻转"的 RED**
 
