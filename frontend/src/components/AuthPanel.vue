@@ -5,6 +5,10 @@ import { useAuth } from '../composables/useAuth.js'
 
 // 与后端 schemas/auth.py 同一套口径（那边才是权威；改动要两边一起改）。
 // 这里不是防线，只是让人少跑一趟网络：绕过界面直接打 /api/auth/register 照样 422。
+// **只有注册分支用这两条正则**：后端 LoginIn 对账号形状完全不验（只 strip，含 @ 才归一小写），
+// 所以登录 tab 也不验——本地一加校验就比后端严，而 core/migrations.py 的 DEFAULT_IDENTIFIER
+// 是启动期迁移直接 INSERT 进 users 的 `default@local`，域名没有点、过不了 EMAIL_RE，
+// 那正是界面上唯一的旧数据入口。新增登录入口（阶段二的用户名登录）时不要顺手在这里补校验。
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
 const PHONE_RE = /^1[3-9]\d{9}$/
 const PASSWORD_MIN = 6
@@ -26,19 +30,14 @@ watch(mode, () => { authError.value = '' })
 const fieldError = computed(() => {
   const identifier = form.identifier.trim()
   if (!identifier) return '请填写账号'
+  // 账号形状只在注册态判（后端 RegisterIn 按 identifierType 拒 422）；
+  // 登录态只做"非空 + 密码长度"两道，形状交给后端——理由见文件顶部 EMAIL_RE 那条注释。
   if (mode.value === 'register') {
     if (form.identifierType === 'email') {
       if (!EMAIL_RE.test(identifier)) return '邮箱格式不正确'
     } else if (!PHONE_RE.test(identifier)) {
       return '手机号格式不正确'
     }
-  } else if (!PHONE_RE.test(identifier) && !EMAIL_RE.test(identifier)) {
-    // 登录不锁类型（后端 LoginIn 按有没有 @ 分流），所以两个形状都得判——
-    // 只判注册的话，坏邮箱在登录 tab 上是"本地放行、后端 401"，
-    // 而 authError 里上一次失败的文案又会盖在输入框下面把人往错处引。
-    // 两边都不合时报邮箱：手机号是「1 开头 11 位」的窄形状，落不进这个窄形状的人
-    // 大概率是在输邮箱（'bad'、'a@b' 都属于这一类）。
-    return '邮箱格式不正确'
   }
   if (form.password.length < PASSWORD_MIN) return `密码至少 ${PASSWORD_MIN} 位`
   if (form.password.length > PASSWORD_MAX) return `密码最多 ${PASSWORD_MAX} 位`
@@ -91,13 +90,10 @@ function submit() {
       >注册</button>
     </div>
 
-    <!-- 回车能登录：靠的是 form + @submit.prevent（不会把整页刷掉）。
-         按钮另外还挂 @click.prevent，两个原因：① 单测环境是 jsdom，它对 isTrusted=false 的
-         click 不执行按钮的激活行为，"点提交"根本不会变成 submit 事件（VTU 的常规口径是让测试
-         直接 trigger('submit')——但那样测的就不是"人点按钮"这个手势了）；
-         ② 真实浏览器里回车隐式提交会对默认按钮派发 click，于是这条 @click 正是那条路径。
-         .prevent 取消的是"点击提交表单"这个默认动作，所以一次手势只 emit 一次；
-         @submit.prevent 留着兜 requestSubmit 这类不经按钮点击的提交。 -->
+    <!-- 只有一个提交入口：form + @submit.prevent。在输入框里按回车是登录最常见的手势，
+         浏览器会把它变成对默认按钮的隐式提交 → 表单的 submit 事件；.prevent 负责不把整页刷掉。
+         提交按钮上不许再挂一个点击处理器：那会让一次手势走两条腿，
+         "只 emit 一次"就只系于一个 .prevent 修饰符——真实浏览器里点一次登录发两次 POST，第二次撞 409。 -->
     <form class="auth-form" @submit.prevent="submit">
       <label class="auth-field">
         <span>账号</span>
@@ -139,7 +135,7 @@ function submit() {
       <p v-if="fieldError" class="picker-error">{{ fieldError }}</p>
       <p v-else-if="authError" class="picker-error">{{ authError }}</p>
 
-      <button class="btn auth-submit" type="submit" :disabled="authBusy || !!fieldError" @click.prevent="submit">
+      <button class="btn auth-submit" type="submit" :disabled="authBusy || !!fieldError">
         {{ authBusy ? (mode === 'login' ? '登录中…' : '注册中…') : (mode === 'login' ? '登录' : '注册并进入') }}
       </button>
       <p class="auth-hint">只校验格式，不发验证码；忘记密码暂无找回入口。</p>
