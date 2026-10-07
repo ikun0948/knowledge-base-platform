@@ -6,6 +6,7 @@
 """
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -435,6 +436,19 @@ def test_model_list_add_default_and_delete():
                       headers=headers).status_code == 409
     res = client.delete("/api/auth/me/models/qwen-turbo", headers=headers)
     assert res.json() == {"models": ["qwen-max"], "default_model": "qwen-max"}
+
+
+def test_a_model_name_with_a_slash_is_still_deletable():
+    # 带斜杠的模型名是真场景（OpenRouter 那类网关的 id 就是「厂商/模型」），前端也确实把整段
+    # 名字 encodeURIComponent 之后才拼进 URL。但 `%2F` 在 ASGI 里会被解回 `/`，而默认路径参数
+    # `{name}` 的正则是 `[^/]+`——那一段匹配不上就是 404：名字加得进去、删不掉，只能去库里手删。
+    client, _, headers = _login_llm_client()
+    name = "qwen 2.5/coder"
+    assert client.post("/api/auth/me/models", json={"name": name},
+                       headers=headers).status_code == 200
+    res = client.delete(f"/api/auth/me/models/{quote(name)}", headers=headers)
+    assert res.status_code == 200, f"带斜杠的名字删不掉（{res.status_code}），用户只能改库"
+    assert name not in res.json()["models"]
 
 
 def test_model_name_length_matches_the_column_and_chat_request():

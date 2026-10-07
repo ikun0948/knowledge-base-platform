@@ -175,7 +175,9 @@ def add_model(payload: ModelIn, db=Depends(get_db), user=Depends(get_current_use
     return _models_out(db, user)
 
 
-@router.delete("/me/models/{name}", response_model=ModelsOut)
+# `{name:path}`：默认那段 `[^/]+` 匹配不上带斜杠的名字，而 `%2F` 到 ASGI 已被解回 `/`——
+# 「厂商/模型」这种 id（OpenRouter 一类网关）加得进去却删不掉。见 test_a_model_name_with_a_slash_is_still_deletable。
+@router.delete("/me/models/{name:path}", response_model=ModelsOut)
 def remove_model(name: str, db=Depends(get_db), user=Depends(get_current_user)):
     db.delete_user_model(user.id, name)
     return _models_out(db, user)
