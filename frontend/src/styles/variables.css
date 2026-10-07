@@ -40,4 +40,7 @@
   --focus-ring: rgba(102, 126, 234, 0.35);
 
   --side-width: 320px;
+  /* 输入区控件行的间距：下拉与发送按钮之间。写进 token 是为了 ≤768 分支只用改它，
+     不必在两条规则里各抄一遍 8px（spec 5.8 点名的 --control-gap） */
+  --control-gap: 8px;
 }

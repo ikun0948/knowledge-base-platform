@@ -47,13 +47,22 @@ describe('useChat.send：收流结局', () => {
 
   // 后端那份 ChatRequest 只认 parent_ids；多余字段被 Pydantic 静默丢掉，
   // 坏法是"每次对话都走普通链、引用条永远空"，不是 422 也不是报错。
-  it('载荷里的池子字段叫 parent_ids', async () => {
+  it('载荷里的池子字段叫 parent_ids，模型字段叫 model_name', async () => {
     scriptEvents([['token', { text: 'x' }], DONE])
     const chat = useChat()
-    await chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'] })
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'], model_name: 'qwen-turbo' })
     expect(sendChatStream.mock.calls[0][0]).toEqual({
-      session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'],
+      session_id: 's1', question: 'q', parent_ids: ['甲.txt_parent_0'], model_name: 'qwen-turbo',
     })
+  })
+
+  it('没有选中模型时载荷里连 model_name 这个键都没有（空串会被后端判成 422）', async () => {
+    scriptEvents([['token', { text: 'x' }], DONE])
+    const chat = useChat()
+    await chat.send({ session_id: 's1', question: 'q', parent_ids: [], model_name: '' })
+    // 必须断"键在不在"：vitest 的 toEqual 忽略值为 undefined 的键，
+    // 用 toEqual({session_id, question, parent_ids}) 挡不住 model_name: undefined，那条会永久绿。
+    expect('model_name' in sendChatStream.mock.calls[0][0]).toBe(false)
   })
 
   it('done 前干净 EOF：撤两条 + “意外中断”，这一轮后端没落库就不能留在界面', async () => {

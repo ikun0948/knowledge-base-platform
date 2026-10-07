@@ -55,7 +55,7 @@ export function useChat() {
     }
   }
 
-  async function send({ session_id, question, parent_ids }) {
+  async function send({ session_id, question, parent_ids, model_name }) {
     if (pending.value || !question.trim()) return false
     error.value = ''
     // 阶段二 pending 覆盖整条流：没有停止生成按钮时，中途放手会让界面挂着一条
@@ -75,9 +75,14 @@ export function useChat() {
     let ended = false
     let errored = false
     let errorText = ''
+    const payload = { session_id, question, parent_ids }
+    // 空模型名连键都不发（同 api/auth.js 的 register 那条规矩）：后端 ChatRequest 的
+    // min_length=1 会把 '' 判成 422，而那句话在界面上读起来像"我没打错任何参数"。
+    // 不发键 = 让后端走它自己的解析（默认项 → 第一项，Task 7），这是正路不是兜底。
+    if (model_name) payload.model_name = model_name
     try {
       await sendChatStream(
-        { session_id, question, parent_ids },
+        payload,
         (event, data) => {
           switch (event) {
             case 'meta':

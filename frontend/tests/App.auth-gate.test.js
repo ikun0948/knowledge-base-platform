@@ -41,7 +41,9 @@ const ME = {
   user: {
     id: 1, identifier: 'a@b.com', identifier_type: 'email', nickname: '小明', avatar: 'auto',
     llm_configured: true, llm_base_url: 'https://fake/v1', api_key_masked: 'sk-****7890',
-    models: ['qwen-max'], default_model: 'qwen-max',
+    // 两个模型不是笔误：Task 10 那条"下拉换模型 → 载荷跟着换"需要**第二个 option 可换**，
+    // 名单只有一项时 select.setValue 找不到目标，测会红在桩上而不是红在接线上。
+    models: ['qwen-max', 'qwen-turbo'], default_model: 'qwen-max',
   },
 }
 // 上一个账号的文档与历史：登出的"不残留"就靠它们做探针
@@ -86,7 +88,7 @@ function stubFetch() {
   calls = []
   vi.stubGlobal('fetch', async (input, init = {}) => {
     const url = String(typeof input === 'string' ? input : (input?.url ?? input))
-    calls.push({ url, method: init.method ?? 'GET' })
+    calls.push({ url, method: init.method ?? 'GET', body: init.body })
     const route = matchRoute(url)
     return route ? makeResponse(route.status, route.body) : makeResponse(200, [])
   })
@@ -176,6 +178,10 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     // X-3 的判据并进这里（不另开 it()）：登出前挂一句上一次登录失败的文案
     const { authError } = useAuth()
     authError.value = '上一次失败的文案'
+    // Task 10：先真的换一个模型，下面的 modelOverride 归零断言才有牙
+    // （不选就永远是 ''，那句断言就成了永久绿——与 settingsOpen 那条的处理同一个道理）
+    await app.find('.model-select').setValue('qwen-turbo')
+    expect(app.vm.modelOverride).toBe('qwen-turbo')
 
     await app.find('.rail-signout').trigger('click')
     await flushPromises()
@@ -198,6 +204,9 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     expect(app.vm.documents).toEqual([])
     expect(app.vm.queue).toEqual([])
     expect(app.vm.messages).toEqual([])
+    // Task 10：modelOverride 走的是同一组清理（上面刚把它换成 qwen-turbo）。
+    // DOM 观测不到——此刻 .app-shell 已经整棵卸载，下拉框本身都不存在了。
+    expect(app.vm.modelOverride).toBe('')
     // X-3：authError 由 handleSignOut 清掉。
     // 照实说：DOM 那一句单独不构成判据——重挂的 AuthPanel 表单为空，「请填写账号」会压住后端文案，
     // 残留本来就在屏上看不见。有牙的是 authError 这个模块级 ref 本身。两句都留着：
@@ -283,5 +292,46 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     user.value = { ...user.value, avatar: 'auto', nickname: '', identifier: 'z@b.com' }
     await nextTick()
     expect(app.find('.rail-avatar').text()).toBe('Z')
+  })
+
+  it('下拉换模型 → 发出去的载荷跟着换（App 到网络层是一条链，分段测各自看不见它）', async () => {
+    seedLoggedIn()
+    const app = await mountApp()
+    // 前置事实：下拉的两项就是 ME.user.models 那两项，顺序照抄（currentModel 默认取 default_model）
+    const select = app.find('.model-select')
+    expect(select.findAll('option').map((o) => o.element.value)).toEqual(['qwen-max', 'qwen-turbo'])
+    await select.setValue('qwen-turbo')
+    await app.find('.chat-textarea').setValue('营收多少')
+    await app.find('.chat-send').trigger('click')
+    await flushPromises()
+    // 桩只记 url/method/body，这里只需要 body：/api/chat/stream 回的是 application/json，
+    // postStream 必然在 content-type 那一格抛"响应不是 SSE 事件流"——**这不影响判据**：
+    // fetch 已经发生并记账，抛错发生在其后，useChat 的 catch 只会撤掉那两条气泡。
+    // 测的是载荷，不是流。
+    const chatCall = calls.find((c) => c.url === '/api/chat/stream')
+    expect(JSON.parse(chatCall.body).model_name).toBe('qwen-turbo')
+    // 顺带钉住另一个键：池子还是那个池子，模型名不该把 parent_ids 顶掉
+    expect(JSON.parse(chatCall.body).parent_ids).toEqual(['手册.pdf_parent_0'])
+  })
+
+  it('选中的模型被从自己名单里删掉后，下拉回落到默认而不是抱着那个名字', async () => {
+    // 这条是 currentModel 里 `opts.includes(modelOverride.value)` 那半门禁的**唯一牙**：
+    // 上一条测选的 qwen-turbo 本来就在名单里，删掉门禁它也绿（计划 Step 7 的变异自证预期错了，
+    // 实测删门禁后本文件 7 条全绿）。
+    // 场景取 SettingsModal 的 applyModels：删模型只 patchMe 新的 models/default_model，
+    // 它碰不到 App 层的 modelOverride——于是"屏上选着一个后端名单里已经没有的模型"必然发生，
+    // 门禁在的就是这一格（换人那一格由 resetWorkspace 清 ref，另有判据）。
+    const { user } = useAuth()
+    seedLoggedIn()
+    const app = await mountApp()
+    await app.find('.model-select').setValue('qwen-turbo')
+    // 前置事实：这一档真的被选中了（不是默认值恰好等于它）
+    expect(app.find('.model-select').element.value).toBe('qwen-turbo')
+    // 同一个账号，把 qwen-turbo 从名单里删掉，默认回到剩下的那项
+    user.value = { ...ME.user, models: ['qwen-max'], default_model: 'qwen-max' }
+    await nextTick()
+    // 没有门禁时 currentModel 会抱着 'qwen-turbo' 不放：:value 指向一个不存在的 option，
+    // jsdom 把 select.value 落成空串，这一句就红（红得具体，不是"字段不存在"那种脏红）。
+    expect(app.find('.model-select').element.value).toBe('qwen-max')
   })
 })

@@ -37,6 +37,19 @@ const panelOpen = ref(false)
 // 两头都归 App 的模板管，开关放谁那儿都会逼出一次跨组件透传。
 const settingsOpen = ref(false)
 
+// 模型下拉的选中值。名单里没有它时 currentModel 会自动回落（见下），
+// 所以这里只表达"这个人显式选过谁"，不承载默认值判断。
+const modelOverride = ref('')
+
+// 解析口径必须与后端 Task 7 的 _llm_context 逐字一致：显式选过 → 后端给的默认 → 名单第一项。
+// 三档少一档，界面上显示的那个模型和实际发出去的就不是同一个——
+// 那种坏法的表征是"我明明选了 qwen-turbo，账单却是 qwen-max"，查起来最费时间。
+const currentModel = computed(() => {
+  const opts = user.value?.models ?? []
+  if (modelOverride.value && opts.includes(modelOverride.value)) return modelOverride.value
+  return user.value?.default_model ?? opts[0] ?? ''
+})
+
 // 改造前 onMounted 的三拍原样搬进这个函数：顺序是既有不变式，不许重排。
 // hydrate 要打一枪 /api/documents/chunks：放在 restore 之前，
 // 让"选中项已被剪掉"这件事先于历史渲染，错误横幅只剩最后一条真的。
@@ -96,6 +109,9 @@ function resetWorkspace() {
   pickerOpen.value = false
   // 同 pickerOpen 的理由：v-if 会把弹窗卸载，但 ref 活在 App 实例上，不清就是留给下一个人的半截表单。
   settingsOpen.value = false
+  // 同理：ref 活着而 user 已经换人，上一个账号显式选过的模型会在下一个人
+  // **恰好也有同名模型**时被静默继承——那种串号没有任何界面痕迹。
+  modelOverride.value = ''
 }
 
 async function handleSignOut() {
@@ -165,7 +181,8 @@ function handleChunkDeleted(chunk) {
 async function handleSend(text) {
   if (!text || pending.value) return
   question.value = ''
-  const ok = await send({ session_id: sessionId.value, question: text, parent_ids: selectedParentIds.value })
+  const ok = await send({ session_id: sessionId.value, question: text,
+                          parent_ids: selectedParentIds.value, model_name: currentModel.value })
   // 后端失败时不写历史，本地那两条也已经撤掉；把问题还给输入框，别让用户重打
   if (!ok) question.value = text
 }
@@ -245,7 +262,10 @@ function dismissError() {
             :messages="messages"
             :has-documents="documents.length > 0"
           />
-          <ChatInput v-model="question" :pending="pending" @send="handleSend" @stop="handleStop" />
+          <ChatInput v-model="question" :pending="pending"
+                     :models="user?.models ?? []" :selected-model="currentModel"
+                     @update:selected-model="modelOverride = $event"
+                     @send="handleSend" @stop="handleStop" />
           <ChunkPickerModal
             v-if="pickerOpen"
             :selected-ids="selectedParentIds"

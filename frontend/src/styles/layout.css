@@ -265,7 +265,8 @@
 
 .chat-input {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;      /* 两段式：输入区独占一行，控件行在下方右对齐 */
+  align-items: stretch;
   gap: 8px;
   padding: 12px 20px;
   background: var(--panel-bg);
@@ -382,4 +383,25 @@
   /* 窄屏上"名字 + 默认 + 设为默认 + 删除"一行四件，375px 必塌：让按钮组换行到第二行 */
   .settings-model-row { flex-wrap: wrap; }
   .settings-avatar { width: 28px; height: 28px; font-size: 14px; }
+}
+
+/* ---- 阶段二 Task 10：输入区控件行与模型下拉 ---- */
+.chat-controls {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: var(--control-gap);
+}
+.model-select {
+  max-width: 45%; padding: 7px 10px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--panel-bg); color: var(--text-main); font-size: 13px;
+}
+.model-select:focus { outline: 2px solid var(--focus-ring); border-color: var(--brand-1); }
+.model-select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+@media (max-width: 768px) {
+  /* 375px 上"下拉 + 发送"两个控件：不放开收缩就会撑破 .chat-input 的左右内边距
+     （塌行这件事在 .picker-results 与 .user-rail 上都栽过一次，这次提前挡） */
+  .chat-controls { flex-wrap: wrap; }
+  .model-select { flex: 1; min-width: 0; max-width: none; }
+  .chat-send, .chat-stop { flex-shrink: 0; }
 }
