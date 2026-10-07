@@ -27,7 +27,11 @@ UNUSABLE_PASSWORD_HASH = "unusable-no-password-set"
 
 # (表, 列, DDL 类型)。阶段一只加 documents.user_id；chat_history.user_id 归阶段二
 # （spec 2.2 勘误：历史的读写过滤和 RAGSystem 四方法要一起重接，分两轮改同一文件不值）。
-MIGRATED_COLUMNS = [("documents", "user_id", "INTEGER")]
+MIGRATED_COLUMNS = [
+    ("documents", "user_id", "INTEGER"),
+    ("users", "api_key", "VARCHAR(255)"),
+    ("users", "base_url", "VARCHAR(500)"),
+]
 
 # (表, 列, 索引名)。spec 2.2 要求 documents.user_id 带索引，而 create_all 对已存在的表
 # 整表跳过 ⇒ 已部署库会永远带着一个无索引的外键列，这条长期收拢靠这里。

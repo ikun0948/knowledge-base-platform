@@ -30,7 +30,7 @@ class FakeConn:
         params = params or {}
         if head.startswith("SELECT COLUMN_NAME"):
             table = params["table"]
-            rows = [(c,) for (t, c) in self.columns if t == table]
+            rows = [(c,) for (t, c) in self.columns if t == table and c == params["column"]]
             return _Result(rows)
         if head.startswith("SELECT INDEX_NAME"):
             table, index = params["table"], params["index"]
@@ -139,11 +139,14 @@ class FakeEngine:
 
 def test_ensure_columns_alters_only_when_missing():
     conn = FakeConn(existing_columns=[])
-    assert migrations.ensure_columns(conn) == [("documents", "user_id")]
-    assert len(conn.executed) == 1
+    assert migrations.ensure_columns(conn) == [("documents", "user_id"),
+                                               ("users", "api_key"),
+                                               ("users", "base_url")]
+    assert len(conn.executed) == 3
     assert "ADD COLUMN" in conn.executed[0] and "`user_id`" in conn.executed[0]
 
-    conn2 = FakeConn(existing_columns=[("documents", "user_id")])
+    conn2 = FakeConn(existing_columns=[("documents", "user_id"), ("users", "api_key"),
+                                       ("users", "base_url")])
     assert migrations.ensure_columns(conn2) == []
     assert conn2.executed == []
 
@@ -240,4 +243,9 @@ def test_stamp_never_rewrites_a_foreign_users_vector():
 
 def test_default_identifier_is_the_one_the_spec_names():
     assert migrations.DEFAULT_IDENTIFIER == "default@local"
-    assert migrations.MIGRATED_COLUMNS == [("documents", "user_id", "INTEGER")]
+    # 加列必须同步改这里：这条逐字 pin 的存在意义就是让"偷偷多一列"过一次评审
+    assert migrations.MIGRATED_COLUMNS == [
+        ("documents", "user_id", "INTEGER"),
+        ("users", "api_key", "VARCHAR(255)"),
+        ("users", "base_url", "VARCHAR(500)"),
+    ]

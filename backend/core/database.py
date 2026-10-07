@@ -1,6 +1,7 @@
 import logging
-from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text
+from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -121,6 +122,11 @@ class User(Base):
     # 预设头像标识（'auto' = 昵称首字母），不是图片 URL：本仓没有文件存储层（spec 决策 5）
     avatar = Column(String(20), nullable=False, default='auto')
     password_hash = Column(String(255), nullable=False)
+    # 每用户的大模型出口（spec 2.1）。明文入库是 spec 第 4 节记过的权衡：对称加密的主密钥
+    # 只能躺在同一台机器的 .env 里，读盘的人两样都拿得到，等于只防"单独拖走数据库"。
+    # 可空 = "还没配置"，它是 409 门禁的判据，不是缺省值。
+    api_key = Column(String(255))
+    base_url = Column(String(500))
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -136,6 +142,24 @@ class AuthToken(Base):
 
     __table_args__ = (
         Index('idx_tokens_user_id', 'user_id'),
+    )
+
+
+# 用户自己维护的模型名单（决策 6：不去调远端 GET /models）。
+# 单独一张表而不是逗号串：要做"增 / 删 / 设默认"三种行级操作，整串重写会在并发下互相覆盖。
+class UserModel(Base):
+    __tablename__ = 'user_models'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    # 长度上界 100 与 ChatRequest.model_name、ParentChunk.parent_id 同源：
+    # 三个地方三种上界，早晚有一个会把用户的输入切掉半截。
+    name = Column(String(100), nullable=False)
+    is_default = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'name', name='uq_user_models_user_name'),
+        Index('idx_user_models_user_id', 'user_id'),
     )
 
 
@@ -579,6 +603,117 @@ class DatabaseManager:
                 AuthToken.token_hash == token_hash).delete()
             session.commit()
             return deleted
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    # ---------- 账号设置与模型名单（spec 2.1/3.1 的阶段二部分）----------
+
+    def update_user_profile(self, user_id, nickname=None, avatar=None) -> int:
+        """只改传了的那一格，返回受影响行数。
+
+        整行 UPDATE 而不是"读出来再写回去"：nickname 与 avatar 各自独立，
+        读改写会让两个并发请求互相覆盖掉对方那一格。
+        """
+        fields = {}
+        if nickname is not None:
+            fields["nickname"] = nickname
+        if avatar is not None:
+            fields["avatar"] = avatar
+        if not fields:
+            return 0
+        return self._update_user(User, user_id, fields)
+
+    def update_user_password(self, user_id, password_hash) -> int:
+        return self._update_user(User, user_id, {"password_hash": password_hash})
+
+    def update_user_llm(self, user_id, api_key, base_url) -> int:
+        """key 与路由一起写：分开两个端点会造出"有 key 没路由"这个必 401 上游的半套配置（spec 3.4）。"""
+        return self._update_user(User, user_id, {"api_key": api_key, "base_url": base_url})
+
+    def _update_user(self, model, user_id, fields: dict) -> int:
+        session = self.get_session()
+        try:
+            updated = session.query(model).filter(model.id == user_id).update(fields)
+            session.commit()
+            return updated
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def list_user_models(self, user_id) -> list:
+        """返回 [(name, is_default)]，按 id 升序 = 用户添加的顺序。
+
+        "第一个"的口径必须钉住：spec 3.4 的"没有 default 就取名单第一个"是问答链的兜底，
+        按 name 排会让它随字母序漂移，用户在界面上选中的和实际打出去的对不上。
+        会话关闭前就展平成元组：别让调用方去摸已 detach 的 ORM 行（create_user 的 docstring 记过这个坑）。
+        """
+        session = self.get_session()
+        try:
+            rows = (session.query(UserModel).filter(UserModel.user_id == user_id)
+                    .order_by(UserModel.id).all())
+            return [(r.name, bool(r.is_default)) for r in rows]
+        finally:
+            session.close()
+
+    def add_user_model(self, user_id, name) -> bool:
+        """True = 新增；False = 名单里已经有了（端点据此回 409）。"""
+        session = self.get_session()
+        try:
+            hit = session.query(UserModel.id).filter(UserModel.user_id == user_id,
+                                                     UserModel.name == name).first()
+            if hit:
+                return False
+            session.add(UserModel(user_id=user_id, name=name))
+            session.commit()
+            return True
+        except IntegrityError:
+            # 上面那次预查挡不住并发：两个请求同时"查不到"就同时插，unique 键才是唯一真相
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
+    def delete_user_model(self, user_id, name) -> int:
+        """返回删掉的行数（0 = 名单里本来没这个名字）。
+
+        **不**自动把下一个提成默认：spec 3.4 的解析规则自带"没有 default 就取名单第一个"，
+        回落点在读取侧。写入侧再动一次默认会让"删掉默认"变成"悄悄换了个人"。
+        """
+        session = self.get_session()
+        try:
+            deleted = session.query(UserModel).filter(UserModel.user_id == user_id,
+                                                      UserModel.name == name).delete()
+            session.commit()
+            return deleted
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def set_default_user_model(self, user_id, name) -> bool:
+        """一事务内"清掉别人的 is_default + 立这一个"。
+
+        分两次调用（先全清再立）会在两次之间留下"零个默认"或"两个默认"的中间态，
+        而问答链正好读这个值决定用哪个模型。
+        """
+        session = self.get_session()
+        try:
+            target = session.query(UserModel).filter(UserModel.user_id == user_id,
+                                                     UserModel.name == name).first()
+            if target is None:
+                return False
+            (session.query(UserModel)
+             .filter(UserModel.user_id == user_id, UserModel.name != name)
+             .update({"is_default": False}))
+            target.is_default = True
+            session.commit()
+            return True
         except Exception:
             session.rollback()
             raise

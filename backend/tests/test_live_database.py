@@ -378,17 +378,18 @@ def test_parent_whitelist_drops_foreign_owners(db, probe_user):
 
 
 def _drop_probe_account(db, user_id):
-    """删掉探针账号：先 auth_tokens 再 users（前者对后者有外键）。
+    """删掉探针账号：先 auth_tokens 与 user_models 再 users（前两者对后者有外键）。
 
     生产代码里没有 delete_user——Task 2 用不上，为一条测试加一个只给测试用的删除口是 YAGNI，
-    所以清理留在测试侧：这两张表没有基线计数钉着，但探针名带 uuid，不清就每轮长一对
+    所以清理留在测试侧：这三张表没有基线计数钉着，但探针名带 uuid，不清就每轮长一对
     永远没人再查的孤儿行，共享库里攒的是垃圾而不是证据。
     """
-    from core.database import AuthToken, User
+    from core.database import AuthToken, User, UserModel
 
     session = db.get_session()
     try:
         session.query(AuthToken).filter(AuthToken.user_id == user_id).delete()
+        session.query(UserModel).filter(UserModel.user_id == user_id).delete()
         session.query(User).filter(User.id == user_id).delete()
         session.commit()
     finally:
@@ -501,3 +502,33 @@ def test_default_user_exists_and_owns_the_baseline_documents(db):
             "SELECT COUNT(*) FROM documents WHERE user_id IS NULL")).fetchone()[0]
     assert unowned == 0, f"还有 {unowned} 篇文档无主，归户那步没做完"
     assert owned == 13, f"基线 13 行应全归 default，实得 {owned}"
+
+
+def test_user_settings_round_trip(db, probe_user):
+    """两列 + 名单四种行级操作在真库上的语义。fake 给不出 unique 键与 is_default 互斥的证据。"""
+    assert db.update_user_profile(probe_user.id, nickname="改名了") == 1
+    assert db.update_user_llm(probe_user.id, "sk-probe-abcdefg1234", "https://probe.example/v1") == 1
+    fresh = db.get_user_by_id(probe_user.id)
+    assert fresh.nickname == "改名了" and fresh.api_key == "sk-probe-abcdefg1234"
+
+    assert db.add_user_model(probe_user.id, "probe-max") is True
+    assert db.add_user_model(probe_user.id, "probe-max") is False      # unique 键那一条
+    assert db.add_user_model(probe_user.id, "probe-mini") is True
+    assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", False)]
+
+    assert db.set_default_user_model(probe_user.id, "probe-mini") is True
+    assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", True)]
+    assert db.set_default_user_model(probe_user.id, "早没了") is False
+
+    assert db.delete_user_model(probe_user.id, "probe-mini") == 1      # 删的是当前默认
+    # 删默认不自动提升（写入侧不动别人的 is_default），读侧靠"没有 default 就取第一个"兜
+    assert db.list_user_models(probe_user.id) == [("probe-max", False)]
+    assert db.delete_user_model(probe_user.id, "probe-mini") == 0      # 幂等：第二次是 0 不是异常
+
+
+def test_empty_profile_update_touches_nothing(db, probe_user):
+    """两个字段都没传就该零副作用，而不是把昵称写成 NULL。"""
+    before = db.get_user_by_id(probe_user.id).nickname
+    assert before, "对照失去输入：探针账号昵称已是空值，这条绿不说明任何事"
+    assert db.update_user_profile(probe_user.id) == 0
+    assert db.get_user_by_id(probe_user.id).nickname == before
