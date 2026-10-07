@@ -526,14 +526,21 @@ def test_user_settings_round_trip(db, probe_user):
     assert db.add_user_model(probe_user.id, "probe-max") is True
     assert db.add_user_model(probe_user.id, "probe-max") is False      # unique 键那一条
     assert db.add_user_model(probe_user.id, "probe-mini") is True
-    assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", False)]
+    # 阶段二 Task 2 的新行为：**首个入名单的模型自动置默认**。probe-max 一进就是 True，
+    # probe-mini 因为是第二个所以是 False —— 这一句就是那条逻辑的直接判据：
+    # 删掉 add_user_model 里算 is_first 那两行，红的就是这里。
+    # is_first 判空用的是**另一次不带 name 过滤**的查询；退化成复用上面那次带 name 的 hit
+    # 会让 probe-mini 也被标成默认，同样只在这里红（离线侧看不出，fake 自己算的 not rows）。
+    assert db.list_user_models(probe_user.id) == [("probe-max", True), ("probe-mini", False)]
 
-    # 先立 probe-max：这一步的唯一作用是把"名单里已经有一个人是默认"这个**前置态**造出来。
-    # 没有它，下面那次 set_default 里的清场句（把别人的 is_default 洗成 False）没有任何可
-    # 观察效果——整段删掉判据照样绿（实测：删掉后 live 20 passed）。
+    # 前置态（"名单里已经有一个人是默认"）现在由上面那次 add 自己造出来了，所以这一次
+    # set_default(probe-max) 退成**同值重设**：它证的是"目标在名单里时回 True、且不把别人
+    # 的标记写坏"（这里被洗的是 probe-mini 的 False，写回 False 观察不到差别），
+    # 不再负责造前置态。真正带清场证据的是下面第二次设默认。
     assert db.set_default_user_model(probe_user.id, "probe-max") is True
     assert db.list_user_models(probe_user.id) == [("probe-max", True), ("probe-mini", False)]
-    # 第二次设默认才是清场句的证据：probe-max 必须由 True 翻成 False。
+    # 第二次设默认才是清场句的证据：probe-max 必须由 True 翻回 False。
+    # 前置态由 add 立起来之后，把 set_default_user_model 里的清场句整段删掉就会红在这里。
     assert db.set_default_user_model(probe_user.id, "probe-mini") is True
     assert db.list_user_models(probe_user.id) == [("probe-max", False), ("probe-mini", True)]
     assert db.set_default_user_model(probe_user.id, "早没了") is False

@@ -6,7 +6,7 @@
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EMAIL_RE = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
 PHONE_RE = r"^1[3-9]\d{9}$"
@@ -55,10 +55,25 @@ class LoginIn(BaseModel):
         return value.lower() if "@" in value else value
 
 
+def mask_api_key(raw: str | None) -> str:
+    """`sk-` 前缀 + 尾 4 位，其余 `****`（spec 3.1）。原文离开这个函数就只有数据库里那一份。
+
+    短值不露尾巴：key 只有 7 位时"尾 4 位"会把大半串还回去，掩码就成了提示。
+    """
+    if not raw:
+        return ""
+    head = "sk-" if raw.startswith("sk-") else ""
+    body = raw[len(head):] if head else raw
+    if len(body) <= 8:
+        return f"{head}****"
+    return f"{head}****{body[-4:]}"
+
+
 class UserOut(BaseModel):
     """from_attributes 让它能直接吃 ORM 的 User 行。
 
     没有 password_hash 这个字段——少写一个字段比写一个"过滤掉敏感列"的逻辑可靠得多。
+    api_key 同理不出现：这里只有 `api_key_masked`，掩码在 `_user_out` 里做。
     """
     model_config = ConfigDict(from_attributes=True)
 
@@ -67,6 +82,58 @@ class UserOut(BaseModel):
     identifier_type: str
     nickname: str
     avatar: str
+    # —— 阶段二新增：后五项没有一项能靠 from_attributes 从 User 行读出来，
+    #    它们来自 users.api_key/base_url 与 user_models 表，由 api/auth.py 的 _user_out 组装。
+    llm_configured: bool = False
+    llm_base_url: str = ""
+    api_key_masked: str = ""
+    models: list[str] = Field(default_factory=list)
+    default_model: str | None = None
+
+
+class ProfileIn(BaseModel):
+    nickname: str | None = Field(default=None, min_length=1, max_length=50)
+    avatar: str | None = Field(default=None, min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def _at_least_one(self):
+        # 空 body 回 422 而不是 200："我提交了设置，它说成功了，我刷新一看没变"最难查
+        if self.nickname is None and self.avatar is None:
+            raise ValueError("昵称与头像至少要改一样")
+        return self
+
+
+class PasswordIn(BaseModel):
+    old_password: str = Field(min_length=1, max_length=64)
+    new_password: str = Field(min_length=PASSWORD_MIN, max_length=64)
+
+
+class LlmIn(BaseModel):
+    # 上界对齐两列：String(255) / String(500)
+    api_key: str = Field(min_length=8, max_length=255)
+    base_url: str = Field(min_length=8, max_length=500)
+
+    @field_validator("base_url")
+    @classmethod
+    def _looks_like_a_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not re.match(r"^https?://", value):
+            raise ValueError("路由必须以 http:// 或 https:// 开头")
+        return value
+
+
+class ModelIn(BaseModel):
+    # 1..100 与 user_models.name 的 String(100)、ChatRequest.model_name 三处同源
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ModelsOut(BaseModel):
+    models: list[str]
+    default_model: str | None = None
+
+
+# 设置端点（本 Task）与问答端点的模型解析（Task 7）要说同一句话，抄两遍迟早分叉
+MODEL_NOT_IN_LIST = "模型不在你的名单里"
 
 
 class AuthOut(BaseModel):

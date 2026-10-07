@@ -634,17 +634,21 @@ class DatabaseManager:
         return self._update_user(User, user_id, {"api_key": api_key, "base_url": base_url})
 
     def _update_user(self, model, user_id, fields: dict) -> int:
-        """按主键更新这几格，返回 rowcount。三枚公共方法的返回值口径都出自这里。
+        """按主键更新这几格，返回 rowcount。
 
-        **`0` 的含义是"这一行没被改动"**，而它有两种来路：**用户不存在**，或者
-        **这次没带来任何变化**（同值重写昵称、原样重存 api_key）。
+        口径的覆盖面要说准：`update_user_password` 与 `update_user_llm` 的返回值确实出自这里，
+        但 `update_user_profile` 只在**至少传了一格**时才走到这里——它自己那句
+        `if not fields: return 0` 是另一码事（一个字段都没传，连 UPDATE 都不发）。
+
+        在当前驱动下 **这里的 `0` 只有一种来路：这一行不存在**。
         裸 MySQL 在不带 `CLIENT_FOUND_ROWS` 时 UPDATE 的 affected_rows 只数**真被改变**的行，
         那种驱动下同值重写会回 `0`；但本项目走 SQLAlchemy 的 MySQL 方言，它在连接时
         **硬编码**把 `CLIENT_FOUND_ROWS` 或进 client_flag
         （site-packages/sqlalchemy/dialects/mysql/base.py:709-715、mysqldb.py:244-251），
         rowcount 被标准化成"匹配到的行数"。本机 2026-10-07 实测：不存在的 id 回 `0`，
-        同值重写回 `1`（真值表与判据见 tests/test_live_database.py 的
-        `test_empty_profile_update_touches_nothing`）。
+        同值重写回 `1`——所以这里数的从来不是"真被改的行"（真值表与判据见
+        tests/test_live_database.py 的 `test_empty_profile_update_touches_nothing`）。
+        哪天换了驱动或客户端标志，`0` 才会多出"值原样未变"这一种来路。
 
         不管哪种驱动，**端点都不要拿这个返回值判 404**：它既不等于"成功"也不等于"存在"。
         用户存在性由 auth 依赖保证（令牌换出的行已在库里），计划 Task 2 的端点正文确实不读
@@ -678,14 +682,25 @@ class DatabaseManager:
             session.close()
 
     def add_user_model(self, user_id, name) -> bool:
-        """True = 新增；False = 名单里已经有了（端点据此回 409）。"""
+        """True = 新增；False = 名单里已经有了（端点据此回 409）。
+
+        **名单原本为空时这一枚自动成为默认**（计划级补全，spec 未写）：只配了一个模型的
+        用户从来不会去点"设为默认"，没有这一步他的名单就是"有一个人、一个默认都没有"，
+        而设置端点回给前端的 `default_model` 也一直是 None。有了它，spec 3.4 的
+        "没有 default 就取名单第一个"退成纯兜底。
+        """
         session = self.get_session()
         try:
             hit = session.query(UserModel.id).filter(UserModel.user_id == user_id,
                                                      UserModel.name == name).first()
             if hit:
                 return False
-            session.add(UserModel(user_id=user_id, name=name))
+            # 判空必须是**另一次不带 name 过滤**的查询：复用上面那次 hit 等于拿
+            # "名单里没有这个名字"当"名单是空的"，第二枚也会被标成默认，之后两个默认并存
+            # （实测：改成复用 hit 之后只有 live 的 test_user_settings_round_trip 红，离线全绿）。
+            is_first = session.query(UserModel.id).filter(
+                UserModel.user_id == user_id).first() is None
+            session.add(UserModel(user_id=user_id, name=name, is_default=is_first))
             session.commit()
             return True
         except IntegrityError:

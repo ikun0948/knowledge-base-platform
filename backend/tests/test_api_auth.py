@@ -24,6 +24,7 @@ class FakeAuthDB:
     def __init__(self):
         self.users = []          # SimpleNamespace 列表，字段与 ORM 行同名
         self.tokens = {}         # token_hash -> (user_id, expires_at)
+        self.models = {}         # user_id -> [(name, is_default)]，与 list_user_models 同形状
         self._next_id = 1
 
     def create_user(self, identifier, identifier_type, nickname, password_hash, avatar="auto"):
@@ -31,7 +32,9 @@ class FakeAuthDB:
             raise IntegrityError("INSERT INTO users", {}, Exception("duplicate entry"))
         user = SimpleNamespace(id=self._next_id, identifier=identifier,
                                identifier_type=identifier_type, nickname=nickname,
-                               avatar=avatar, password_hash=password_hash)
+                               avatar=avatar, password_hash=password_hash,
+                               # 与 ORM 行同名同初值：新注册的人还没配 key
+                               api_key=None, base_url=None)
         self._next_id += 1
         self.users.append(user)
         return user
@@ -50,6 +53,51 @@ class FakeAuthDB:
 
     def delete_token(self, token_hash):
         return 1 if self.tokens.pop(token_hash, None) else 0
+
+    # ---------- 阶段二：设置类方法（与 DatabaseManager 同名同返回形状）----------
+
+    def update_user_profile(self, user_id, nickname=None, avatar=None):
+        user = self.get_user_by_id(user_id)
+        if nickname is not None:
+            user.nickname = nickname
+        if avatar is not None:
+            user.avatar = avatar
+        return 1
+
+    def update_user_password(self, user_id, password_hash):
+        self.get_user_by_id(user_id).password_hash = password_hash
+        return 1
+
+    def update_user_llm(self, user_id, api_key, base_url):
+        user = self.get_user_by_id(user_id)
+        user.api_key, user.base_url = api_key, base_url
+        return 1
+
+    def get_user_by_id(self, user_id):
+        return next((u for u in self.users if u.id == user_id), None)
+
+    def list_user_models(self, user_id):
+        return list(self.models.get(user_id, []))
+
+    def add_user_model(self, user_id, name):
+        rows = self.models.setdefault(user_id, [])
+        if (name, False) in rows or (name, True) in rows:
+            return False
+        rows.append((name, not rows))     # 第一个自动成为默认
+        return True
+
+    def delete_user_model(self, user_id, name):
+        rows = self.models.setdefault(user_id, [])
+        before = len(rows)
+        self.models[user_id] = [r for r in rows if r[0] != name]
+        return before - len(self.models[user_id])
+
+    def set_default_user_model(self, user_id, name):
+        rows = self.models.setdefault(user_id, [])
+        if not any(n == name for n, _ in rows):
+            return False
+        self.models[user_id] = [(n, n == name) for n, _ in rows]
+        return True
 
 
 def make_client(db=None):
@@ -74,7 +122,9 @@ def test_register_returns_token_user_and_a_uuid_session():
     import re
     assert re.match(UUID_RE, body["session_id"])
     assert body["user"] == {"id": 1, "identifier": "a@b.com", "identifier_type": "email",
-                            "nickname": "a", "avatar": "auto"}
+                            "nickname": "a", "avatar": "auto", "llm_configured": False,
+                            "llm_base_url": "", "api_key_masked": "", "models": [],
+                            "default_model": None}
     assert len(db.tokens) == 1
 
 
@@ -278,3 +328,122 @@ def test_logout_revokes_only_the_token_in_hand():
 def test_logout_without_a_token_is_401_not_silently_ok():
     client, _ = make_client()
     assert client.post("/api/auth/logout").status_code == 401
+
+
+# ---------- 阶段二 Task 2：六个设置类端点 + UserOut 的十键 ----------
+
+
+def _login_llm_client(identifier="a@b.com"):
+    """注册并登录，返回 (client, db, token)。设置类端点都要带 Bearer 头。"""
+    client, db = make_client()
+    register(client, identifier=identifier)
+    token = client.post("/api/auth/login", json={
+        "identifier": identifier, "password": "hunter2-pass"}).json()["token"]
+    return client, db, {"Authorization": f"Bearer {token}"}
+
+
+def test_me_returns_the_five_new_keys_without_the_raw_key():
+    client, db, headers = _login_llm_client()
+    client.put("/api/auth/me/llm", json={"api_key": "sk-abcdef1234567890",
+                                         "base_url": "https://vLLM.internal/v1"}, headers=headers)
+    user = client.get("/api/auth/me", headers=headers).json()["user"]
+    assert user["llm_configured"] is True
+    assert user["llm_base_url"] == "https://vLLM.internal/v1"
+    # 掩码口径（spec 3.1）：sk- 前缀 + 尾 4 位，中间一律 ****
+    assert user["api_key_masked"] == "sk-****7890"
+    assert "abcdef" not in client.get("/api/auth/me", headers=headers).text
+    assert user["models"] == [] and user["default_model"] is None
+
+
+def test_llm_config_requires_both_key_and_base_url():
+    client, _, headers = _login_llm_client()
+    assert client.put("/api/auth/me/llm", json={"api_key": "sk-x", "base_url": ""},
+                      headers=headers).status_code == 422
+    # 只填一半不算配置：llm_configured 必须 False，否则 409 门禁形同虚设
+    assert client.get("/api/auth/me", headers=headers).json()["user"]["llm_configured"] is False
+
+
+def test_profile_update_changes_nickname_and_avatar():
+    client, _, headers = _login_llm_client()
+    res = client.put("/api/auth/me", json={"nickname": "小明", "avatar": "🤖"}, headers=headers)
+    assert res.status_code == 200
+    assert res.json()["user"]["nickname"] == "小明"
+    assert res.json()["user"]["avatar"] == "🤖"
+    # 预设白名单外的一律 422（Step 4 的 AVATARS 分支）：这列不是图片 URL，存进去前端渲染不出
+    assert client.put("/api/auth/me", json={"avatar": "<script>"}, headers=headers).status_code == 422
+    # 只传头像时昵称不许被清掉：update_user_profile 是"只改传了的格子"
+    assert client.put("/api/auth/me", json={"avatar": "🦊"}, headers=headers
+                      ).json()["user"]["nickname"] == "小明"
+    # 空 body（两格都没传）不算更新：422 比 200 但什么都没变更诚实
+    assert client.put("/api/auth/me", json={}, headers=headers).status_code == 422
+    # 昵称上界 50 对齐 users.nickname 的 String(50)，超了必须 422 而不是被 MySQL 切掉
+    assert client.put("/api/auth/me", json={"nickname": "字" * 51}, headers=headers).status_code == 422
+
+
+def test_password_change_requires_the_old_one():
+    client, db, headers = _login_llm_client()
+    assert client.put("/api/auth/me/password", json={"old_password": "wrong-pass",
+                                                     "new_password": "brand-new-pass"},
+                      headers=headers).status_code == 401
+    assert client.put("/api/auth/me/password", json={"old_password": "hunter2-pass",
+                                                     "new_password": "brand-new-pass"},
+                      headers=headers).status_code == 204
+    assert client.post("/api/auth/login", json={"identifier": "a@b.com",
+                                                 "password": "brand-new-pass"}).status_code == 200
+    # 库里换的是哈希，且新哈希与旧的不是同一个串（盐必须重造）
+    assert db.users[0].password_hash != "brand-new-pass"
+
+
+def test_model_list_add_default_and_delete():
+    client, _, headers = _login_llm_client()
+    add = lambda name: client.post("/api/auth/me/models", json={"name": name}, headers=headers)
+    assert add("qwen-max").json() == {"models": ["qwen-max"], "default_model": "qwen-max"}
+    assert add("qwen-max").status_code == 409              # 重复添加
+    assert add("qwen-turbo").json()["models"] == ["qwen-max", "qwen-turbo"]   # 添加顺序就是名单顺序
+    # 第一个进来的人自动是默认：没有这一步的话用户配完 key 仍会撞"名单为空"以外的第三条 409
+    assert client.put("/api/auth/me/models/default", json={"name": "qwen-turbo"},
+                      headers=headers).json() == {"models": ["qwen-max", "qwen-turbo"],
+                                                  "default_model": "qwen-turbo"}
+    assert client.put("/api/auth/me/models/default", json={"name": "早删了"},
+                      headers=headers).status_code == 409
+    res = client.delete("/api/auth/me/models/qwen-turbo", headers=headers)
+    assert res.json() == {"models": ["qwen-max"], "default_model": "qwen-max"}
+
+
+def test_model_name_length_matches_the_column_and_chat_request():
+    client, _, headers = _login_llm_client()
+    assert client.post("/api/auth/me/models", json={"name": "x" * 101},
+                       headers=headers).status_code == 422
+    assert client.post("/api/auth/me/models", json={"name": ""}, headers=headers).status_code == 422
+
+
+def test_settings_endpoints_are_all_behind_the_login_gate():
+    client, _ = make_client()
+    for method, path in [("PUT", "/api/auth/me"), ("PUT", "/api/auth/me/password"),
+                         ("PUT", "/api/auth/me/llm"), ("POST", "/api/auth/me/models"),
+                         ("DELETE", "/api/auth/me/models/x"), ("PUT", "/api/auth/me/models/default")]:
+        res = client.request(method, path, json={})
+        assert res.status_code == 401, f"{method} {path} 没上门：{res.status_code}"
+
+
+def test_masking_never_echoes_a_short_key_back_as_its_own_tail():
+    """短 key 的"尾 4 位"就是它自己：那时宁可只回前缀 + 一串星。"""
+    from schemas.auth import mask_api_key
+    assert mask_api_key("sk-abc") == "sk-****"
+    assert mask_api_key("") == "" and mask_api_key(None) == ""
+    assert mask_api_key("noplus-1234567890") == "****7890"     # 没有 sk- 前缀也照样只留尾 4
+
+
+def test_half_a_config_is_not_configured_even_when_the_key_is_there():
+    """`llm_configured` 判的是"key 与路由同时有值"那个合取，只判 api_key 时这条红。
+
+    半套配置从哪来：库里被人直写过一格、或将来拆出单独的 key 端点。这时响应仍要给掩码
+    （用户得知道自己在用哪把 key），但 llm_configured 必须是 False——Task 7 的 409 门禁
+    读的就是这一格，它在半套配置上说是 True，用户问一句就只拿到上游那句 401。
+    """
+    client, db, headers = _login_llm_client()
+    db.users[0].api_key = "sk-half-only-1234567890"          # 只有 key，base_url 仍是 None
+    user = client.get("/api/auth/me", headers=headers).json()["user"]
+    assert user["api_key_masked"] == "sk-****7890"
+    assert user["llm_base_url"] == ""
+    assert user["llm_configured"] is False
