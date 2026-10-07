@@ -3728,6 +3728,17 @@ cd frontend && npm run build
 >
 > **登记给终审、本轮不改的一条**：复评判 `handleSignOut` 里的 `clearSelection()` 多余（因为它在空选中时早返回、不 persist，且 `hydrate()` 已清过 localStorage）——这只覆盖 **hydrate 成功**那条路径。`hydrate()` 在 `listChunks` 抛错时走 `useChunkSelection.js:53-56`——**既不 `persist()`（它只在成功路径的 `:52`）也不删 localStorage 那把键**，函数隐式回 `undefined`，此时 `clearSelection()` 正是唯一会把跨账号残留的 `selected_parent_ids` 从 localStorage 删掉的一句。**所以今天它承重，别删**；真正该补的判据是"hydrate 失败路径不许把上一个账号的选中项留在 localStorage"（复评把它判为"今天不可达的潜伏缺陷"，我同意这个定级）。
 
+> **2026-10-07 修订（Task 8 Step 1 实跑：三行 pytest 预期按实测重钉，`0 skipped` 从 Step 1 挪到 Step 2 之后，并划掉 3719 那个做不到的选项）**。本轮 `560d53d` 上控制器与实施代理各跑一遍，汇总行原文：
+> - `python -m pytest -q` → **257 passed, 2 skipped, 2 deselected**（exit 0，55.35s）。原文 `:3707` 的"约 239 / 0 skipped / 1 deselected"两处都过期：T6/T7 各自还加了用例，deselected 是 2 不是 1。
+> - `python -m pytest -m live -q`（**服务未起**）→ **18 passed, 2 skipped, 241 deselected**（exit 0，37.63s）。原文 `:3708` 的"约 20 passed"是服务起着才算得通的数（见下条）。
+> - `python -m pytest -m migration -q` → **2 passed, 259 deselected**（exit 0，32.16s），与 `:3709` 一致。
+> - `npm test` → **117 passed / 13 文件**；`npm run build` → exit 0（vite 8.3.2，`dist` js 92.22 kB gzip 35.32、css 10.92 kB gzip 2.85）。
+> - 三条 pytest 自洽（`257 + 2 + 2 = 261 = 18 + 2 + 241`），deselected 那一格钉 **241**，不是"240~241"。
+>
+> **`:3713` 那句"`0 skipped` 是硬要求"挂在 Step 1 这个位置上永远达不到**，它与同文件 Step 2「重启我自起的 uvicorn」构成顺序矛盾。实跑因果：服务未起时那 2 条 skip 打在 `test_live_stream.py:53` 与 `:87` 的**端口探针**上（`-rs` 原文 `uvicorn :8000 不可用…timed out`），与 `DEFAULT_USER_PASSWORD` 是否为空无关（本机 `grep -c "^DEFAULT_USER_PASSWORD=" backend/.env` = 1，键在、值不外泄）。**改判**：Step 1 只钉 `failed = 0` + 「skip 必须正好是那两条」；`0 skipped` 归 Step 2 之后的门。服务起着补跑一次 `python -m pytest -m live -q -rs` → **20 passed, 241 deselected, 0 skipped**（171.93s，两条流式测真打了 :8000 的 SSE）。**先查 LLM 再查代码**那句提醒继续有效（`:73`/`:106` 在大模型不可用时也 skip）。
+>
+> **划掉 `:3719` ① 的第一个选项**（"先在测里造一个队列项再断它归零"）：它在 DOM 层做不到，留着的后果是**第二条永久绿**。渲染链直查：`.queue-item` 全仓只有 `FileUploader.vue:46` 一处、外面套 `:42 <ul v-if="props.queue.length">`；`FileUploader` 由 `DocumentPanel.vue:21` 使用；`DocumentPanel` 在 `App.vue:164` 渲染，位于 `:156 <div v-else class="app-shell">` 之内。登出时 `clearAuth()` 置 `user = null` → 整棵 `.app-shell` 卸载 ⇒ 即便造出队列项，登出后 `findAll('.queue-item')` 也是 0，与那三句 `= []` 有没有执行无关。**只保留第二个选项**（删掉那句、注释写明"DOM 层观测不到"，判据走 `wrapper.vm`），`560d53d` 已照此落地并做了"三句全摘"的变异自证。
+
 - [ ] **Step 2: 重启我自起的 uvicorn，让新后端代码与 lifespan 迁移上线**
 
 先核对归属再杀——`Get-CimInstance` 看 `CommandLine`，确认那个 PID 是本项目 `main:app` 的实例才动手；不是自己起的就停下来问用户，**绝不批量杀 python/node**：
@@ -3753,6 +3764,10 @@ cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000
 > **2026-10-06 修订（上面这条按仓库实际改判）**：字典键名是 **`documents_claimed`**（`core/migrations.py` 的 `run_migrations` 返回），`documents_assigned` 这个名称在本计划里从未落地过，别按它找。另外本机的那一列与 `idx_documents_user_id` 都在 Task 1 执行期就落到真实 MySQL 了（见 Task 1 Step 9 处的修订），所以**首轮**日志就应当是 `columns_added: []`、`indexes_added: []`——这条测的"首轮非空"预期在本机不可达，幂等的活体证据改由 `documents_claimed: 9 → 0`（第一次重启归户、第二次重启零行）提供。字典共 5 个键：`columns_added` / `indexes_added` / `default_user_id` / `documents_claimed` / `vectors_stamped`。
 
 > **2026-10-07 修订（迁移首轮已被 Task 3 消费掉：Task 8 这一格只会是 0/0，别去复现首轮）**：真实首轮发生在 **Task 3 Step 8 的手工确认**，本机日志为 `{'columns_added': [], 'indexes_added': [], 'default_user_id': 30, 'documents_claimed': 13, 'vectors_stamped': 14}`，重启一次后 `documents_claimed: 0, vectors_stamped: 0`（这条原文已直查复核：`users` 1 行 id=30、`documents` 13 行全部 `user_id=30`、`user_id IS NULL` 0 行）。所以 **Task 8 的每一次重启都只能拿到 `documents_claimed: 0` / `vectors_stamped: 0`**，那不是"迁移没跑"，而是幂等已经生效；首轮那两格的证据**引台账里 Task 3 那条**，不许为了让日志重新出现 13 而去手工 `UPDATE documents SET user_id = NULL`——那等于删改既有数据（Global Constraints 第一条）。同一个状态也是默认门里 `test_live_database.py` 那两条归户断言（含 `owned == 13`）的前置条件：**没跑过一轮启动迁移的机器上，`python -m pytest -q` 会为前置条件而红**，与新代码无关，这条要在台账里写明。
+> **2026-10-07 修订（Task 8 实测：这条日志在 uvicorn 的 stdout 里根本不会出现，判据要换成 SQL + health 三格）**。上面两轮修订都在教"怎么读那行日志"，但**那行日志今天读不到**：`core/migrations.py:193` 用的是 `logger = logging.getLogger("kb.migrations")` 的 `logger.info`，而全仓没有任何 logging 配置（`grep -rn "basicConfig\|dictConfig\|setLevel\|addHandler" main.py config/config.py core/migrations.py` → **0 命中**）；uvicorn 的默认配置只挂 `uvicorn` / `uvicorn.error` / `uvicorn.access` 三个 logger，root 无 handler 时 `logging.lastResort` 只处理 **WARNING 及以上**，`INFO` 整条被丢。**实测**：本轮 `python -m uvicorn main:app …` 的启动日志只有 `Loading weights` / `Application startup complete` / `Uvicorn running` 三行，`grep -c "迁移完成"` = **0**，而同一次启动里 `/api/health` 与 SQL 都证明迁移确实跑过。台账里 Task 3 那次能看到字典原文，是**直接在 Python 里调 `run_migrations()` 打印返回值**，不是从 uvicorn stdout 抄的——别把这两件事混为一谈。
+> - **改判：这一格由三条"不必第二个进程打开 `chroma_db`"的证据代替**（单实例锁不许为了看日志再起一份 Chroma）：① `SELECT COUNT(*) FROM documents WHERE user_id IS NULL` = **0**（没得可归户 ⇒ `documents_claimed` 必为 0）；② `documents` 物理 13 行全部 `user_id = 30`；③ `/api/health` 与重启前**逐字相同**（`document_count: 4`、`vector_counts: {parent: 4, child: 10}`）。本轮三格实测值见台账 Task 8。
+> - **`vectors_stamped: 0` 没有独立的活体观测口**：它只在 `run_migrations` 的返回值里，而进程内调用它就得持有 Chroma——与服务那份撞锁。所以它由"health 的 `vector_counts` 逐字不变"（补戳只会新增 metadata、不会改计数）+ `-m migration` 那条幂等断言（假库上第二次跑 `vectors_stamped == 0`，**2 passed**）共同代证。**别为了凑一行日志去 `UPDATE` 向量或改 `main.py` 加 logging**——前者动既有数据，后者是为本 Task 之外的可观测性改生产代码，都越界。
+
 2. 没有 `Traceback`、没有 `数据库连接失败`。
 
 ```bash
@@ -3972,6 +3987,35 @@ cd backend && PYTHONIOENCODING=utf-8 python _probe_auth_isolation.py
 > - 探针账号只删自己造的两行（`n == 2` 才删）。多一步回读是因为 SQL 删错行是不可逆的，而"命中数不对就住手"是唯一便宜的保险。
 > - 越权问答用**真实存在**的 `foreign` parent_id，判据才能钉在 404。拿一个不存在的 id 打出来的 404 证明不了归属过滤那半边（它证明的是"块不存在"），这正是 Global Constraints 里"返回空不等于过滤生效"的同一个坑。
 
+> **2026-10-07 修订（Task 8 预飞直查路由表，⑤ 与 finally 的删除动词整段作废）**：`api/documents.py` 只有四条路由——`grep -n "^@router" api/documents.py` → `:37 POST ""`、`:100 GET ""`、`:108 GET "/chunks"`、`:142 DELETE "/{document_id}/chunks/{parent_id}"`。**没有 `DELETE /api/documents/{document_id}` 这条端点**。`core/database.py:256 delete_document()` 是 core 层方法（只服务上传回滚与 live 测清理），从没接到 HTTP 上。
+> - **后果**：`client.delete(f"/api/documents/{doc_id}")` 打的是一条未注册路径，FastAPI 直接 404 `{"detail": "Not Found"}`——连认证门都不上，判据 ⑤ 当场假红；`finally` 里那句补刀、以及 Step 5 那段"经 API 删整篇文档"的循环，同一条路，同样不可行。原文那句"阶段一没有'删整篇文档'的**界面入口**"其实说窄了：**API 也没有**。
+> - **为什么不能改用 core 层**：探针进程里调 `db.delete_document()` 或 `vector_store.delete_by_document_id()`，就要在**除 uvicorn 之外的第二个进程**打开 `backend/data/chroma_db`，撞单实例锁（Global Constraints）。清场必须在服务端删，让向量与 `is_active` 由那一份进程自己维护。
+> - **改走块级删除 + 一条范围钉死的 SQL 删空行**（⑤ 整段替换；缩进即为代码，不新增围栏）：
+>
+>         parents = sql_all("SELECT parent_id FROM parent_chunks WHERE document_id = %d" % doc_id)
+>         for pid in parents:      # 实发条数 = 父块数；探针文档是一行文本，正常是 1 枪
+>             dele = client.delete(f"/api/documents/{doc_id}/chunks/{pid}", headers=ha)
+>             ok(f"A 删除探针文档的父块 {pid} → 2xx",
+>                dele.status_code in (200, 204), f"{dele.status_code} {dele.text[:120]}")
+>         ok("删完所有父块，A 的列表回 0 篇（spec 7.3 第 3 步）",
+>            client.get("/api/documents", headers=ha).json() == [])
+>
+>   机制要说清：`delete_parent_chunk`（`core/database.py:356`）在子块归零时把文档**隐存**（`is_active=0`），行留在库里。`get_all_documents`（`:231`）只数 `is_active`，所以"列表回 0 篇"成立；但**物理行会从 13 变成 14**，收尾那条 `(4, 4, 10, 13)` 就红了。所以删完块要补一条 SQL：
+>
+>         # 只删本轮自己造的那一篇：文件名、id、块数归零三个条件同时成立才动手
+>         n = conn.execute(text("SELECT COUNT(*) FROM documents WHERE id = :i "
+>                               "AND filename = :f AND chunk_count = 0"),
+>                          {"i": doc_id, "f": DOC}).scalar()
+>         if n == 1:
+>             conn.execute(text("DELETE FROM documents WHERE id = :i AND filename = :f "
+>                               "AND chunk_count = 0"), {"i": doc_id, "f": DOC})
+>         else:
+>             print(f"[WARN] 探针文档行命中 {n}（预期 1），跳过，请人工核对")
+>
+>   这条 SQL 安全是因为三个条件缺一不可，且 `doc_id` 是本轮 POST 拿回来的那个。**顺序不许反**：块必须经 API 删（服务端连带清向量），行才 SQL 删；反过来 `parent_chunks` 会留着指向已消失文档的行，`/api/health` 的向量计数照算，成为最难查的那种脏。
+> - **条数算式跟着变**：⑤ 从固定 2 条变成"父块数 + 1"。一行文本的探针文档解析出 1 个父块时仍是 2 条 ⇒ 总数仍写 **31**；若实发 32，**照实抄脚本末尾那一行**，别去改判据凑数字。`finally` 的补刀同样改成"重新登录 → 逐块经 API 删 → SQL 删空行"，正常路径下它不执行。
+> - **Step 5 的 UI 清场同步改**：那段 `for d in c.get("/api/documents"…).json(): c.delete(f"/api/documents/{d['id']}")` 换成同一个两段式——先按 `d["id"]` 只读查出它的 `parent_id`、逐块经 API 删、再按 `id + filename + chunk_count = 0` 删空行；账号删除那段（`LIKE 'probe-ui%@local.test'`）不动，仍然**先清文档后删账号**。
+
 - [ ] **Step 4: 浏览器判据（前端要在跑，`npm run dev`，视口显式设置并回读）**
 
 先起 vite（后端 :8000 已在 Step 2 起着，只有这一份），再用 browser-use 打开 `http://127.0.0.1:5173`。**每条判据都要回读 `window.innerWidth` 并写进证据**——in-app 默认视口 754px 会掉进 `max-width:768` 断点，宽屏判据在 754px 上跑出来的"绿"是窄屏的绿。
@@ -4003,6 +4047,12 @@ cd backend && PYTHONIOENCODING=utf-8 python _probe_auth_isolation.py
 > **已知观感（写进台账，不改代码）**：窄屏下头像/昵称/退出登录在侧栏浮层里，要先点「展开文档面板」才够得着。这是 spec 5.4"原位置"那句话的直接后果——`.user-rail` 跟着 `.session-debug` 搬，而 `≤768` 的侧栏本就是浮层。要挪进聊天栏底部属于界面改版，与阶段二 `SettingsModal` 一起谈更划算。
 
 **尺寸/布局类判据（5、15、16、17）若 browser-use 的默认视口不好显式钉**，按项目记忆改用 Edge headless 探针：`cd frontend && npm install --no-save puppeteer-core`，`executablePath` 指本机 Edge，`page.setViewport({width, height})` 后**回读 `innerWidth` 再断言**，`browser.close()`（不是 `kill()`——`kill()` 会连 localStorage 一起丢，那会毁掉 7/8/11 三条判据的取证）。**验证完 `npm prune`，`package.json` / `package-lock.json` 必须零 diff。**
+
+> **2026-10-07 修订（Task 8 Step 4 实跑：整段走了 Edge 备选，判据实数 32 条，且踩出三条假红）**
+> - **browser-use 那份没走到**：它**完全没有视口控制口**（16 个工具里只有 navigate/click/fill/evaluate/screenshot 一类，`evaluate` 里改 `window.innerWidth` 不生效、`resizeTo` 被禁）。所以本节按上面那条备选**整体改道** Edge headless（`puppeteer-core` + `--no-save`），18 项判据全部在真 Chromium 上跑，每条带宽高回读。最终实数 **`SUMMARY wide 26/26 narrow 6/6`**（= 32 条；题干的 18 项里 1/5/6/7/8/9/10/12/15 各自拆了 a/b 子判据，拆出来的都单独计数，别拿 18 去对 32）。
+> - **假红一（判据 11/13 的"消息区为空"永远红）**：`MessageList.vue:41` 在 `messages` 为空时渲染一条**欢迎占位**，它自己也是 `.message`（`:10` 那条真实气泡同 class）。所以 `querySelectorAll('.message').length === 0` 这个表达式在界面上**不可能成立**，`waitForFunction` 会一直等到超时。正确口径是"真消息 = `.message` 节点数 − 含 `👋 你好` 的那一条"，两处等待与两处断言都改这个式子。**这条同时是给测的提醒**：jsdom 里 `findAll('.message')` 也含欢迎占位，历史判据若断过 0 要回去看一眼。
+> - **假红二（判据 2 的"零业务请求"抓到三条 200）**：`/src/api/documents.js?t=…` 这类 **Vite dev 模块请求**里也带 `/api/` 子串，用 `url.includes('/api/…')` 会把源码文件算成后端调用。改钉 `new URL(rec.url).pathname.startsWith('/api/')`（`vite.config.js:8` 的代理正是只转 `/api` 前缀），子串判据降级成第二道。**顺带一条自伤**：写 `const URL = 'http://127.0.0.1:5173'` 会把全局 `URL` 构造函数遮蔽掉，下一轮跑到 `new URL()` 直接 `TypeError: URL is not a constructor`——探针里的基地址常量请叫 `APP_ORIGIN`。
+> - **假红三（判据 15 的 `width = round(375×0.92)`）**：CSS 原文是 `.auth-screen { padding: 16px }` 里放 `width: min(92vw, 420px)`（`layout.css:305-307`，`≤768` 只在 `:343` 改 padding）。375 时 92vw = 345 > 可用 `375 − 32 = 343`，flex 默认 shrink 把它压到 **343**，实测 `rect` 是 `left:16 / right:359 / width:343`。钉单值 345 必假红；正确判据是**三段钳制** `min(92vw, 420, docWidth − 32)`。又因为 375 这一档钳制项与 `width:100%` 给同一个数、分不出来，**补一条 15b**：500×800 时可用 468 > 420，必须正好落在 **420** 上界——这一条才真正钉住那个 `420px`。
 
 - [ ] **Step 5: 清场与基线核对**
 
