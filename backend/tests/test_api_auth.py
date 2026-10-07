@@ -52,8 +52,10 @@ class FakeAuthDB:
         真库交出的不是这一个对象，而是会话已关闭的 detached 实例
         （core/database.py:582-596），属性在取出那一刻冻住，所以端点改完必须回读。
         fake 给的是别名，写进去就地生效 ⇒ `api/auth.py` 的 `_reload` 在这里观察不到
-        （把它退回成直接用 `user`，本文件 46 条判据全绿，见修正轮 1 报告的变异 M4）。
-        本轮按裁定不改这个语义，真判据落在阶段二 Task 12 的 live/真服务侧。
+        （把它退回成直接用 `user`，本文件 47 条判据全绿——终审复测于 `4c45e96` 之后。当轮报告住在被
+        `.gitignore` 排除的 `.superpowers/sdd/` 下，干净检出翻不到，故这条实测以本注释为唯一留痕）。
+        本轮按裁定不改这个语义；真判据已由阶段二 Task 12 的判据 4 兑现（真服务 + 真凭证存完 key 后
+        界面横幅当场换句，而那次换句用的就是 `PUT /me/llm` 响应体本身，不是追打的 `GET /me`）。
         """
         entry = self.tokens.get(token_hash)
         if entry is None or entry[1] <= datetime.now():

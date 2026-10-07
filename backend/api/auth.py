@@ -68,13 +68,15 @@ def _reload(db, user):
     - 离线 fake：`tests/test_api_auth.py` 的 `FakeAuthDB.get_user_by_token` 与
       `get_user_by_id` 返回的是**同一个 SimpleNamespace 对象的别名**，写进去就地生效，
       重读与不重读拿到的是同一个东西 ⇒ 把 `update_me` 与 `update_llm` 两处的
-      `_reload(db, user)` 退回成 `user`，离线全量判据一条都不会红（实测见修正轮 1 报告的变异 M4）。
+      `_reload(db, user)` 退回成 `user`，离线判据一条都不会红（终审复测于 `4c45e96` 之后：
+      本文件 47 条全绿。当轮报告住在被 `.gitignore` 排除的 `.superpowers/sdd/` 下，干净检出翻不到，
+      所以这条实测以本注释为唯一留痕）。
 
     本轮按控制者裁定**不动 fake 的返回语义**（改成快照会连带推倒
     `test_half_a_config_is_not_configured_even_when_the_key_is_there`，它正靠 poke
-    `db.users[0]` + 不重读这条路）。真判据的落点是**阶段二 Task 12 的 live/真服务侧**：
-    断言 `PUT /me/llm` 的**响应体本身**里 `llm_configured` 已经是 True（不追打 `GET /me`），
-    那一格只有真库给出口。在那之前，别把这里当多余代码顺手删。
+    `db.users[0]` + 不重读这条路）。真判据已在阶段二 Task 12 的浏览器验收里兑现（判据 4：真服务上
+    存真凭证，界面 `.setup-banner` 当场换句——`patchMe` 吃的就是 `PUT /me/llm` 的**响应体本身**，
+    不追打 `GET /me`；同轮 `/api/auth/me` 回 `llm_configured: true`）。所以别把这里当多余代码顺手删。
     """
     return db.get_user_by_id(user.id) or user
 
