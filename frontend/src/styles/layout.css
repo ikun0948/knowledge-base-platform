@@ -21,14 +21,6 @@
 .panel-title { font-size: 18px; font-weight: 600; }
 .panel-hr { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
 .panel-hint { font-size: 13px; color: var(--text-muted); }
-.session-debug { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-muted); }
-.session-value {
-  padding: 4px 6px;
-  background: var(--page-bg);
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  word-break: break-all;
-}
 
 /* app.py 的 .chat-container / .chat-header / .chat-title / .chat-subtitle */
 .chat-main { display: flex; min-width: 0; }
@@ -77,7 +69,6 @@
 }
 .status-rag { background: var(--status-rag-bg); color: var(--status-rag-fg); }
 .status-normal { background: var(--status-normal-bg); color: var(--status-normal-fg); }
-.session-chip { font-size: 12px; color: var(--text-muted); }
 
 .error-banner {
   display: flex;
@@ -306,4 +297,47 @@
 @media (min-width: 769px) {
   .app-shell { grid-template-rows: minmax(0, 1fr); }
   .chat-main { min-height: 0; }
+}
+
+/* ---- 登录页与左下角用户栏（阶段一 Task 7）----
+   颜色全部取现有 token：--grad-brand-135/--on-brand 是 .user-avatar 用过的同一对，
+   面板底与边框沿用 .side-panel 的配方。G-4 的"variables.css 之外零色值字面量"口径不增。 */
+.auth-screen { display: flex; align-items: center; justify-content: center; height: 100%; padding: 16px; }
+.auth-panel {
+  width: min(92vw, 420px);
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 20px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-panel);
+}
+.auth-title { font-size: 20px; font-weight: 600; }
+.auth-form { display: flex; flex-direction: column; gap: 10px; }
+.auth-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
+.auth-submit { margin-top: 4px; }
+.auth-hint { font-size: 12px; color: var(--text-muted); }
+
+.user-rail { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+/* 与消息气泡的 .user-avatar/.message-avatar 不是一回事，类名必须另起：
+   那两个是 36px 的对话头像，这里是 28px 的账号位，同名会让 ≤768 的规则互相污染 */
+.rail-avatar {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--grad-brand-135); color: var(--on-brand); font-size: 14px;
+}
+/* 昵称上限 50 字，侧栏只有 320px：不截断就会把 ⚙ 和「退出登录」挤出面板（同 .queue-name 的老配方） */
+.rail-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.rail-settings, .rail-signout { flex-shrink: 0; }
+
+/* 追加而不是改第 101 行那个 ≤768 分支：那块是 L-1/L-2/L-3 的根治现场，动它要重新量行高。
+   .user-rail 在侧栏浮层内部，不是 app-shell 的 grid item，不会多出第三轨，
+   所以这里只防两件小事：长昵称换行后按钮贴脸、375px 上面板内边距挤压。 */
+@media (max-width: 768px) {
+  .user-rail { flex-wrap: wrap; }
+  .auth-panel { padding: 16px; }
 }
