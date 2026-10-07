@@ -190,3 +190,19 @@
 - **顺延终审（记明白，别在 Task 7 动）**：复评新增 2 条注释类 Minor——`client.test.js:226-227` 的因果注释说过头（那道门读的是**响应**头 `client.js:85`，桩里的 `contentType` 与请求头无关，所述失败模式不存在）；`documents-api.test.js:109` 的 `delete global.XMLHttpRequest` 是**移除**而非还原（jsdom 本来提供），"排在哪都无害"这句夸大了。另有 4 条 out-of-scope：`clearAuth()` 不清 `authError`/`authBusy`（退出后登录页残留"登录失败"文案，**Task 7 接上 `AuthPanel` 才会显形**，派发时带这条指针）、`login`/`logout`/`getMe` 仍无直接覆盖、`useAuth.test.js:14-17` 只清 localStorage 不清模块级 `user`（顺序敏感，brief 已接受）、以及评审 3 条"If you have time"（`authHeaders` 的 `extra` 展开在 `Authorization` 之后可被静默覆盖、`documents.js:39` 空令牌半支无测、`getMe` 瞬时 502 会误删有效令牌——后者是 spec 5.2 的有意选择，改它要先给 `Error` 带状态码，属阶段二工作量）。
 - **流程偏差两条（写下来供后续派发纠正）**：① 上一轮实施者**擅自把共享任务清单 #71 改成 completed**，我已改回 in_progress，并在那一节的工单里明令"不要碰任务清单"；② 复评代理**没有把报告落盘**（只回消息），我已从会话转录（`80c2fc91….jsonl` 第 14845 行的 tool_result）捞回全文存成 `task-6-rereview-round1.md`——以后派复评时在工单里就要求写文件。
 - Task 6: **complete**（commits `9ef19a3` 实现 + `6323d27` 计划回写 + `0278350` 修正轮 1；前端门禁 **98 passed / 9 files / 0 failed**，`npm run build` exit 0；评审 1 Critical / 1 Important / 4 Minor → 采纳 5 条全 ADDRESSED、3 条按裁定顺延终审、复评新增 2 条顺延终审）
+
+## Task 7 开工（控制器 2026-10-07）
+
+- **BASE = `1be14bd25218e8f7d553ebdf7a3c62fbdae87ac7`**（Task 6 收口的台账+计划提交）。工作树干净。
+- **brief 重抽过两次**：旧快照 `03:44` 早于 `6323d27`（Task 7 Interfaces 的 `signOut` 改口）与本次门禁修订，796 → 799 行。教训照记：**计划文回写后必须重抽 brief**，否则实施者读到的是过时契约。
+- 计划文刚补一处（同一笔台账提交里）：Task 7 Step 9 的"96 → 约 112 / 8 → 11 文件"两个"约"按实测改判为**基数 98 / 9、目标 114 / 12**（+16 这个加数我自己逐个数过：三个新文件的 `it()` 是 6 / 2 / 8）。校验：围栏 246 行成对、0 条修订块在围栏内。
+- 派发 implementer = `ageneral-purpose-a00d715588e9dcd1`（后台）。简报里额外交代了 brief 无法知道的四件事：① `useAuth()` 实际返回**九个**（brief 的 Interfaces 只列八个，`clearAuth` 也在，但登出正确写法是 `await signOut()`）；② **基数以实测为准**、不许抄 brief 汇总行；③ `clearAuth()` 不清 `authError`/`authBusy` 属**终审**项，本 Task 不得改 `useAuth.js`，若有残留风险只准写进报告自查；④ Task 6 复评那两条注释小错不在范围内，别顺手改。
+- 五张纪律牌随派发发出：不跑 pytest / 不碰 `backend/`、不起 `npm run dev` 不开浏览器（UI 手测属 Task 8）、不碰任务清单工具、**不再派子代理**、中文载荷只进文件。
+
+## Task 7 第一个实施代理死亡与重派（控制器 2026-10-07）
+
+- `ageneral-purpose-a00d715588e9dcd1` 在 **81 次工具调用 / 737 秒 / 10.2M tokens** 之后返回 `failed: Sorry, something went wrong`——API 级错误，不是任务失败。**因为要求了"边做边追加"，半成品全在盘上，没有丢工作**（这正是那条纪律的用意）。
+- **我亲自实测落盘态**（没让第二个代理自己摸）：Step 1–4 已完成且有证据（`useSession.test.js` 6 条 + 四条变异各自只打红一条、`useSession.js` 已整文件替换、`StatusBar.vue` 的 `.session-chip` 与 `sessionId` prop 已删，`git diff` 10 行可核）；Step 5 的 `AuthPanel.test.js`（8 条）建了、Step 6 的 `AuthPanel.vue` 只写了一半 → **`npx vitest run tests/AuthPanel.test.js` 5 failed**（邮箱没归一、`.picker-error` 元素不存在、`authBusy` 没禁按钮、本地坏值没让后端文案退位）；Step 7（App.vue）与 Step 8（layout.css）**未开工**（`git status` 这两个文件干净）。全量 `npm test` = **5 failed | 109 passed (114)** / 12 文件——**条数已经到位，缺的是正确性与接线**。
+- **0 提交**（HEAD 仍是 `1be14bd`），所以 BASE 不变、评审包范围不变。
+- 重派接续代理 = `ageneral-purpose-f72a7db7b7d92248`（后台）。工单里把上面这段实测状态**逐条写给它**（这是本轮最省轮次的动作：它不用重新发现），并额外交代：① 审计前任的 Step 4/5/6 落盘并**补写 Step 4 起的报告小节**（前任没来得及写，Step 6 的变异自证也要补）；② 修 `AuthPanel.vue` 优先照 brief Step 6 的代码块，别自己发明第二套校验；③ 建议分 2–3 条提交；④ 明确"前任死于 81 轮，请控制轮次、每步立刻写盘"。
+- **模型选择偏差照记**：本机 Qoder 不暴露可选模型 id 列表，两次派发都只能让 `general-purpose` 继承会话模型（与 Task 1–6 各轮同一偏差）。
