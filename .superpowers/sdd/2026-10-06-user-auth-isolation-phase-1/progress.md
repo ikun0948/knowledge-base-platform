@@ -206,3 +206,18 @@
 - **0 提交**（HEAD 仍是 `1be14bd`），所以 BASE 不变、评审包范围不变。
 - 重派接续代理 = `ageneral-purpose-f72a7db7b7d92248`（后台）。工单里把上面这段实测状态**逐条写给它**（这是本轮最省轮次的动作：它不用重新发现），并额外交代：① 审计前任的 Step 4/5/6 落盘并**补写 Step 4 起的报告小节**（前任没来得及写，Step 6 的变异自证也要补）；② 修 `AuthPanel.vue` 优先照 brief Step 6 的代码块，别自己发明第二套校验；③ 建议分 2–3 条提交；④ 明确"前任死于 81 轮，请控制轮次、每步立刻写盘"。
 - **模型选择偏差照记**：本机 Qoder 不暴露可选模型 id 列表，两次派发都只能让 `general-purpose` 继承会话模型（与 Task 1–6 各轮同一偏差）。
+
+## Task 7 评审与修正轮 1 派发（控制器 2026-10-07）
+
+- 接续代理 `ageneral-purpose-f72a7db7b7d92248` 收口：三条提交 `0d7674b` / `3d9788d` / `af0878c`（8 文件 +572/−44），实跑 **114 passed / 12 文件 / 0 failed**（我在 `af0878c` 之后亲自复跑核对，不是转抄），`npm run build` exit 0。
+- 任务评审（后台代理，报告**已按要求落盘** `task-7-review.md`，161 行）判 **Needs fixes：0 Critical / 2 Important / 9 Minor**。它对我指定的三个问题都给了独立判断而不是复述报告：① 登录态补形状校验"方向对、措辞要修"，② `@click.prevent` "真实浏览器里行为正确但取舍方向反了"，③ Step 7 零自动化覆盖"按 brief 分工不算 Missing，但本 Task 内可廉价补"。Critical 一格它明确写了"我按能不能在真实浏览器里造成错行为逐条筛过候选，全部落空"，并列出四条筛过的具体风险（`signOut` 能否 reject、`setSession(sid)` 入参形状、`clearSelection` 存在性、模块级 ref 的其他消费方）——这类"负证据也要写清怎么来的"是要的。
+- **Controller 裁定 ①（本轮唯一由我把严重度往上打的条目，先改计划再改代码）**：评审的 M-2（登录态本地校验比后端严）我升级为必修 X-1，因为它那句前提**是错的**——"当前用户表只由注册接口写，打不中任何真账号"。实情：`backend/core/migrations.py:19` 的 `DEFAULT_IDENTIFIER = "default@local"` 是启动期迁移**直接 INSERT 进 `users`** 的，从没受过 `EMAIL_RE` 检验；而 `local` 这个域名**没有点**，过不了 `schemas/auth.py:11` 的 `EMAIL_RE`（要求 `.` + ≥2 位 TLD）也过不了 `PHONE_RE`；后端 `LoginIn`（`schemas/auth.py:46-55`）对登录**完全不验形状**，所以这个账号在 API 上能登录，而它是 Task 3 那次归户里 **13 行 `documents` 的主人**——界面上唯一能看到旧数据的入口。落点 `AuthPanel.vue:35-42`。裁定"登录 tab 不校验账号形状，与后端同宽，Step 6 那版 register-only 才是对的"，brief Step 5 那两条打在登录 tab 的断言**是断言错不是组件错**。计划文回写 Step 5 后的修订块。
+- **Controller 裁定 ②**：评审 I-1 采纳并加一条它没要求的收口——`default@local` 要变成**一条真判据**（登录 tab 上本地放行、按钮不 disabled、emit 载荷原样），并配"把分支加回去必红"的变异。理由是这条缺陷的复发性比"撤掉 `@click`"高：那是风格取向，这是挡死真实账号。
+- **Controller 裁定 ③**：I-1 的"提交手势搬进生产模板"按评审判定采纳，工单里给了两条 grep 门禁当它的变异（`@click` 只准命中两个 `.picker-tab`；`PHONE_RE` 只准出现在注册分支）——因为 `.prevent` 丢失在 jsdom 里测不出来，这种性质只能用结构门禁钉。附带收益要求验：form 触发后变异 E（`submit()` 内部那道 `return`）应当当场长出牙，**若仍全绿要照实写原因**，不许假装红。
+- **Controller 裁定 ④**：I-2 采纳，工单把三条判据、"只 stub fetch 不 mock composable"、以及三个会先撞的坑（模块级 ref 在同文件 `it()` 间共享、整棵 App 挂载会打我没预料到的请求、不许让任何测真出网）都写死了。M-3 顺手并入判据 3 才有牙；M-5（`enterWorkspace` 包 try）**明确不要判据**——为它造"三拍 reject"的桩要违背"不 mock composable"，代码事实担保即可。
+- 不改并交终审：M-4（`avatarChar` 与 `.rail-name` 退回不一致，后端保证 nickname 非空）、M-6（登出无重入保护，幂等）、M-9（两条 grep 门禁落成测试，会与本轮新测撞职责）、以及评审的非发现四条。
+- **计划文本轮共回写五处**（提交 `388f1c5`，22 行，全在围栏外）：Step 5 后（`default@local` 裁定 + 替换断言 + 勘误那句"不管测试库对 disabled 派发不派发都成立"）、Step 6 后（撤 `@click.prevent` 三条理由）、Step 7 后（三条补法）、Files 清单（补 `App.auth-gate.test.js`）、Interfaces（`useAuth()` 实际九个返回值但 App.vue 不许解构 `clearAuth`）、Step 9（门禁目标 114/12 → **约 117 / 13**，AuthPanel 仍 8 条因 X-1 换的是断言不是用例）。校验：围栏 **246 个**、奇偶成对、55 条修订/勘误行全部在围栏外。
+- **brief 重抽第三次**：799 → **820 行**（含本轮 7 处修订标记）。教训照记：计划文一回写，旧 brief 快照即作废，派发前必须重抽。
+- 修正轮 1 派发 `ageneral-purpose-877938abb2cfbcee`（后台），工单 `task-7-findings-round1.md`。门禁硬口径：**0 failed**、约 117/13、build exit 0、四条 grep（沿用两条 + 本轮新增两条）、五段变异各贴真实 RED。
+- **流程偏差两条（本轮工单里已明令纠正）**：① `0d7674b` 带了 `--no-gpg-sign`（全局约束第 5 行禁止自行加绕过开关；本机 `commit.gpgsign` 未开所以无实际后果，仍记一次）；② 上一轮变异脚本**先改坏后备份**、中间态一度把注入痕迹留在 `StatusBar.vue`（终态我复核干净，`src/` grep 注入标记 0 命中），且脚本与备份放进了 `frontend/node_modules/`。这一轮要求：备份放 `%TEMP%`、动手前先复制、收尾后 grep 0 命中的输出进报告。
+- **模型选择偏差照记**：本机仍不暴露可选模型 id，本轮继承会话模型。
