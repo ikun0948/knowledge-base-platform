@@ -6,6 +6,9 @@ const props = defineProps({
   // 数组类 prop 的 default 必须是工厂函数：写死 [] 会让所有实例共享同一个引用。
   models: { type: Array, default: () => [] },
   selectedModel: { type: String, default: '' },
+  // 阶段二 Task 11：账号没配好大模型时由 App 关掉发送。默认 true——
+  // 除新增那条显式传 false 的判据外，既有测都不传它，行为照旧，这一格只由 App 的 setupProblem 驱动。
+  allowSend: { type: Boolean, default: true },
 })
 // update:selectedModel 与 update:modelValue 是两条独立的双向口，别混：
 // 前者改"这一轮用哪个模型"，后者改"要发什么话"。
@@ -21,7 +24,7 @@ function onModelChange(event) {
 }
 
 function submit() {
-  if (props.pending || !props.modelValue.trim()) return
+  if (props.pending || !props.allowSend || !props.modelValue.trim()) return
   emit('send', props.modelValue.trim())
 }
 
@@ -59,7 +62,10 @@ function onKeydown(event) {
         <option v-for="name in props.models" :key="name" :value="name">{{ name }}</option>
       </select>
       <button v-if="props.pending" class="btn btn-stop chat-stop" type="button" @click="emit('stop')">⏹ 停止生成</button>
-      <button v-else class="btn chat-send" type="button" :disabled="!props.modelValue.trim()" @click="submit">发送</button>
+      <!-- 两道门与 submit() 逐字对应：!allowSend 是"账号还没配好"，!modelValue.trim() 是"没打字"。
+           少一道就是漏一面：只改这里不改 submit()，Enter 照样能把话发出去。 -->
+      <button v-else class="btn chat-send" type="button"
+              :disabled="!props.allowSend || !props.modelValue.trim()" @click="submit">发送</button>
     </div>
   </div>
 </template>

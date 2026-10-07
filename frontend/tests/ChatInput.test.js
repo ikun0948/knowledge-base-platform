@@ -99,4 +99,11 @@ describe('ChatInput：两段式与模型下拉（Task 10）', () => {
     const busy = mountInput({ modelValue: 'q', pending: true, models: ['a'] })
     expect(busy.find('.model-select').attributes('disabled')).toBeDefined()
   })
+
+  it('allowSend=false：有字但发送按钮仍禁用，且 Enter 也发不出 send', async () => {
+    const w = mountInput({ modelValue: '你好', allowSend: false, models: ['a'], selectedModel: 'a' })
+    expect(w.find('.chat-send').attributes('disabled')).toBeDefined()
+    await w.find('.chat-textarea').trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('send')).toBeUndefined()
+  })
 })

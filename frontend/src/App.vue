@@ -50,6 +50,17 @@ const currentModel = computed(() => {
   return user.value?.default_model ?? opts[0] ?? ''
 })
 
+// spec 3.4 的"登录后且配好 key 才能对话"在后端是两条门（阶段二 Task 7：NotConfiguredError 与
+// 空名单各一句 409 文案）。界面上**分两次说**会变成"修好一个又冒出一个"，
+// 所以这里合成一个 computed：一句、一个出口（去设置），修好了两句一起消失。
+// 顺序也有讲究：凭证缺失时名单必然是空的，先说 key 才不说错的那句。
+const setupProblem = computed(() => {
+  if (!isLoggedIn.value) return ''            // 登录门由整屏 v-if 管，这里不该再抢一句
+  if (!user.value?.llm_configured) return '还没有配置大模型的 api_key 与路由，点「去设置」填好就能对话'
+  if (!user.value?.models?.length) return '模型名单是空的，请先在设置里添加一个模型'
+  return ''
+})
+
 // 改造前 onMounted 的三拍原样搬进这个函数：顺序是既有不变式，不许重排。
 // hydrate 要打一枪 /api/documents/chunks：放在 restore 之前，
 // 让"选中项已被剪掉"这件事先于历史渲染，错误横幅只剩最后一条真的。
@@ -262,7 +273,14 @@ function dismissError() {
             :messages="messages"
             :has-documents="documents.length > 0"
           />
-          <ChatInput v-model="question" :pending="pending"
+          <!-- 位置钉在输入框正上方：它挡住的就是发送，横幅离发送越远越像一句无关公告。
+               必须与 .chat-input **平级**（在 .chat-body 里）：塞进 ChatInput 内部会多出
+               一个子节点，ChatInput.test.js 那条 `kids[1]` 结构判据立刻红。 -->
+          <p v-if="setupProblem" class="setup-banner">
+            <span>⚠️ {{ setupProblem }}</span>
+            <button class="btn btn-ghost btn-small setup-open" type="button" @click="settingsOpen = true">去设置</button>
+          </p>
+          <ChatInput v-model="question" :pending="pending" :allow-send="setupProblem === ''"
                      :models="user?.models ?? []" :selected-model="currentModel"
                      @update:selected-model="modelOverride = $event"
                      @send="handleSend" @stop="handleStop" />

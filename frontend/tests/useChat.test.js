@@ -7,6 +7,8 @@ vi.mock('../src/api/history.js', () => ({ getHistory: vi.fn(), clearHistory: vi.
 
 import { sendChatStream } from '../src/api/chat.js'
 import { clearHistory, getHistory } from '../src/api/history.js'
+// ApiError 未 mock：钉档测的要就是"网络层真实抛出的那个形状（带 status）"，mock 掉它就等于没测。
+import { ApiError } from '../src/api/client.js'
 import { useChat } from '../src/composables/useChat.js'
 
 // 把 mock 的 sendChatStream 设成"按序派发事件后正常返回"
@@ -96,6 +98,19 @@ describe('useChat.send：收流结局', () => {
     await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: [] })).resolves.toBe(false)
     expect(chat.messages.value).toEqual([])
     expect(chat.error.value).toBe('流式响应中断，请重试')
+  })
+
+  it('409 的归宿：横幅就是后端那句中文，本地两条气泡一起撤（钉档，不是新行为）', async () => {
+    // 钉档（今天即绿）：Task 7 的三条 409 都在 StreamingResponse 之前抛，postStream 拿到的是
+    // 纯 JSON 错误响应 ⇒ ApiError(409)，send 的 catch 走 error = err.message + 撤泡，全是既有代码。
+    // 它的价值只有一个：将来有人想"按 status 分支换文案"或"409 后补打一枪 /me"时，这里先红给他看。
+    // 裁定与代价写在计划 Task 11 Step 4——前端不按状态码改写，因为 Task 7 的文案是按"可行动"写的。
+    sendChatStream.mockRejectedValue(new ApiError('你的模型名单是空的，请先在设置里添加一个模型', 409))
+    const chat = useChat()
+    await expect(chat.send({ session_id: 's1', question: 'q', parent_ids: [], model_name: '' }))
+      .resolves.toBe(false)
+    expect(chat.messages.value).toEqual([])
+    expect(chat.error.value).toBe('你的模型名单是空的，请先在设置里添加一个模型')
   })
 })
 

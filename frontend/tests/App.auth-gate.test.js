@@ -35,17 +35,21 @@ const SID = '3f2b1c00-1111-2222-3333-444455556666'
 const CHUNK = { parent_id: '手册.pdf_parent_0', document_id: 7, filename: '手册.pdf',
                 suffix: 'pdf', snippet: '片段一', child_count: 3 }
 // 十键 = backend/schemas/auth.py 的 UserOut 一字不差（阶段二起后五键由 _user_out 组装）。
-// 本 Task 之后 `.rail-avatar` 读 avatar、设置弹窗回填读 models/api_key_masked，
-// 少给一键就是让判据在"字段不存在"上变绿或变红，理由都不干净。取值与 SettingsModal.test.js 同套。
-const ME = {
-  user: {
+// `.rail-avatar` 读 avatar、设置弹窗回填读 models/api_key_masked、Task 11 的横幅读
+// llm_configured 与 models——少给一键的表征不是红，是"读 undefined 走了 falsy 分支"：
+// 横幅永远不出现，那条判据假绿。取值与 SettingsModal.test.js 同套。
+// over 用于造变体（未配 key / 名单为空），十键的默认值就是"全配齐"的那个人。
+function meUser(over = {}) {
+  return {
     id: 1, identifier: 'a@b.com', identifier_type: 'email', nickname: '小明', avatar: 'auto',
     llm_configured: true, llm_base_url: 'https://fake/v1', api_key_masked: 'sk-****7890',
     // 两个模型不是笔误：Task 10 那条"下拉换模型 → 载荷跟着换"需要**第二个 option 可换**，
     // 名单只有一项时 select.setValue 找不到目标，测会红在桩上而不是红在接线上。
     models: ['qwen-max', 'qwen-turbo'], default_model: 'qwen-max',
-  },
+    ...over,
+  }
 }
+const ME = { user: meUser() }
 // 上一个账号的文档与历史：登出的"不残留"就靠它们做探针
 const DOC = { id: 42, filename: '上一个账号的文档.pdf', size: 1 }
 const HISTORY_ROWS = [
@@ -333,5 +337,56 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     // 没有门禁时 currentModel 会抱着 'qwen-turbo' 不放：:value 指向一个不存在的 option，
     // jsdom 把 select.value 落成空串，这一句就红（红得具体，不是"字段不存在"那种脏红）。
     expect(app.find('.model-select').element.value).toBe('qwen-max')
+  })
+
+  it('没配 key：横幅在输入区上方、文案点名 api_key，且发送被禁用（输入框有字也一样禁）', async () => {
+    seedLoggedIn()
+    const route = ROUTES.find((r) => r.prefix === '/api/auth/me')
+    const original = route.body
+    route.body = { user: meUser({ llm_configured: false, api_key_masked: '', llm_base_url: '', models: [] }) }
+    try {
+      const app = await mountApp()
+      expect(app.find('.setup-banner').exists()).toBe(true)
+      expect(app.find('.setup-banner').text()).toContain('api_key')
+      await app.find('.chat-textarea').setValue('你好')
+      expect(app.find('.chat-send').attributes('disabled')).toBeDefined()
+      // 判据的另一半：Enter 这条路也被同一条门挡住（禁用只挡住了按钮）
+      await app.find('.chat-textarea').trigger('keydown', { key: 'Enter' })
+      expect(calls.filter((c) => c.url === '/api/chat/stream')).toEqual([])
+    } finally { route.body = original }
+  })
+
+  it('凭证齐了但名单为空：横幅换成"名单是空的"那句（两句不许合成一句）', async () => {
+    seedLoggedIn()
+    const route = ROUTES.find((r) => r.prefix === '/api/auth/me')
+    const original = route.body
+    route.body = { user: meUser({ models: [], default_model: null }) }
+    try {
+      const app = await mountApp()
+      expect(app.find('.setup-banner').text()).toContain('名单是空的')
+      expect(app.find('.setup-banner').text()).not.toContain('api_key')
+    } finally { route.body = original }
+  })
+
+  it('点横幅上的「去设置」把弹窗打开；配齐之后横幅消失、发送恢复可点', async () => {
+    seedLoggedIn()
+    const route = ROUTES.find((r) => r.prefix === '/api/auth/me')
+    const original = route.body
+    route.body = { user: meUser({ llm_configured: false, models: [] }) }
+    try {
+      const app = await mountApp()
+      await app.find('.setup-open').trigger('click')
+      expect(app.find('.settings-panel').exists()).toBe(true)
+      await app.find('.picker-close').trigger('click')      // 关掉弹窗，横幅还在（配置没变）
+      expect(app.find('.setup-banner').exists()).toBe(true)
+
+      // 同一次挂载里把 /me 换回"配齐"：模拟在设置里填完之后的 rehydrate
+      route.body = { user: meUser() }
+      await useAuth().bootstrap()
+      await flushPromises()
+      expect(app.find('.setup-banner').exists()).toBe(false)
+      await app.find('.chat-textarea').setValue('你好')
+      expect(app.find('.chat-send').attributes('disabled')).toBeUndefined()
+    } finally { route.body = original }
   })
 })

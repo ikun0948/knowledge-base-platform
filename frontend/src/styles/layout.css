@@ -405,3 +405,18 @@
   .model-select { flex: 1; min-width: 0; max-width: none; }
   .chat-send, .chat-stop { flex-shrink: 0; }
 }
+
+/* ---- 阶段二 Task 11：未配置横幅 ----
+   与 .error-banner 同一配方但不同色：红色档属于"出错了"，这一条是"还差一步配置"，
+   两者混在一个颜色里会让用户把指引当故障。--status-normal-* 是那对现成的紫。 */
+.setup-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 20px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-card);
+  background: var(--status-normal-bg); color: var(--status-normal-fg); font-size: 13px;
+}
+.setup-open { flex-shrink: 0; }
+
+@media (max-width: 768px) {
+  .setup-banner { margin: 0 12px; flex-wrap: wrap; }
+}

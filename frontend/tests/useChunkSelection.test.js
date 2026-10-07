@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../src/api/documents.js', () => ({ listChunks: vi.fn() }))
 
 import { listChunks } from '../src/api/documents.js'
+// ApiError 来自未被 mock 的 client.js：钉档要钉的就是"真实网络层抛的那个形状"
+import { ApiError } from '../src/api/client.js'
 import { MAX_SELECTED_CHUNKS, useChunkSelection } from '../src/composables/useChunkSelection.js'
 
 const KEY = 'selected_parent_ids'
@@ -99,6 +101,24 @@ describe('useChunkSelection', () => {
     await s.hydrate()
     expect(s.selectionError.value).toContain('无法连接后端')
     expect(s.selectedParentIds.value).toEqual(['甲_p_0'])
+  })
+
+  it('hydrate 失败：本地池一个键都不清，只说错误（一次网络抖动不许抹掉用户的选中项）', async () => {
+    // 钉档（今天即绿，advisory ③）：useChunkSelection.js:53-56 的 catch 故意不 persist()，
+    // 于是 selected_parent_ids 原样留在 localStorage——这件事之前只有注释担保。
+    // ApiError 用真形状（status=0 就是"连不上"），mock 掉网络层等于没钉这一格。
+    localStorage.setItem(KEY, JSON.stringify(['活_p_0', '死_p_1']))
+    listChunks.mockRejectedValue(new ApiError('无法连接后端，请确认 uvicorn 已在 :8000 运行', 0))
+    const sel = useChunkSelection()
+    await sel.hydrate()
+    expect(sel.selectionError.value).toContain('无法连接后端')
+    expect(sel.selectedChunks.value).toEqual([])                 // 内存里没建起来
+    // 判据本体：localStorage **原样**，既不回写空数组也不剪枝
+    expect(JSON.parse(localStorage.getItem(KEY))).toEqual(['活_p_0', '死_p_1'])
+    // 清它的唯一入口是 clearSelection()——阶段一终审明写"今天承重别删"：
+    // 它是登出/401 自动登出时把上一个账号的选中池抹掉的唯一动作（App.vue 的 resetWorkspace 调它）
+    sel.clearSelection()
+    expect(localStorage.getItem(KEY)).toBe('[]')
   })
 
   it('remove 只按 parent_id 摘，isSelected 跟着变', () => {
