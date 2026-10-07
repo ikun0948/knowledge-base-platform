@@ -18,6 +18,9 @@ def _require_owned_parents(db, parent_ids, user) -> list[str]:
 
     放在端点而不是 RAGSystem：链子只管问答，"能不能问这几个块"是门口的事（spec 3.4 同款分工）。
     也比在链子里查更便宜——越权请求一次都不该打到 embedding 与 LLM 上。
+
+    返回值不传进链子（端点仍把原始池交给它，链子里的召回再按 `ctx.user_id` 收窄）：
+    这里的 `owned` 只服务下面那次长度比较，能走到 return 就说明整批池子已属于当前用户。
     """
     if not parent_ids:
         return []
