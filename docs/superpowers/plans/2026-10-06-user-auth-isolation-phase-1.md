@@ -3581,6 +3581,12 @@ async function handleClear() {
 > - 点 `.rail-signout`：断 `/api/auth/logout` 发过、`auth_token` 与 `session_id` 两个键都不在 localStorage、`.auth-screen` 回来。
 > ② **`handleSignOut` 里补一行 `authError.value = ''`**。`clearAuth()`（`useAuth.js:100-104`）不清 `authError`，而 `useAuth.js` 不在本 Task 的 Files 里——但 App.vue 在，一行就在范围内。（量级我按代码重算过：登出时 `<AuthPanel>` 因 `v-if` 换分支整棵重挂，`mode`/`form` 是组件局部状态 → 空表单的「请填写账号」会压住后端文案，可见窗口只有"下一个人把账号密码填到本地合法、还没点提交"那一刻，所以是 Minor 而非数据问题。）
 > ③ **`handleAuth` 里给 `await enterWorkspace()` 包 `try`**：登录已经成功（`user` 已置、令牌已落）之后若三拍里任何一拍 reject，用户停在**空白工作区**且无任何提示，只在控制台留一条 unhandled rejection。`refresh/hydrate/restore` 各自内部有 catch 所以现实概率低，但兜一句 `error.value = '工作台加载失败，请刷新重试'` 比让它裸着便宜。
+>
+> **2026-10-07 再修订（复评 round 1 对本工单的三处纠偏，原文按"留痕不覆盖"照旧不改）**：修正轮 1 六条全部 ADDRESSED、评审五段变异复现一致，但复评同时指出**我这张工单本身**写错三处——
+> ⑴ **判据 3 里"消息区为空"这半在 DOM 层不可能实现**：`App.vue:160-164` 是 `main v-if="!isLoggedIn"` / `div v-else class="app-shell"` 的整屏二选一，`clearAuth()` 置 `user = null` 之后 `.app-shell` 连同 DocumentPanel/MessageList **整棵卸载**，屏上没有残留可断。实施者用 `.queue-item` 长度 0 顶了这个位置（`App.auth-gate.test.js:173`），而复评实测它是**空断言**（那个场景从头到尾没有队列项）。
+> ⑵ **变异③那个"或 `documents.value = []`"不可满足**：三句全摘，三条判据仍 `3 passed`（复评 A-10），因为不可观测正是上面那条。所以"摘 `clearSession()`"那一半有牙（红在 `:166`），"摘 documents/queue/messages"那一半今天没牙。
+> ⑶ **工单把模块级 ref 的泄漏面写宽了**：`useDocuments.js:14-16`、`useChat.js:15-17`、`useChunkSelection.js:28-30` 的 ref 都在**工厂函数体内**（每次 `mount(App)` 全新一份，`useChat.js:6` 只有 `let seq = 0` 是模块级且无害）；真正跨用例共享的只有 `useAuth.js:15-17` 的 `user/authError/authBusy`、`useSession.js:20` 的 `sessionId`、`api/client.js` 的 `authToken`。实施者**没有照抄我这个错前提**，它测文件头 `:16-18` 的清单才是事实。
+> **第三条路由复评给出、成本约 12 行**：`wrapper.vm.documents / .queue / .messages` 经 VTU 的 setupState 通道读得到（前置断言 `{documents:1, queue:0, messages:2}` 通过，摘三句后 `toEqual` 归零当场红）。这**不违反"不 mock composable"**——读的是组件实例，不是 composable 模块。**处置**：这一条与那条 vacuous 断言的收口一起交给 **Task 8 的前置步骤**（见 Task 8 Step 1 处的修订），不在 Task 7 再开一轮。
 
 - [ ] **Step 8: CSS（末尾追加，不动 L-1/L-2 那两块）**
 
@@ -3700,6 +3706,22 @@ cd frontend && npm run build
 | `npm run build` | exit 0 | exit 0 | — |
 
 **`0 skipped` 是硬要求**：`login_token()` 在 `DEFAULT_USER_PASSWORD` 为空时会 skip 掉两条 live 测——那意味着 Step 2 之后整段验收都在瞎跑。先 `grep -c "^DEFAULT_USER_PASSWORD=" backend/.env` 确认是 1（**只数键，不打印值**）。
+
+> **2026-10-07 修订（Task 7 已落地，`npm test` 那一行按实测重钉）**：表里的"84 → 约 112 / 11 文件"是计划期的预测，Task 6/7 都收口了，真实基线是 **117 passed / 13 文件**（`79902a2` 上控制器亲跑，`npm run build` exit 0）。涨的来源照旧分两段：T6 +14（96→98 那两轮含修正轮）、T7 +19（含修正轮新建的 `App.auth-gate.test.js` 3 条）。
+>
+> **并且 Step 1 之前先做一件补网**（Task 7 修正轮 1 的复评给出的、成本约 12 行，见 Task 7 Step 7 后那条"再修订"）：`frontend/tests/App.auth-gate.test.js` 的判据 3 今天**钉不住"登出后 `documents` / `queue` / `messages` 清空"**这三句——登出时 `.app-shell` 整棵卸载，DOM 上没有残留可断（复评 A-10：三句全摘，`3 passed` 纹丝不动）。
+> - **做法**：`wrapper.vm.documents / .queue / .messages` 走 VTU 的 setupState 通道读得到（复评实测前置断言 `{documents:1, queue:0, messages:2}` 通过，摘三句后 `toEqual` 归零当场红）。**并进现有判据 3，不要新增 `it()`**（门禁因此仍是 117 / 13，别为这个数字改动别的文件）；这不违反"不 mock composable"——读的是组件实例。
+> - **顺带收掉两条空断言**：① 判据 3 里 `expect(app.findAll('.queue-item')).toHaveLength(0)`（`:173`）那个场景从头到尾没有队列项，是**永久绿**——要么先在测里造一个队列项再断它归零，要么删掉这句并在注释里写清"DOM 层观测不到"；② `AuthPanel.test.js:138` 的 `expect(submit.attributes('disabled')).toBeUndefined()` 在"整条 `:disabled` 被删"方向上永久绿（复评 A-3），这是**测法固有的局限、不是缺陷**，登记在台账即可，不要为它改生产代码。
+> - **必须自证**：补完之后跑一次"三句全摘"的变异 → 判据 3 必须红；还原后 117 / 13 全绿。真实输出进报告。
+>
+> **撤销 Task 7 的 X-4（两处 `try { await enterWorkspace() }`），并把它改判成"三拍各自已经报告失败"**：复评判断题 3 质疑那句兜底"没有实际防护价值"，我按它的提醒直查了三拍（这是控制器本轮第二次被自己的工单打脸，前一次是 I-2 的模块级 ref 清单）：
+> - `refresh()`（`useDocuments.js:21-28`）是 `try/catch` 写 `listError.value = err.message`，**不上抛**；
+> - `restore()`（`useChat.js:36-56`）`catch` 写 `error.value = err.message` 后 **`return false`**，不上抛；
+> - `hydrate()`（`useChunkSelection.js:23-42`）`catch` 里 **`return false`**，不上抛。
+>
+> 所以 `enterWorkspace()` 里三句 `await` **一句都不会 reject**，X-4 那两处 `try/catch` 是**死代码**；而原评审 M-5 担心的"停在空白工作区且无任何提示"也不成立——三拍失败时 `listError` / `error` 横幅本来就在报各自的文案。**处置**：本 Step 把 `App.vue` 那两处恢复成裸的 `await enterWorkspace()`（`onMounted` 与 `handleAuth` 各一处），注释里留一句"三拍各自吞错并写自己的横幅，所以这里不兜"，并按"留痕不覆盖"在 Task 7 那条 ③ 的原文下面认一次误判。**不要**为了让 `error.value` 那句文案"更统一"而保留死代码。
+>
+> **登记给终审、本轮不改的一条**：复评判 `handleSignOut` 里的 `clearSelection()` 多余（因为它在空选中时早返回、不 persist，且 `hydrate()` 已清过 localStorage）——这只覆盖 **hydrate 成功**那条路径。`hydrate()` 在 `listChunks` 抛错时是**直接 `return false`、既不 persist 也不删键**（`useChunkSelection.js:33-42`），此时 `clearSelection()` 正是唯一会把跨账号残留的 `selected_parent_ids` 从 localStorage 删掉的一句。**所以今天它承重，别删**；真正该补的判据是"hydrate 失败路径不许把上一个账号的选中项留在 localStorage"（复评把它判为"今天不可达的潜伏缺陷"，我同意这个定级）。
 
 - [ ] **Step 2: 重启我自起的 uvicorn，让新后端代码与 lifespan 迁移上线**
 
