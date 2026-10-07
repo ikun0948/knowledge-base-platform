@@ -46,6 +46,14 @@ class FakeAuthDB:
         self.tokens[token_hash] = (user_id, expires_at)
 
     def get_user_by_token(self, token_hash):
+        """返回 `self.users` 里那个对象**本身**（别名，不是快照）。
+
+        真库交出的不是这一个对象，而是会话已关闭的 detached 实例
+        （core/database.py:582-596），属性在取出那一刻冻住，所以端点改完必须回读。
+        fake 给的是别名，写进去就地生效 ⇒ `api/auth.py` 的 `_reload` 在这里观察不到
+        （把它退回成直接用 `user`，本文件 46 条判据全绿，见修正轮 1 报告的变异 M4）。
+        本轮按裁定不改这个语义，真判据落在阶段二 Task 12 的 live/真服务侧。
+        """
         entry = self.tokens.get(token_hash)
         if entry is None or entry[1] <= datetime.now():
             return None
@@ -74,6 +82,8 @@ class FakeAuthDB:
         return 1
 
     def get_user_by_id(self, user_id):
+        # 别名：返回的就是 get_user_by_token 交出去的那个对象本身（不是快照），
+        # 所以 `_reload` 在这里观察不到——两种形态的差别见 get_user_by_token 的 docstring。
         return next((u for u in self.users if u.id == user_id), None)
 
     def list_user_models(self, user_id):
@@ -378,20 +388,37 @@ def test_profile_update_changes_nickname_and_avatar():
     assert client.put("/api/auth/me", json={}, headers=headers).status_code == 422
     # 昵称上界 50 对齐 users.nickname 的 String(50)，超了必须 422 而不是被 MySQL 切掉
     assert client.put("/api/auth/me", json={"nickname": "字" * 51}, headers=headers).status_code == 422
+    # 反方向（F3 补网）：上面只钉了"只传头像不清昵称"，这一句钉"只传昵称不清头像"。
+    # fake 侧写丢 `if avatar is not None` 会被 UserOut.avatar: str 的构造校验炸成 500 而间接红；
+    # 真库侧（core/database.py 的 fields 只收非 None）写丢则是**无声**把头像列刷掉，
+    # 而现在没有任何判据走这条路 ⇒ 这一格写丢时本轮之前的 43 条判据全绿。这里先把头像立成 🤖 再只传昵称。
+    assert client.put("/api/auth/me", json={"avatar": "🤖"}, headers=headers).status_code == 200
+    mirrored = client.put("/api/auth/me", json={"nickname": "小红"}, headers=headers).json()["user"]
+    assert mirrored["nickname"] == "小红"
+    assert mirrored["avatar"] == "🤖", "只传昵称把头像那一格洗掉了"
 
 
 def test_password_change_requires_the_old_one():
     client, db, headers = _login_llm_client()
+    # F4：原来是 `db.users[0].password_hash != "brand-new-pass"`（brief 逐字那句）——新哈希
+    # 恒不等于明文，这条排得掉的只有"存了明文"，排不掉"根本没写库/写错了列"。改成先存旧哈希再判三件事。
+    before_hash = db.users[0].password_hash
     assert client.put("/api/auth/me/password", json={"old_password": "wrong-pass",
                                                      "new_password": "brand-new-pass"},
                       headers=headers).status_code == 401
+    assert db.users[0].password_hash == before_hash, "旧口令错了也不许写库：这一格被改了就是先写后判"
     assert client.put("/api/auth/me/password", json={"old_password": "hunter2-pass",
                                                      "new_password": "brand-new-pass"},
                       headers=headers).status_code == 204
+    after_hash = db.users[0].password_hash
+    assert after_hash != before_hash, "哈希没变：这一步根本没写进库"
+    assert after_hash != "brand-new-pass", "库里存的是明文"
+    fresh = client.post("/api/auth/login", json={"identifier": "a@b.com",
+                                                 "password": "brand-new-pass"})
+    assert fresh.status_code == 200
+    assert fresh.json()["token"], "新口令登录没交出令牌"
     assert client.post("/api/auth/login", json={"identifier": "a@b.com",
-                                                 "password": "brand-new-pass"}).status_code == 200
-    # 库里换的是哈希，且新哈希与旧的不是同一个串（盐必须重造）
-    assert db.users[0].password_hash != "brand-new-pass"
+                                                "password": "hunter2-pass"}).status_code == 401
 
 
 def test_model_list_add_default_and_delete():
@@ -447,3 +474,49 @@ def test_half_a_config_is_not_configured_even_when_the_key_is_there():
     assert user["api_key_masked"] == "sk-****7890"
     assert user["llm_base_url"] == ""
     assert user["llm_configured"] is False
+
+
+# ---------- 阶段二 Task 2 修正轮 1（F1 / F2）：三处空白守卫各补一条判据 ----------
+
+
+def test_blank_api_key_is_422_and_writes_neither_column():
+    """八格空白过得了 `LlmIn.api_key` 的 `min_length=8`——那个长度是在 **strip 之前**量的。
+
+    没有守卫时的形状是最难查的那种谎：响应 200「保存成功」，而 `llm_configured` 是 False、
+    `api_key_masked` 是 `""`（key 被 `.strip()` 成空串写进了库）。用户以为配好了，Task 7 的
+    409 门禁再把他挡在门外，而设置页说不出任何原因。所以这条既判 422，也判"两格根本没被写"。
+    """
+    client, db, headers = _login_llm_client()
+    res = client.put("/api/auth/me/llm", json={"api_key": "        ",
+                                               "base_url": "https://vLLM.internal/v1"},
+                     headers=headers)
+    assert res.status_code == 422
+    assert res.json() == {"detail": "api_key 不能是空白"}
+    # 拦在写库之前：两格都还是注册时的初值 None，不是被写成 ""
+    assert db.users[0].api_key is None, "空白的 api_key 被写进了库"
+    assert db.users[0].base_url is None, "路由跟着一起被写了"
+    user = client.get("/api/auth/me", headers=headers).json()["user"]
+    assert user["llm_configured"] is False
+    assert user["api_key_masked"] == ""
+
+
+def test_whitespace_nickname_is_422_at_the_endpoint_not_the_schema():
+    """`{"nickname": ""}` 由 `min_length=1` 挡在 schema 层，**走不到**端点那句空白守卫，
+    所以那句 422 从来没有判据覆盖过。空白但非空的串才是它的入口。"""
+    client, db, headers = _login_llm_client()
+    res = client.put("/api/auth/me", json={"nickname": "   "}, headers=headers)
+    assert res.status_code == 422
+    assert res.json() == {"detail": "昵称不能是空白"}
+    assert db.users[0].nickname == "a", "昵称被洗成了空串"
+
+
+def test_whitespace_model_name_is_422_and_stays_out_of_the_list():
+    """同上：`test_model_name_length_matches_the_column_and_chat_request` 那条用的是 `{"name": ""}`，
+    长度 0，被 pydantic 拦下，端点那句「模型名不能是空白」拔掉它、本轮之前的 43 条判据一条都不会红。这条补它的入口。"""
+    client, _, headers = _login_llm_client()
+    res = client.post("/api/auth/me/models", json={"name": "   "}, headers=headers)
+    assert res.status_code == 422
+    assert res.json() == {"detail": "模型名不能是空白"}
+    # 名单必须是空的：空白名一旦进了 user_models，它就是默认模型，问答侧会拿它去打下游
+    body = client.get("/api/auth/me", headers=headers).json()["user"]
+    assert body["models"] == [] and body["default_model"] is None

@@ -71,7 +71,23 @@ def _user_out(db, user) -> UserOut:
 
 
 def _reload(db, user):
-    """改完必须重新读一行：`user` 是 get_current_user 早先取出的快照，字段还是旧的。"""
+    """改完必须重新读一行：`user` 是 get_current_user 早先取出的快照，字段还是旧的。
+
+    记一笔账（F5，评审 I-2）：**这一句只在真库侧有意义，离线判据抓不到它被删掉。**
+    - 真库：`deps.py:50` 把 `get_user_by_token` 的返回值直接交出，而它在
+      `core/database.py:582-596` 里是 `session.close()` 之后交出的 **detached 实例**——
+      属性在读取那一刻冻住，写完不回读就还是旧值，所以必须重读。
+    - 离线 fake：`tests/test_api_auth.py` 的 `FakeAuthDB.get_user_by_token` 与
+      `get_user_by_id` 返回的是**同一个 SimpleNamespace 对象的别名**，写进去就地生效，
+      重读与不重读拿到的是同一个东西 ⇒ 把 `update_me` 与 `update_llm` 两处的
+      `_reload(db, user)` 退回成 `user`，离线全量判据一条都不会红（实测见修正轮 1 报告的变异 M4）。
+
+    本轮按控制者裁定**不动 fake 的返回语义**（改成快照会连带推倒
+    `test_half_a_config_is_not_configured_even_when_the_key_is_there`，它正靠 poke
+    `db.users[0]` + 不重读这条路）。真判据的落点是**阶段二 Task 12 的 live/真服务侧**：
+    断言 `PUT /me/llm` 的**响应体本身**里 `llm_configured` 已经是 True（不追打 `GET /me`），
+    那一格只有真库给出口。在那之前，别把这里当多余代码顺手删。
+    """
     return db.get_user_by_id(user.id) or user
 
 
@@ -150,6 +166,13 @@ def update_password(payload: PasswordIn, db=Depends(get_db), user=Depends(get_cu
 
 @router.put("/me/llm", response_model=MeOut)
 def update_llm(payload: LlmIn, db=Depends(get_db), user=Depends(get_current_user)):
+    # 与上面昵称、下面模型名同层同风格的一条规矩：`LlmIn.api_key` 的 min_length=8 量的是
+    # **strip 之前**的长度，八格空白过得了 schema，进这里却被 `.strip()` 成 ""——
+    # 那一串会直接写进 users.api_key，响应回 200「保存成功」而 llm_configured 是 False、
+    # 掩码是空串，用户以为配好了，Task 7 的 409 门禁再把他挡在门外且界面说不出原因。
+    # 空白必须在写库之前拦住（min_length 的 8 是与上游最小 key 长度对齐的口径，不动它）。
+    if not payload.api_key.strip():
+        raise HTTPException(status_code=422, detail="api_key 不能是空白")
     db.update_user_llm(user.id, payload.api_key.strip(), payload.base_url.strip())
     return MeOut(user=_user_out(db, _reload(db, user)))
 
