@@ -1098,6 +1098,11 @@ Expected: 全绿（`-m "not migration"` 是默认；`test_chroma_data.py` 整组
 > ③ Step 1 那条自愈判据的 docstring 说「第二遍的 `get` 看到已戳就**零写**」，与它自己的断言 `second["vectors_stamped"] == 3` 相反。**以断言为准**：补戳清单每次开机都重算，第二遍把擦掉的戳**重新补上 3 条**，这才是 advisory ① 要的自愈；"零写"只发生在 `stamp_vector_owner` 被重复调用而 metadata 未变时（由 `test_stamp_merges_existing_metadata_and_skips_stamped` 的最后一条断言钉住）。
 > ④ Step 3 的 `FakeConn` 分支前缀照抄 `SELECT C.VECTOR_ID FROM` 会**永远不命中**：新 SQL 选了 `c.vector_id, d.user_id` 两列，整条串是 `SELECT c.vector_id, d.user_id FROM parent_chunks c …`，而 `head` 是**整条 SQL** 大写化后的串（不是列清单），`FROM` 前隔着 `, D.USER_ID`，于是 `startswith("SELECT C.VECTOR_ID FROM")` 恒假。实施时前缀放宽为 `SELECT C.VECTOR_ID`，并按 WHERE 里的条件（`D.USER_ID IS NOT NULL` 是否出现）决定收哪批行——这是让「生产码把 `IS NOT NULL` 写回 `IS NULL` 必须跑红」成立的必要条件。严重度交本轮评审裁定。
 
+> **修订（2026-10-07，Task 3 评审修正轮 1）**，两处，均由任务评审查出（I-1 为 Important）：
+> ① **Step 3 给的 `INSERT INTO user_models (…, is_default) VALUES (:uid, :n, 1)` 里 `is_default` 写死 1 是错的**，改为与 `core/database.py` 的 `add_user_model` 同口径：先探本用户的名单是否为空，空则 `is_default` 取 1、非空取 0（参数化成 `:d`，SQL 里不再出现字面量）。理由：本仓另两个写入点（`add_user_model` 的 `is_first`、`set_default_user_model` 的先清后立）都在维持"一个用户至多一枚默认"，`seed_default_llm` 是唯一绕开它的写入口；可达路径是"`.env` 无 key 时用户先自行加模型 → 之后补 `.env` 重启"，结果名单里两枚默认，读侧 `list_user_models`（按 id 升序）与 Task 7 的默认解析各自挑一枚。判据补一条："名单里已有一枚默认时，seed 只抄 key、不再立第二个默认"。**Task 12 的真服务验收要顺带确认默认用户名单里 `is_default=True` 恰好一枚。**
+> ② **Step 1 的 `FakeConn` 补戳分支回的主人恒为 1，等于那列没牙**：生产码把 `vectors_needing_owner` 的 `r[1]` 写成恒 `1` 时四道门全绿，而在多用户真库上那是把别人的向量戳成默认用户的越权归属。改为按 `doc_id` 回不同主人（`100 + doc_id`），并在顺序判据里断言父块两枚拿到**不同**的 `user_id`；凡断言 `"user_id": "1"` 处按新映射改准。
+> 另：`FakeConn` 的补戳分支加一句指名道姓的守卫（既读不出 `D.USER_ID IS NOT NULL` 也读不出 `D.USER_ID IS NULL` 时 `raise AssertionError`），让等价重写红得有名有姓；文件顶 docstring 与 `:91` 那句 `# SQL 里 is_default 写死 1` 同步改对。
+
 - [ ] **Step 6: 提交**
 
 ```bash
