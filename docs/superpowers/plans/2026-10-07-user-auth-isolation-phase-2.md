@@ -364,9 +364,13 @@ def test_user_settings_round_trip(db, probe_user):
 
 def test_empty_profile_update_touches_nothing(db, probe_user):
     """两个字段都没传就该零副作用，而不是把昵称写成 NULL。"""
+    before = db.get_user_by_id(probe_user.id).nickname
+    assert before, "对照失去输入：探针账号昵称已是空值，这条绿不说明任何事"
     assert db.update_user_profile(probe_user.id) == 0
-    assert db.get_user_by_id(probe_user.id).nickname == "探针账号"
+    assert db.get_user_by_id(probe_user.id).nickname == before
 ```
+
+> **修订（2026-10-07 预检，覆盖本节原先写的 `== "探针账号"`）**：`probe_user` 是 `scope="module"`（`test_live_database.py:30`），两条新判据都追加在文件末尾 ⇒ 按定义顺序先跑 `test_user_settings_round_trip`，它已经把同一个账号的 nickname 改成 `改名了`。写死 `"探针账号"` 会**因为上一轮跑过而红**，且红得像"空更新把昵称洗掉了"——正好是本条要测的那个 bug 的表征。改成"读回改前的值再对照"：与顺序无关，仍然咬得住"写成 NULL"。
 
 同文件 `_drop_probe_account`（`:380-395`）的清理补一张表——`user_models` 对 `users` 有外键，顺序照旧"先子后父"：
 
@@ -379,6 +383,8 @@ def test_empty_profile_update_touches_nothing(db, probe_user):
         session.query(UserModel).filter(UserModel.user_id == user_id).delete()
         session.query(User).filter(User.id == user_id).delete()
 ```
+
+> 顺带改那句 docstring：`test_live_database.py:381` 现在写的是「先 auth_tokens 再 users」与「**这两张表**没有基线计数钉着」——三张表了。留着不改，下一个人对着三行删除读"这两张表"会以为多出来那行是别人漏删的孤儿清理。
 
 - [ ] **Step 7: 跑 live 组**
 
