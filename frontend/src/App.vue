@@ -155,7 +155,7 @@ onBeforeUnmount(() => setUnauthorizedHandler(null))
 // 渲染成乱码方块（阶段一顺延清单 M-4 说的就是这类半字符）。
 const railAvatar = computed(() => {
   const avatar = user.value?.avatar
-  if (avatar && avatar !== 'auto') return Array.from(avatar)[0] ?? '我'
+  if (avatar && avatar !== 'auto') return Array.from(avatar)[0]
   const name = (user.value?.nickname || user.value?.identifier || '').trim()
   return name ? Array.from(name)[0].toUpperCase() : '我'
 })
