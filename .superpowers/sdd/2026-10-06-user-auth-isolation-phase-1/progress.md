@@ -336,3 +336,43 @@
 - 红过的地方与为什么：Step 4 三条假红全在探针侧（欢迎占位、dev 模块路径、`.auth-screen` padding 钳制），一次自伤（`const URL` 遮蔽），零产品回归。
 - 阶段一 8 个 Task 全部收口。**下一步 = 全分支终审**（BASE 要按 `git log` 重新钉，别沿用旧口径），终审一次性分诊的顺延清单：M-4 头像与 `.rail-name` 退回不一致、M-6 登出无重入保护、M-9 两条 grep 门禁落成测试、hydrate 失败路径的本地键判据、`AuthPanel.test.js:138` 永久绿（测法固有局限）、`clearSelection()` 今天承重别删、**新增**：live 测不留令牌、`.queue-item` 那类"卸载后不可观测"的判据一律走 `wrapper.vm`。
 - **阶段二入口已核**：需求 ④⑥⑦（api_key 配置 / 模型下拉 / 未配 key 不能问）在阶段一**有意不存在**——设置按钮 `disabled` + title 原文「设置项将在下一阶段开放」，对话走 `.env` 那把平台 key，界面上没有 409 这条路。
+
+## 全分支终审（控制器 2026-10-07）
+
+**BASE 按 `git log` 重钉为 `e19505a`**（"坑 9 模型名收进 Config"，认证改造开工前最后一笔），HEAD `3344767`：**50 个 commit、46 个代码文件、+3487/−255**（`git diff --shortstat e19505a..HEAD -- backend/ frontend/`）。上一轮终审用的 `ebc1994..HEAD` 口径作废。code-only diff 落盘 `review-e19505a..3344767-code.diff`（4894 行，不含 docs/ledger）。
+
+派单个只读终审代理（`general-purpose`，后台）。约束写进工单：不许改文件/git 写操作、不许起 uvicorn、一次只跑一个 pytest、绝不跑 `-m migration`、`-m live` 必然 2 skip 属预期不许报、不打印 `.env` 值、不碰共享任务列表、不派嵌套代理、报告增量落盘到 `final-review-e19505a..3344767.md`（**盘上 113 行、七块齐全**）。
+
+### 裁决：Approved，合入前 0 必修
+
+代理自报复跑：后端 `-m "not live and not migration"` **239 passed / 22 deselected**、前端 **117/13**、`build` exit 0。239 与本轮基线**自洽**：261 收集 − live 20（18 过 + 2 skip）− migration 2 = 239。
+
+**四条承重断言我直查 HEAD 复核，全部成立**（不是照抄代理）：
+
+1. **历史接口只上登录门、无 user 过滤**属实——`api/history.py:25-48` 两枚端点都只 `Depends(get_current_user)`，体内不传 `user_id`。这不是漏判：该文件 `:28-33` 的 docstring 自己写明边界，且与 **spec 2.2 勘误**（`specs/…-design.md:79`：`chat_history.user_id` 的写入与读取过滤归阶段二，理由是 `RAGSystem` 四方法 + 34 处调用点要动两轮）和 **spec 阶段二清单**（`:357`）三处口径一致。风险面：跨用户读写历史要猜中后端 `uuid4()`（`api/auth.py:42`）铸造的 id。
+2. **迁移的崩溃窗口**属实——`core/migrations.py:184-189`：`pending` 在连接内读、`backfill_documents` 自带 commit、`stamp_vector_owner` 在连接外跑。MySQL 已归户而 Chroma 未补戳之间挂掉，下次开机 `vector_ids_without_owner` 拿到空集 ⇒ **这批向量永远补不上戳**。
+3. **但 2 在阶段一构不成越权面**，所以代理把它降为 advisory 是对的——`core/vector_store.py:96-101` 读侧 `create_retriever` 的 filter **只有 `parent_id: {$in: …}`**，没有 `user_id` 那半；允许池来自 DB 行（`documents` 已按 user 过滤），所以未戳主人的向量筛不出来也漏不出去。真正受影响的是阶段二把 filter 收窄成 `$and` 之后。
+4. **`test_observability.py` 存在**（2811 字节，本轮没造它），代理说 M-9 那条 grep 式门禁其实是 `ast.parse` 找 `print`，不是字符串匹配——**我上一轮记进顺延清单的"M-9 两条 grep 门禁落成测试"是误称**，此处更正。
+
+### 挂账八条逐条裁定（代理给结论，我核了其中会改变动作的三条）
+
+| 项 | 裁定 | 关键证据 |
+|---|---|---|
+| M-4 头像/昵称口径不对称 | 推阶段二 | `App.vue:95-98` 取首字母大写 vs `:187` 整串；emoji 会切半个代理对成乱码框，纯外观，且头像选择器本就随 `SettingsModal` 在阶段二 |
+| M-6 登出重入 | 非必修 | `App.vue:73-91` 无忙态门；后端 `delete_token` 幂等（`database.py:574-586`），连点最多重复作废**本人**令牌，`abortStream()` 已在最前 |
+| M-9 grep 门禁 | 现状可接受 | 见上面第 4 条更正 |
+| hydrate 失败路径缺 localStorage 判据 | **真实缺口，Minor** | `App.vue:39-41` 三拍吞错；只影响选中态刷新持久性，越权由服务端门兜 |
+| `AuthPanel.test.js:138` 恒绿 | 降级为"冗余而非假绿" | 与 `:137` 同源 `fieldError==''`；塞回形状校验时 `:124/:138` 会红，真正的牙在 `:139-141`（`default@local` 仍 emit） |
+| `clearSelection()` 承重 | **确认，禁删** | `App.vue:88` 是唯一把 `selected_parent_ids` 回写 `'[]'` 的地方，被 `App.auth-gate.test.js:178` 钉死 |
+| live 测留令牌行 | 非必修（卫生） | 库只存 SHA-256（`security.py:43`），原文只在测进程内存、不落盘不打印；残留行属运营者自己账号 |
+| 不可见状态走 `wrapper.vm` | 已正确落地，无反向误用 | 归零断言走 `app.vm.*`（`App.auth-gate.test.js:188-190`），可观测态仍走 DOM（`:123-125`/`:196`） |
+
+### 代理自报的未覆盖面（照实留档，别当已验）
+
+未实跑 `-m migration` 与 `-m live`（真库 ALTER/补戳、真 HTTP 流式只由单测 + `gate1/2/3` 落盘证据背书）；未核真实 `.env` 是否设了 `DEFAULT_USER_PASSWORD`（禁打印，取 live 门禁为据）；spec 7.3 的浏览器判据未复跑（但 Task 8 Step 4 的 **32 条**是我本轮刚实跑的，等价覆盖）；`register` 撞 unique→409 只由假库抛 `IntegrityError` 验，真 MySQL 并发注册竞态未演；未逐份通读 8 个 per-task 评审文件。
+
+### 由此定的动作
+
+- **0 必修 ⇒ 不派集中修复轮**。五条 advisory（迁移补戳窗口、令牌过期只弹横幅不自动登出 `client.js:55`、hydrate 失败路径判据、live 测令牌无界增长、`test_observability.py:16-17` 扫描目录写死）全部进**阶段二开工单**，不在阶段一补。
+- 工作树复核干净（`git status --short` 空）。
+- **下一步 = `superpowers:finishing-a-development-branch`**，以及交付时那两句：建议轮换 `DEFAULT_USER_PASSWORD`（明文在 `0b22116` 之前进过 history）；阶段一不解决"未配 key 不能问"。
