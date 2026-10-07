@@ -234,3 +234,27 @@
 - **第二个复评代理死亡与重派**：首个复评代理 `ageneral-purpose-434adec37c020661` 在 **24 次工具调用 / 363 秒 / 943k tokens** 后返回 `failed: Sorry, something went wrong`。**增量写盘的纪律又一次保住了局面**：报告骨架已在盘上（含复核对象、门禁基线与结论表框架），且 `git status --porcelain` 为空——它没来得及做变异，所以没有残留。重派 `ageneral-purpose-65000d87a8db6dd7`，工单里额外写死五条 efficiency 要求（沿用骨架别覆盖、`task-7-report.md` 970 行只读 `# 修正轮 1` 那一节、只跑聚焦 vitest、变异前先备份到 `%TEMP%` 且还原后附 `git status` 证据、结尾只回 200 字）。
 - **Task 8 brief 新鲜度已核**（不必重抽）：与计划文 Task 8 段逐行 diff，**共享部分 0 处差异**，旧副本只是尾部多带了 Self-Review 一节（445 vs 436 行）。计划文本轮五处修订全在 Task 7 段内，不影响 Task 8 的读法。派发前若无新的计划文回写，这份 brief 可直接用。
 - **模型选择偏差照记**：修正轮与两次复评派发都只能继承会话模型（本机不暴露可选模型 id）。
+
+## Task 7 复评 round 1 与收口（控制器 2026-10-07）
+
+- 复评（`ageneral-purpose-65000d87a8db6dd7`，69 次工具调用 / 965 秒）报告落盘 `task-7-rereview-round1.md`（278 行），裁定 **Approved：六条 X-1 / I-1 / I-2 / X-3 / X-4 / X-5 全部 ADDRESSED**。它**亲自复现了我要求的五段变异**且数字与实施者自报逐字一致（A-1 `1 failed|7 passed` 红在 `AuthPanel.test.js:137`、A-2 `3 failed|5 passed`、A-5/A-6/A-7 三条各红一次），另自加**四枪**变异（A-3 锯整条 `:disabled`、A-8 摘 `clearAuth` 的 `removeItem`、A-9 摘 `authError` 清理、A-10 三句全摘 + `vm` 通道探针），外加一次 A-11 的 `--sequence.shuffle` 置换（那不是变异，是顺序无关性证明）。**两次派发对比**：第一个复评代理 24 轮死亡，第二个用 69 轮跑完——工单里那五条 efficiency 要求（定点读文件、只读报告那一节、只跑聚焦 vitest、变异先备份、结尾只回 200 字）**实测有效**。
+- **X-1 的升级理由被独立证实，而且证据比我的更硬**：本机 `backend/.env` 的 `DEFAULT_USER_PASSWORD` 非空（我只数了键与"有没有值"，**没有打印口令**），所以 `default@local` 的 `password_hash` 是**可用哈希**——"这个账号今天真能登进界面"，而不是"表里有这一行"。
+- **但复评在这条上给的两句"证据"是假的，我直查后按实改写（结论仍成立）**：它写 `grep default@local backend/tests/` → **0 命中**，实测是 **6 处**（`test_live_database.py:32/219/324` 的注释、`test_migrations.py:242` 断常量本身）；它写"只有 `conftest.py:149` 的 `login_as` 走注册路径"，而**全仓 `grep -rn login_as backend/` 零命中**——这个函数不存在，行号也不存在。核实后的事实是：**没有任何一条后端测用 `default@local` 登录**（live 测一律 `create_user(identifier=f"{tag}@local")` 现造账号，`test_live_database.py:41`），所以"这条缺陷在后端测试层面也没有覆盖"成立，但**要靠这句成立，不是靠它那两句**。**教训回到我自己**：复评的数字我一向要求"贴命令输出"，这一次它给的是 prose 引证，我就照着写进了台账——**prose 引证也要抽查**，尤其当我打算把它抄进永久记录时。
+- **更正一条实施者的自报（台账级）**：报告轮 1.9 第 2 条"判据 3 只钉住 `session_id` 半边、`auth_token` 没牙"**不成立，应撤回**。复评 A-8：摘 `useAuth.js:101` 的 `localStorage.removeItem(TOKEN_KEY)` → 红在 `App.auth-gate.test.js:165`。**两键各有独立判据，spec 5.3 的"一起清"是完备的。**
+- **控制器误判两处，都按"留痕不覆盖"在计划文里认了**：
+  ① **X-4 撤销**。复评判断题 3 质疑那两处 `try/catch`"没有实际防护价值"，我按它的提醒直查三拍：`useDocuments.js:25-27` / `useChat.js:52-55` / `useChunkSelection.js:53-56` **三句全吞、没有一句上抛**，所以 `enterWorkspace()` 不可能 reject、那两处是**死代码**，而原评审 M-5 担心的"停在空白工作区且无任何提示"同样不成立（三条横幅各报各的）。这条误判的根源和评审 M-5 那句"现实概率低"是同一处——**我们都没去读那三个函数**。撤销动作与恢复写法已写进 Task 8 Step 1 的修订（提交 `44f4f72`）。
+  ② **工单 I-2 的三处口径错**（判据 3 的"消息区为空"在 DOM 层不可实现、变异③那个"或 `documents.value = []`"不可满足、模块级 ref 清单写宽——`useDocuments`/`useChat`/`useChunkSelection` 的 ref 都在工厂函数体内）。实施者**没照抄我那个错前提**，它测文件头 `:16-18` 的清单才是事实；这条也说明**工单里的事实断言必须让执行方回读验证**，不能因为它给的是"建议"就默认它抄。
+- **复评给的第三条路（本轮不重开 round 2 的理由）**：登出清三个 ref 今天没判据，但 `wrapper.vm.documents/queue/messages` 走 VTU 的 setupState 通道读得到（复评 A-10 探针：前置 `{documents:1,queue:0,messages:2}` 通过、三句全摘当场红），约 12 行、不违"不 mock composable"。我把它连同那条 vacuous 的 `.queue-item` 断言一起排进 **Task 8 的前置补网**（Task 8 反正要跑双端门禁），而不是给 Task 7 开第二轮——**Approved 的轮次不为增量项重开**，这是本仓一贯口径。
+- **我和复评分歧的一处（交终审，本轮不改）**：它判 `handleSignOut` 里的 `clearSelection()` 多余。那只覆盖 **hydrate 成功**路径：`hydrate()` 在 `listChunks` 抛错时走 `:53-56`，**既不 `persist()`（成功路径的 `:52` 才有）也不删 localStorage 那把键**，此时 `clearSelection()` 是唯一能清掉跨账号 `selected_parent_ids` 的一句。**今天它承重，别删。** 复评自己列的那条"真正该钉的"（hydrate 失败路径不许把选中项留在本地）我同意它的定级（今天不可达的潜伏缺陷），已写进 Task 8 修订块。
+- **本机 git 现象记一笔（免得下一个人以为复评留了残留）**：它跑完后 `git status` 报 ` M frontend/src/App.vue`，但 `git diff` 空、`git diff --ignore-cr-at-eol` 空、工作树字节 = HEAD blob（只差 CRLF 换算，本仓 `core.autocrlf=true`）。`git update-index --refresh` 之后状态归干净——**是 stat 缓存过期，不是内容改动**。复评的还原是诚实的（它还给了四对 md5 与 `%TEMP%/sdd-rereview/` 备份位置）。
+- Task 7: **complete**（commits `0d7674b`/`3d9788d`/`af0878c` 实现 + `c8d8140`/`79902a2` 修正轮 1 + `388f1c5`/`35a6d9d`/`567e8e5`/`f57cd55`/`44f4f72` 文档；前端门禁 **117 passed / 13 files / 0 failed**、`npm run build` exit 0，两者我都亲跑；评审 Needs fixes 0C/2I/9M → 六条采纳全 ADDRESSED、复评 Approved；X-4 事后判为死代码、由 Task 8 撤销）
+- 增量顺延终审的清单（Task 7 期间攒下的，终审一次性分诊）：M-4 头像与 `.rail-name` 退回不一致、M-6 登出无重入保护、M-9 两条 grep 门禁落成测试、hydrate 失败路径的本地键判据、`AuthPanel.test.js:138` 那条永久绿断言（测法固有局限，登记即可）。
+
+## Task 8 开工前预飞（控制器 2026-10-07）
+
+- **进程现况**：`:8000` **没有任何监听**、`Get-CimInstance` 查 `python.exe` **零进程**——后端今天没在跑。所以 Step 2 的动作不是"重启"而是**首起**（端口空着起单实例是安全的，符合"只有一个 uvicorn"）；杀进程那半段今天用不上，但归属核对的纪律照旧。
+- **Vite dev server 已经在跑**：`:5173` LISTENING，PID 14712，命令行是 `frontend/node_modules/.bin/vite`——上一轮遗留。它是**每请求**转发到 :8000，后端起来之后无需重启它；后端没起来时浏览器打到的是 **502 空体**（本机既有现象），所以 Step 5 的 UI 判据必须**先确认 :8000 活着**再开始，否则每条判据都在测代理宕机。
+- **`DEFAULT_USER_PASSWORD` 非空**（`grep -c "^DEFAULT_USER_PASSWORD=..*" backend/.env` = 1，只数键没打印值）→ `login_token()` 不会 skip 那两条 live 测，**`0 skipped` 这条硬要求今天可达**。
+- **门禁基数已钉**：前端 **117 / 13**（我在 `79902a2` 亲跑），后端仍是 Task 5 收口的 **257 passed / 2 skipped / 2 deselected**（Task 6/7 一个后端文件都没动，`git diff --stat` 可证）。计划文 Step 1 表里"npm test 84 → 约 112 / 11"那一行已按实测改判（`f57cd55`）。
+- **task-8-brief 已在派发前重抽**（本轮计划文在 Task 8 段内新增修订块，旧快照作废）。
+- **模型选择偏差照记**：Task 8 派发同样继承会话模型，本机不暴露可选 id。
