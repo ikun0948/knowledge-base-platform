@@ -2,9 +2,7 @@ import logging
 
 import chromadb
 from langchain_chroma import Chroma
-from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_core.documents import Document
 
 logger = logging.getLogger("kb.vector_store")
@@ -37,16 +35,6 @@ class VectorStore:
             collection_name=COLLECTION_CHILD,
             embedding_function=self.embeddingd
         )
-
-        # 初始化大模型（上下文压缩用；模型名与 rag_system 的答题模型同源，坑 9）
-        self.llm = ChatOpenAI(
-            api_key=self.config.OPENAI_API_KEY,
-            base_url=self.config.OPENAI_BASE_URL,
-            model=self.config.LLM_MODEL,
-            temperature=0,
-        )
-
-        self.compressor = LLMChainExtractor.from_llm(self.llm)
 
     def collection_counts(self) -> dict:
         return {
@@ -90,35 +78,44 @@ class VectorStore:
         # print(parent_ids, child_ids)
         return parent_ids, child_ids
 
-    def create_retriever(self, parent_ids=None):
-        """创建子文档检索器(只负责初始召回)"""
-        search_kwargs = {"k": self.config.TOP_K * 2}
+    def create_retriever(self, parent_ids, user_id):
+        """创建子文档检索器（只负责初始召回）。
+
+        filter 里恒有 `user_id` 那一半：阶段一只补戳不收窄（`add_documents` 的 docstring
+        记的就是这笔账），阶段二把它接上。存的形态是字符串——`add_documents` 与迁移补戳
+        都写 `str(user_id)`，这里跟着 `str()` 才对得上（Chroma 的标量相等不做转换）。
+        单条件时不套 `$and`：`{user_id: ...}` 是阶段一就在用的形状，少一层是一处少一个错。
+        """
+        conditions = []
         if parent_ids:
             # 允许池按父块收窄。子块向量本身就带 parent_id 元数据（document_processor.py:81），
             # 所以换过滤字段不需要重新灌库——现存集合里的向量直接可用。
-            search_kwargs["filter"] = {
-                "parent_id": {"$in": list(parent_ids)}
-            }
+            conditions.append({"parent_id": {"$in": list(parent_ids)}})
+        conditions.append({"user_id": {"$in": [str(user_id)]}})
+        search_kwargs = {"k": self.config.TOP_K * 2,
+                         "filter": conditions[0] if len(conditions) == 1 else {"$and": conditions}}
         # 返回一个 LangChain 检索器对象
         return self.child_vectorstore.as_retriever(search_kwargs=search_kwargs)
 
-    def get_parent_documents(self, child_docs):
+    def get_parent_documents(self, child_docs, user_id):
         """根据子文档获取对应的父文档的parent_id"""
         parent_ids = set() # 集合去重，如: 多个子文档可能属于同一个父文档
         for doc in child_docs:
             if 'parent_id' in doc.metadata:
                 parent_ids.add(doc.metadata['parent_id'])
 
-        return self.get_parent_documents_by_metadata(list(parent_ids))
+        return self.get_parent_documents_by_metadata(list(parent_ids), user_id)
 
-    def get_parent_documents_by_metadata(self, parent_ids):
+    def get_parent_documents_by_metadata(self, parent_ids, user_id):
+        """回溯父块也带主人：子块已经按 user 筛过，理论上拿不到别人的 parent_id，
+        但"理论上"在检索链里不等于边界——这里的 $and 是那道真正的墙。"""
         if not parent_ids:
             return []
         parent_docs = []
         for parent_id in parent_ids:
             try:
                 results = self.parent_vectorstore.get(
-                    where={"parent_id": parent_id},
+                    where={"$and": [{"parent_id": parent_id}, {"user_id": str(user_id)}]},
                     include=["documents", "metadatas"],
                 )
                 if results["documents"]:

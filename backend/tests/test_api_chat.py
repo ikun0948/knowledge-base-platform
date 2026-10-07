@@ -2,9 +2,9 @@ import json
 
 from fastapi.testclient import TestClient
 
-from deps import get_db, get_rag_system
+from deps import get_config, get_db, get_rag_system
 from exceptions import LLMError, RetrievalError, StorageError
-from fakes import FakeOwnedParentsDB, FakeRAG, FakeUser, with_auth
+from fakes import FakeConfig, FakeOwnedParentsDB, FakeRAG, FakeUser, with_auth
 from main import create_app
 from schemas.common import Reference
 
@@ -15,6 +15,7 @@ def make_client(rag, db=None, user=None):
     # chat 端点现在真的会用到 db（越权白名单），漏这一格那 29 条会一起 500：
     # app.state.db 在测试里根本不存在
     app.dependency_overrides[get_db] = lambda: db or FakeOwnedParentsDB()
+    app.dependency_overrides[get_config] = lambda: FakeConfig()
     with_auth(app, user or FakeUser())
     return TestClient(app)
 
@@ -59,14 +60,17 @@ class SpyRAG(FakeRAG):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.calls = []
+        self.seen_user_ids = []
 
-    def chat_with_documents(self, question, parent_ids, session_id):
+    def chat_with_documents(self, ctx, question, parent_ids, session_id):
         self.calls.append(("rag", question, list(parent_ids), session_id))
-        return super().chat_with_documents(question, parent_ids, session_id)
+        self.seen_user_ids.append(ctx.user_id)
+        return super().chat_with_documents(ctx, question, parent_ids, session_id)
 
-    def normal_chat(self, question, session_id):
+    def normal_chat(self, ctx, question, session_id):
         self.calls.append(("normal", question, session_id))
-        return super().normal_chat(question, session_id)
+        self.seen_user_ids.append(ctx.user_id)
+        return super().normal_chat(ctx, question, session_id)
 
 
 def test_rag_chain_receives_the_payload_in_the_right_positions():
@@ -274,7 +278,7 @@ def test_stream_unknown_failure_gives_generic_detail_without_internals():
     class Boom(FakeRAG):
         # 真实 rag_system 的这条链是生成器：_build_references / get_chat_history 的原始异常
         # 在**迭代时**抛出（不是端点取事件的调用时），桩必须同构，否则测的不是同一条路径。
-        def chat_with_documents_stream(self, q, ids, sid):
+        def chat_with_documents_stream(self, ctx, q, ids, sid):
             raise RuntimeError("OperationalError(2003): 密码 hunter2 @ 127.0.0.1:3306")
             yield  # 永不执行；仅这一行让上面的 raise 落在迭代期
 
@@ -298,20 +302,24 @@ def test_stream_payload_is_forwarded_in_the_right_positions():
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.stream_calls = []
+            self.seen_user_ids = []
 
-        def chat_with_documents_stream(self, question, parent_ids, session_id):
+        def chat_with_documents_stream(self, ctx, question, parent_ids, session_id):
             self.stream_calls.append(("rag", question, list(parent_ids), session_id))
-            return super().chat_with_documents_stream(question, parent_ids, session_id)
+            self.seen_user_ids.append(ctx.user_id)
+            return super().chat_with_documents_stream(ctx, question, parent_ids, session_id)
 
-        def normal_chat_stream(self, question, session_id):
+        def normal_chat_stream(self, ctx, question, session_id):
             self.stream_calls.append(("normal", question, session_id))
-            return super().normal_chat_stream(question, session_id)
+            self.seen_user_ids.append(ctx.user_id)
+            return super().normal_chat_stream(ctx, question, session_id)
 
     rag = SpyStreamRAG(tokens=["x"])
     post_stream(stream_client(rag), {"session_id": "s9", "question": "营收多少",
                                      "parent_ids": ["丙_p_0", "甲_p_0"]})
     post_stream(stream_client(rag), {"session_id": "s9", "question": "你好", "parent_ids": []})
     assert rag.stream_calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9"), ("normal", "你好", "s9")]
+    assert rag.seen_user_ids == [1, 1], "ctx 传错 = 读侧过滤按别人的边界走"
 
 
 def test_stream_frames_are_single_line_json_with_readable_chinese():

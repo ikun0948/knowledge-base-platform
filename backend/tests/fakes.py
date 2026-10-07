@@ -1,5 +1,10 @@
 class FakeConfig:
     CHROMA_PERSIST_DIR = "fake://chroma"
+    # Task 5 的过渡 ctx 组装要读这三格（`api/chat.py::_ctx_from_config`）。
+    # 值故意与真 .env 不同：判据看的是"传下去了"，不是"传对了什么"。
+    OPENAI_API_KEY = "sk-fake"
+    OPENAI_BASE_URL = "https://fake/v1"
+    LLM_MODEL = "fake-model"
 
 
 class FakeDatabase:
@@ -80,17 +85,17 @@ class FakeRAG:
     def generate_session_id(self):
         return "fake-session"
 
-    def chat_with_documents(self, question, parent_ids, session_id):
+    def chat_with_documents(self, ctx, question, parent_ids, session_id):
         if self.error:
             raise self.error
         return self.answer, self.refs
 
-    def normal_chat(self, question, session_id):
+    def normal_chat(self, ctx, question, session_id):
         if self.error:
             raise self.error
         return self.answer
 
-    def chat_with_documents_stream(self, question, parent_ids, session_id):
+    def chat_with_documents_stream(self, ctx, question, parent_ids, session_id):
         if self.error is not None and self.error_after is None:
             raise self.error  # 检索/压缩失败：第一个事件都没有
         yield ("references", self.refs)
@@ -103,7 +108,7 @@ class FakeRAG:
         if self.error is not None and self.error_after is not None and emitted == self.error_after:
             raise self.error  # error_after 越过 token 数：生成完成后、done 之前失败
 
-    def normal_chat_stream(self, question, session_id):
+    def normal_chat_stream(self, ctx, question, session_id):
         if self.error is not None and self.error_after is None:
             raise self.error
         emitted = 0

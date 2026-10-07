@@ -110,3 +110,18 @@ def test_run_context_is_frozen():
 def test_not_configured_error_is_a_domain_error():
     """Task 7 靠 `STATUS_BY_ERROR` 把它翻成 409；不在 KnowledgeBaseError 家族里就只会落兜底 500。"""
     assert issubclass(NotConfiguredError, KnowledgeBaseError)
+
+
+def test_factory_is_the_only_client_construction_site():
+    """坑 9 的语法级收口：全后端只有 llm_factory.py 里出现 `ChatOpenAI(`。
+
+    行为面已由上面几条钉住，这里防的是"有人图省事在端点或链子里再 new 一枚"——
+    阶段一的第二处（vector_store 那枚压缩 LLM）当初就是这么长出来的。
+    扫源码不扫行为，是因为多一处构造点未必改变任何返回值，只会悄悄分叉。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    hits = sorted(p.name for p in root.rglob("*.py")
+                  if "tests" not in p.parts and "ChatOpenAI(" in p.read_text(encoding="utf-8"))
+    assert hits == ["llm_factory.py"]

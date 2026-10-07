@@ -7,9 +7,13 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableGenerator, RunnableLambda
 
+from core.llm_factory import LLMConfig, RunContext
 from core.rag_system import RAGSystem
 from exceptions import LLMError, RetrievalError
 from schemas.common import Reference, SNIPPET_LIMIT
+
+# 四个方法各收一枚 ctx，测试里的最小替身。人设为 1：与 fakes.FakeUser 的默认 id 对齐。
+CTX = RunContext(user_id=1, llm=LLMConfig(api_key="sk-t", base_url="https://t/v1", model="m"))
 
 
 def chat(user, assistant):
@@ -46,28 +50,32 @@ class StubDb:
 
 
 class StubVectorStore:
-    def __init__(self, parent_docs, compressed=None, retriever_error=None):
+    def __init__(self, parent_docs, retriever_error=None):
         self.parent_docs = parent_docs
         self.retriever_error = retriever_error
-        self.compressor = SimpleNamespace(
-            compress_documents=lambda docs, q: (compressed if compressed is not None else docs)
-        )
 
-    def create_retriever(self, parent_ids):
+    def create_retriever(self, parent_ids, user_id):
         if self.retriever_error:
             raise self.retriever_error
         return SimpleNamespace(invoke=lambda q: ["child"])
 
-    def get_parent_documents(self, retrieved):
+    def get_parent_documents(self, retrieved, user_id):
         return self.parent_docs
 
 
-def build(db, vs, llm):
-    """绕开 __init__：真构造会建 ChatOpenAI 客户端。"""
+def build(db, vs, llm, compressed=None):
+    """绕开 __init__：真构造会建 ChatOpenAI 客户端。
+
+    阶段二之后 llm 不再挂在 RAGSystem 身上，而是 `llm_factory(ctx)` 的返回值——
+    所以这里注入的是工厂。`llm` 形参名保持不变，`compressed` 从 StubVectorStore 搬到这里，
+    21 处调用因此只需要补 ctx 首参，别处不动。
+    """
     rag = RAGSystem.__new__(RAGSystem)
     rag.db_manager = db
     rag.vector_store = vs
-    rag.llm = llm
+    rag.llm_factory = lambda ctx: llm
+    rag.compressor_factory = lambda ctx: SimpleNamespace(
+        compress_documents=lambda docs, q: (compressed if compressed is not None else docs))
     rag.rag_prompt = ChatPromptTemplate.from_messages([
         ("system", "上下文信息:\n{context}"),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -93,7 +101,7 @@ def parent(doc_id=7, parent_id="p0", content="父 块 内容"):
 def test_normal_chat_returns_answer_and_saves_plain_history():
     db = StubDb(history=[chat("旧问", "旧答")])
     rag = build(db, StubVectorStore([]), ok_llm("普通回答"))
-    answer = rag.normal_chat("你好", "s1")
+    answer = rag.normal_chat(CTX, "你好", "s1")
     assert answer == "普通回答"
     assert db.saved == [{"session_id": "s1", "user_message": "你好", "assistant_message": "普通回答"}]
 
@@ -102,7 +110,7 @@ def test_normal_chat_llm_failure_raises_instead_of_polluting_history():
     db = StubDb()
     rag = build(db, StubVectorStore([]), RunnableLambda(boom_llm))
     with pytest.raises(LLMError):
-        rag.normal_chat("你好", "s1")
+        rag.normal_chat(CTX, "你好", "s1")
     assert db.saved == []
 
 
@@ -112,7 +120,7 @@ def test_chat_returns_references_and_writes_used_chunks():
     db = StubDb(filenames={7: "操作手册.txt"}, parents={"p0": 7})
     vs = StubVectorStore(parent_docs=[parent()])
     rag = build(db, vs, ok_llm("带引用的回答"))
-    answer, refs = rag.chat_with_documents("父子索引是什么", ["p0"], "s1")
+    answer, refs = rag.chat_with_documents(CTX, "父子索引是什么", ["p0"], "s1")
 
     assert answer == "带引用的回答"
     assert refs == [Reference(document_id=7, parent_id="p0", filename="操作手册.txt", snippet="父 块 内容")]
@@ -131,14 +139,14 @@ def test_chat_snippet_collapses_whitespace_and_truncates_at_limit():
     # 折叠：多空格 / 换行 / 制表符归一为单空格
     db = StubDb(filenames={3: "a.txt"}, parents={"p0": 3})
     vs = StubVectorStore(parent_docs=[parent(doc_id=3, content="父  块\n\t内容")])
-    _, refs = build(db, vs, ok_llm()).chat_with_documents("q", ["p0"], "s")
+    _, refs = build(db, vs, ok_llm()).chat_with_documents(CTX, "q", ["p0"], "s")
     assert refs[0].snippet == "父 块 内容"
 
     # 截断：超长片段留 SNIPPET_LIMIT 字符 + 省略号
     long_text = "字" * (SNIPPET_LIMIT + 30)
     db2 = StubDb(filenames={4: "b.txt"}, parents={"p0": 4})
     vs2 = StubVectorStore(parent_docs=[parent(doc_id=4, content="  " + long_text + "\n")])
-    _, refs2 = build(db2, vs2, ok_llm()).chat_with_documents("q", ["p0"], "s")
+    _, refs2 = build(db2, vs2, ok_llm()).chat_with_documents(CTX, "q", ["p0"], "s")
     assert refs2[0].snippet == long_text[:SNIPPET_LIMIT] + "..."
     assert len(refs2[0].snippet) == SNIPPET_LIMIT + 3
 
@@ -147,7 +155,7 @@ def test_chat_empty_retrieval_persists_the_turn_exactly_once():
     """空检索是业务结果，但这一轮照样得进历史：前端只留后端有的，不落库的轮次刷新后就消失了（终审 D4）。"""
     db = StubDb(parents={"p0": 7})
     rag = build(db, StubVectorStore(parent_docs=[]), ok_llm())
-    answer, refs = rag.chat_with_documents("无关问题", ["p0"], "s1")
+    answer, refs = rag.chat_with_documents(CTX, "无关问题", ["p0"], "s1")
     assert refs == []
     assert "未在选中的文档里找到" in answer
     assert db.saved == [{
@@ -163,7 +171,7 @@ def test_chat_retrieval_failure_raises_not_swallowed():
     db = StubDb()
     rag = build(db, StubVectorStore(parent_docs=[], retriever_error=RuntimeError("chroma down")), ok_llm())
     with pytest.raises(RetrievalError):
-        rag.chat_with_documents("q", ["p0"], "s1")
+        rag.chat_with_documents(CTX, "q", ["p0"], "s1")
     assert db.saved == []
 
 
@@ -171,7 +179,7 @@ def test_chat_llm_failure_raises_not_swallowed():
     db = StubDb()
     rag = build(db, StubVectorStore(parent_docs=[parent()]), RunnableLambda(boom_llm))
     with pytest.raises(LLMError):
-        rag.chat_with_documents("q", ["p0"], "s1")
+        rag.chat_with_documents(CTX, "q", ["p0"], "s1")
     assert db.saved == []
 
 
@@ -180,7 +188,7 @@ def test_history_still_keys_on_document_ids_found_by_reverse_lookup():
     mode 派生与引用补全 filename 都吃它，加第二列是第二份真相。"""
     db = StubDb(filenames={7: "手册.txt"}, parents={"甲_p_0": 7, "乙_p_1": 9})
     rag = build(db, StubVectorStore(parent_docs=[parent()]), ok_llm("答"))
-    rag.chat_with_documents("问", ["甲_p_0", "乙_p_1", "早删了_p_9"], "s1")
+    rag.chat_with_documents(CTX, "问", ["甲_p_0", "乙_p_1", "早删了_p_9"], "s1")
     assert db.saved[0]["document_ids"] == "7,9"
     assert db.reverse_calls == ["甲_p_0", "乙_p_1", "早删了_p_9"]
 
@@ -190,7 +198,7 @@ def test_all_selected_chunks_dead_still_goes_down_the_rag_path():
     空召回自有 EMPTY_RETRIEVAL_ANSWER 那条路，落库照旧。"""
     db = StubDb(parents={})
     rag = build(db, StubVectorStore(parent_docs=[]), ok_llm("不该被调用"))
-    answer, refs = rag.chat_with_documents("问", ["死块_p_0"], "s1")
+    answer, refs = rag.chat_with_documents(CTX, "问", ["死块_p_0"], "s1")
     assert refs == []
     assert answer.startswith("未在选中的文档里找到相关内容")
     assert db.saved[0]["document_ids"] == ""      # 反查空 → 空串，不是 None 也不是 "None"
@@ -221,7 +229,7 @@ def test_normal_chat_llm_failure_hides_internals_from_detail(caplog):
     rag = build(StubDb(), StubVectorStore([]), RunnableLambda(boom_with(INTERNAL_TEXT)))
     with caplog.at_level(logging.ERROR):
         with pytest.raises(LLMError) as exc_info:
-            rag.normal_chat("你好", "s1")
+            rag.normal_chat(CTX, "你好", "s1")
     assert str(exc_info.value) == LLM_DETAIL
     assert_detail_is_curated(exc_info.value, LLMError, caplog)
 
@@ -231,7 +239,7 @@ def test_chat_retrieval_failure_hides_internals_from_detail(caplog):
     rag = build(StubDb(), vs, ok_llm())
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RetrievalError) as exc_info:
-            rag.chat_with_documents("q", ["p0"], "s1")
+            rag.chat_with_documents(CTX, "q", ["p0"], "s1")
     assert str(exc_info.value) == RETRIEVAL_DETAIL
     assert_detail_is_curated(exc_info.value, RetrievalError, caplog)
 
@@ -240,7 +248,7 @@ def test_chat_llm_failure_hides_internals_from_detail(caplog):
     rag = build(StubDb(), StubVectorStore(parent_docs=[parent()]), RunnableLambda(boom_with(INTERNAL_TEXT)))
     with caplog.at_level(logging.ERROR):
         with pytest.raises(LLMError) as exc_info:
-            rag.chat_with_documents("q", ["p0"], "s1")
+            rag.chat_with_documents(CTX, "q", ["p0"], "s1")
     assert str(exc_info.value) == LLM_DETAIL
     assert_detail_is_curated(exc_info.value, LLMError, caplog)
 
@@ -267,7 +275,7 @@ def collect(gen):
 def test_rag_stream_yields_references_before_tokens_and_saves_once():
     db = StubDb(filenames={7: "操作手册.txt"}, parents={"p0": 7})
     rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["基于", "文档"]))
-    events, answer = collect(rag.chat_with_documents_stream("父子索引是什么", ["p0"], "s1"))
+    events, answer = collect(rag.chat_with_documents_stream(CTX, "父子索引是什么", ["p0"], "s1"))
 
     assert [k for k, _ in events] == ["references", "token", "token"]
     assert events[0][1] == [Reference(document_id=7, parent_id="p0",
@@ -288,7 +296,7 @@ def test_rag_stream_yields_references_before_tokens_and_saves_once():
 
 def test_normal_stream_yields_tokens_only_and_saves_plain_history():
     db = StubDb(history=[chat("旧问", "旧答")])
-    events, answer = collect(build(db, StubVectorStore([]), stream_llm(["你", "好"])).normal_chat_stream("你好", "s1"))
+    events, answer = collect(build(db, StubVectorStore([]), stream_llm(["你", "好"])).normal_chat_stream(CTX, "你好", "s1"))
 
     assert [k for k, _ in events] == ["token", "token"]
     assert answer == "你好"
@@ -297,7 +305,7 @@ def test_normal_stream_yields_tokens_only_and_saves_plain_history():
 
 def test_rag_stream_empty_retrieval_is_notice_token_and_persists_once():
     db = StubDb(parents={"p0": 7})
-    events, answer = collect(build(db, StubVectorStore(parent_docs=[]), stream_llm([])).chat_with_documents_stream("无关问题", ["p0"], "s1"))
+    events, answer = collect(build(db, StubVectorStore(parent_docs=[]), stream_llm([])).chat_with_documents_stream(CTX, "无关问题", ["p0"], "s1"))
 
     assert events == [("references", []), ("token", "未在选中的文档里找到相关内容，请换个问法或确认文档已上传。")]
     assert len(db.saved) == 1
@@ -308,7 +316,7 @@ def test_rag_stream_empty_retrieval_is_notice_token_and_persists_once():
 def test_rag_stream_retrieval_failure_raises_before_first_event():
     db = StubDb()
     rag = build(db, StubVectorStore(parent_docs=[], retriever_error=RuntimeError("chroma down")), stream_llm(["x"]))
-    gen = rag.chat_with_documents_stream("q", ["p0"], "s1")
+    gen = rag.chat_with_documents_stream(CTX, "q", ["p0"], "s1")
     with pytest.raises(RetrievalError):
         next(gen)
     assert db.saved == []
@@ -319,7 +327,7 @@ def test_rag_stream_llm_failure_midway_raises_llmerror_and_saves_nothing(caplog)
     rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["开头", "炸了"], error_at=1))
     with caplog.at_level(logging.ERROR):
         with pytest.raises(LLMError) as exc_info:
-            list(rag.chat_with_documents_stream("q", ["p0"], "s1"))
+            list(rag.chat_with_documents_stream(CTX, "q", ["p0"], "s1"))
     assert str(exc_info.value) == "大模型调用失败，请稍后重试"
     assert "流到一半断了" in caplog.text
     assert db.saved == []
@@ -330,7 +338,7 @@ def test_stream_consumer_disconnect_saves_nothing():
     不被 except Exception 捕获），落库代码执行不到——spec 6.4"不写半截历史"的机制证明。"""
     db = StubDb(filenames={7: "a.txt"})
     rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["一段", "二段", "三段"]))
-    gen = rag.chat_with_documents_stream("q", ["p0"], "s1")
+    gen = rag.chat_with_documents_stream(CTX, "q", ["p0"], "s1")
     next(gen); next(gen)
     gen.close()
     assert db.saved == []
@@ -338,7 +346,7 @@ def test_stream_consumer_disconnect_saves_nothing():
 
 def test_normal_stream_disconnect_saves_nothing():
     db = StubDb()
-    gen = build(db, StubVectorStore([]), stream_llm(["x", "y"])).normal_chat_stream("你好", "s1")
+    gen = build(db, StubVectorStore([]), stream_llm(["x", "y"])).normal_chat_stream(CTX, "你好", "s1")
     next(gen)
     gen.close()
     assert db.saved == []
@@ -347,28 +355,29 @@ def test_normal_stream_disconnect_saves_nothing():
 def test_stream_variant_uses_the_same_reverse_lookup():
     db = StubDb(filenames={7: "手册.txt"}, parents={"甲_p_0": 7})
     rag = build(db, StubVectorStore(parent_docs=[parent()]), stream_llm(["一", "二"]))
-    list(rag.chat_with_documents_stream("问", ["甲_p_0"], "s1"))
+    list(rag.chat_with_documents_stream(CTX, "问", ["甲_p_0"], "s1"))
     assert db.saved[-1]["document_ids"] == "7"
     assert db.reverse_calls == ["甲_p_0"]
 
 
-# --- 坑 9：模型名来自 Config，不留第二处字面量 ---
+def test_retrieval_and_backtrack_ask_with_the_context_user_id():
+    """读侧过滤的主人只能来自 ctx。假检索器不真过滤，所以把 `ctx.user_id` 改成常量、
+    改成 1、或者整段漏传，其余判据照旧绿——只有这条会红。"""
+    seen = []
 
-def test_answer_llm_takes_the_model_name_from_config(monkeypatch):
-    """真构造会建 ChatOpenAI 客户端，这里把它换成记录器：只验"配置值原样传下去"。
+    class SpyVS(StubVectorStore):
+        def create_retriever(self, parent_ids, user_id):
+            seen.append(("retriever", parent_ids, user_id))
+            return super().create_retriever(parent_ids, user_id)
 
-    钉这条的理由是历史事故——2026-10-03 换可用模型时只改了压缩那处，
-    答题仍在调旧模型，不报错、只是行为不对。两处都从 config 取值就不可能再分叉。
-    """
-    seen = {}
+        def get_parent_documents(self, retrieved, user_id):
+            seen.append(("parents", None, user_id))
+            return super().get_parent_documents(retrieved, user_id)
 
-    class Recorder:
-        def __init__(self, **kwargs):
-            seen.update(kwargs)
+    db = StubDb(filenames={7: "甲.txt"}, parents={"p0": 7})
+    rag = build(db, SpyVS([parent()]), ok_llm())
+    rag.chat_with_documents(RunContext(user_id=42,
+                                       llm=LLMConfig("sk", "https://x/v1", "m")), "q", ["p0"], "s1")
 
-    monkeypatch.setattr("core.rag_system.ChatOpenAI", Recorder)
-    config = SimpleNamespace(OPENAI_API_KEY="k", OPENAI_BASE_URL="u", LLM_MODEL="probe-model")
+    assert seen == [("retriever", ["p0"], 42), ("parents", None, 42)]
 
-    RAGSystem(config, None, None)
-
-    assert seen["model"] == "probe-model"
