@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
+import { setUnauthorizedHandler } from './api/client.js'
 import AuthPanel from './components/AuthPanel.vue'
 import ChatHeader from './components/ChatHeader.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -16,7 +17,7 @@ import { useSession } from './composables/useSession.js'
 
 // 五个 composable 在 App.vue 里显式接线，不引 Pinia/Vuex（spec 五节）
 const { sessionId, setSession, resetSession, clearSession } = useSession()
-const { user, authError, isLoggedIn, bootstrap, signUp, signIn, signOut } = useAuth()
+const { user, authError, isLoggedIn, bootstrap, signUp, signIn, signOut, clearAuth } = useAuth()
 const {
   documents, queue, listError, docCount,
   refresh, enqueue, retry, dismiss,
@@ -70,11 +71,12 @@ async function handleAuth({ mode, payload }) {
   await enterWorkspace()
 }
 
-async function handleSignOut() {
-  // 先掐掉在飞的流：不掐的话这条流会在登出之后把答案写进已经换人的界面，
-  // 而 useChat 的 done 记账会让它名正言顺地留在屏上
-  abortStream()
-  await signOut()      // 后端失败已在 useAuth 里被 catch 吞掉，所以这里一定走到下面的清理
+// 登出与「运行中 401」共用的清理组。抽出来的理由：advisory ② 走的是另一条触发路径
+// （网络层认到 401），清理动作必须与点「退出登录」一字不差——否则"退出清得干净、
+// 票过期清不干净"就是最难查的那种不对称。
+// 必须幂等：enterWorkspace() 的三拍各自都可能撞 401，每撞一次回调就跑一遍 handleSessionLost，
+// 而这里全是"赋空值 / removeItem"，第二遍相对第一遍零可观测差异，所以不去重。
+function resetWorkspace() {
   clearSession()       // auth_token 与 session_id 一起清（spec 5.3）
   // authError 不在 clearAuth() 的账上（那边只清令牌与 user），而登出后整屏换成登录页：
   // 这里清的是上一次登录尝试留下的文案，别让它盖到下一个人的空表单。
@@ -89,6 +91,31 @@ async function handleSignOut() {
   error.value = ''
   pickerOpen.value = false
 }
+
+async function handleSignOut() {
+  // 先掐掉在飞的流：不掐的话这条流会在登出之后把答案写进已经换人的界面，
+  // 而 useChat 的 done 记账会让它名正言顺地留在屏上
+  abortStream()
+  await signOut()      // 后端失败已在 useAuth 里被 catch 吞掉，所以这里一定走到下面的清理
+  resetWorkspace()
+}
+
+// advisory ②：运行中撞 401（票在会话中途过期）自动落回登录页。
+// 这里**不发** /api/auth/logout：票已经死了，那一枪只会再触发一次 401 回调，形成环。
+// 也不弹横幅——文案的归宿由调用失败的那条链路自己决定（useChat.send 写 error、
+// useDocuments.refresh 写 listError），本函数只负责"这台机器不再是你"。
+function handleSessionLost() {
+  abortStream()
+  clearAuth()          // 这一句是"整屏落回登录页"的唯一开关（v-if 的 isLoggedIn 靠它）
+  resetWorkspace()
+}
+
+// 注册在 App 的 setup 里而不是 useAuth 的模块作用域：handler 要写的那批 ref
+// 全都活在这一层（documents/queue/messages/pickerOpen/…）。
+// onBeforeUnmount 摘掉：测试里 App 会被反复挂载，留着上一个实例的闭包
+// 会让下一个 it() 的 401 写进一棵已经不存在的树——那种红查起来像"测坏了"。
+onMounted(() => setUnauthorizedHandler(handleSessionLost))
+onBeforeUnmount(() => setUnauthorizedHandler(null))
 
 // 头像：`users.avatar` 这一期恒为 'auto'（预设表情的选择器随 SettingsModal 在阶段二接入），
 // 所以这里只做昵称首字母；昵称为空才退回账号标识，再空才是 '我'。

@@ -195,4 +195,43 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     expect(authError.value).toBe('')
     expect(app.find('.picker-error').text()).not.toContain('上一次失败的文案')
   })
+
+  it('运行中撞 401：整屏落回登录页，清理与点退出那条一字不差，且不发 logout', async () => {
+    // advisory ② 的判据。注入方式只能改 ROUTES 元素再还原：那是模块级常量数组，
+    // 换成 vi.stubGlobal 重写 fetch 就会绕过真实的 client.js——而 status 与 401 回调
+    // 正是本 Task 的交付物，绕过它等于什么都没测。
+    //
+    // documents 与 history **两拍一起**翻 401（计划原文只翻了 documents，实测咬不住）：
+    // 只翻一拍的话，handleSessionLost 之后 enterWorkspace 照样会继续跑到 restore(newSid)，
+    // 而桩对 /api/history/ 仍回 200 两行 ⇒ msgs 断言永久红——那口红是注入方式造的，不是实现坏。
+    // 真实场景里一枚过期票就是**每一枪都 401**，两拍同翻才是事实，顺带把重入也压给了被测代码。
+    seedLoggedIn()
+    const flips = ['/api/documents', '/api/history/'].map((prefix) => {
+      const route = ROUTES.find((r) => r.prefix === prefix)
+      const original = [route.status, route.body]
+      route.status = 401
+      route.body = { detail: '未登录或登录已过期' }
+      return [route, original]
+    })
+    try {
+      const app = await mountApp()
+      await flushPromises()      // 落回登录页是 clearAuth() 触发的重渲染，多冲一拍不改变任何判据
+      expect(app.find('.auth-screen').exists()).toBe(true)     // 整屏落回，不是"渲染但禁用"
+      expect(app.find('.user-rail').exists()).toBe(false)
+      // 三个键一起清（与上面点退出那条同一组判据）
+      expect(localStorage.getItem('auth_token')).toBe(null)
+      expect(localStorage.getItem('session_id')).toBe(null)
+      expect(localStorage.getItem('selected_parent_ids')).toBe('[]')
+      // vm 层：DOM 此时已整棵卸载，屏上没有残留可断——这条口径见上面 :183 那段注释
+      expect({ docs: app.vm.documents.length, msgs: app.vm.messages.length })
+        .toEqual({ docs: 0, msgs: 0 })
+      // 判据的另一半：自动登出**不许**补发 logout（那一枪必再 401，回调就成了环）
+      expect(calls.filter((c) => c.url.startsWith('/api/auth/logout'))).toEqual([])
+    } finally {
+      for (const [route, [status, body]] of flips) {
+        route.status = status
+        route.body = body
+      }
+    }
+  })
 })

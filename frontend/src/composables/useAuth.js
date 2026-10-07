@@ -97,11 +97,22 @@ export function useAuth() {
     }
   }
 
-  function clearAuth() {
-    localStorage.removeItem(TOKEN_KEY)
-    setAuthToken('')
-    user.value = null
+  function patchMe(nextUser) {
+    // 设置保存成功后用后端回的整行**整体覆盖**，不在本地拼半份：
+    // 只改 nickname 一个键的话，api_key_masked、default_model 这些"只有后端知道"的字段
+    // 就留在上一次的值上，界面上会出现"改名成功但头像还是旧的"这种真假混合的刷新。
+    // 204 那类端点回 null，此时一个字段都不动。
+    if (nextUser) user.value = nextUser
   }
 
-  return { user, authError, authBusy, isLoggedIn, bootstrap, signUp, signIn, signOut, clearAuth }
+  return { user, authError, authBusy, isLoggedIn, bootstrap, signUp, signIn, signOut, clearAuth, patchMe }
+}
+
+// clearAuth 放模块级而不是函数体内：它只操作模块级的 user 与 localStorage，本来就是同一份状态，
+// 但 App.vue 的 401 回调（setUnauthorizedHandler 那条）要在 setup 之外也能引用到同一个出口。
+// 留在函数体内不改变行为，只是让"谁都能清"这件事必须经由一个组件实例。
+function clearAuth() {
+  localStorage.removeItem(TOKEN_KEY)
+  setAuthToken('')
+  user.value = null
 }

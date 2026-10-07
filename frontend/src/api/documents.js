@@ -1,4 +1,4 @@
-import { authHeaders, detailFromText, request } from './client.js'
+import { ApiError, authHeaders, httpError, request } from './client.js'
 
 export function listDocuments() {
   return request('/api/documents')
@@ -45,13 +45,14 @@ export function uploadDocument(file, { onProgress } = {}) {
         try {
           resolve(JSON.parse(xhr.responseText))
         } catch {
-          reject(new Error(`上传成功但响应不是 JSON（HTTP ${xhr.status}）`))
+          reject(new ApiError(`上传成功但响应不是 JSON（HTTP ${xhr.status}）`, xhr.status))
         }
       } else {
-        reject(new Error(detailFromText(xhr.responseText, xhr.status)))
+        // 401 也在这里通知：上传中途票过期是该自动登出的典型现场
+        reject(httpError(xhr.responseText, xhr.status))
       }
     }
-    xhr.onerror = () => reject(new Error('无法连接后端，上传中断'))
+    xhr.onerror = () => reject(new ApiError('无法连接后端，上传中断'))
     xhr.send(form)
   })
 }

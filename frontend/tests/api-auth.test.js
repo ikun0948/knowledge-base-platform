@@ -12,7 +12,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../src/api/client.js', () => ({ request: vi.fn() }))
 
-import { register } from '../src/api/auth.js'
+import {
+  addModel, register, removeModel, setDefaultModel,
+  updateLlmConfig, updatePassword, updateProfile,
+} from '../src/api/auth.js'
 import { request } from '../src/api/client.js'
 
 beforeEach(() => {
@@ -40,5 +43,49 @@ describe('api/auth.js 的 register 请求体', () => {
     const body = request.mock.calls[0][1].body
     expect('nickname' in body).toBe(true)
     expect(body.nickname).toBe('小明')
+  })
+})
+
+// 阶段二 Task 8：六个设置端点的封装。这层仍然只承重两件事——字段名翻译与路径拼装，
+// 所以判据读的是 request 手上的 body 对象（同上那段"JSON.stringify 会抹掉 undefined 键"的理由）。
+describe('api/auth.js 的六个设置封装（Task 8）', () => {
+  it('updateProfile 只发非空字段，且发的是后端的下划线端点与 PUT', async () => {
+    await updateProfile({ nickname: '  小明  ', avatar: '' })
+    const [path, opts] = request.mock.calls[0]
+    expect([path, opts.method]).toEqual(['/api/auth/me', 'PUT'])
+    // 不 trim：清洗是后端的事（api/auth.py 的 update_me 自己 strip 并拦空白）。
+    // 前端先 trim 会让"我只改了空格"这条 422 判据在界面上消失。
+    expect(opts.body).toEqual({ nickname: '  小明  ' })
+  })
+
+  it('updatePassword 的两个键名翻成下划线，204 不需要回执', async () => {
+    await updatePassword({ oldPassword: 'old-pass', newPassword: 'new-pass' })
+    const [path, opts] = request.mock.calls[0]
+    expect([path, opts.method]).toEqual(['/api/auth/me/password', 'PUT'])
+    expect(opts.body).toEqual({ old_password: 'old-pass', new_password: 'new-pass' })
+  })
+
+  it('updateLlmConfig 的键名是 api_key / base_url（这一处最容易被顺手写成 camelCase）', async () => {
+    await updateLlmConfig({ apiKey: 'sk-abcdef1234567890', baseUrl: 'https://vLLM.internal/v1' })
+    expect(request.mock.calls[0][1].body).toEqual({
+      api_key: 'sk-abcdef1234567890', base_url: 'https://vLLM.internal/v1',
+    })
+  })
+
+  it('三枚模型封装：删除编码路径段、设默认打 /default、添加只发 name', async () => {
+    // 模型名是用户手打的（"qwen 2.5/coder" 这种带空格与斜杠的真存在）。不编码就会把一段路径
+    // 劈成两段，坏法是 404「模型不在你的名单里」而不是 422——那句话这时候是假的。
+    await removeModel('qwen 2.5/coder')
+    const [removed] = request.mock.calls[0]
+    expect(removed).not.toContain(' ')
+    expect(removed.startsWith('/api/auth/me/models/qwen%202.5%2Fcoder')).toBe(true)
+
+    await setDefaultModel('qwen-max')
+    expect([request.mock.calls[1][0], request.mock.calls[1][1].body])
+      .toEqual(['/api/auth/me/models/default', { name: 'qwen-max' }])
+
+    await addModel('qwen-turbo')
+    expect([request.mock.calls[2][0], request.mock.calls[2][1].method, request.mock.calls[2][1].body])
+      .toEqual(['/api/auth/me/models', 'POST', { name: 'qwen-turbo' }])
   })
 })

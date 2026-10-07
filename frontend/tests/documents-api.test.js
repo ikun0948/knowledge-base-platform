@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { deleteChunk, listChunks, uploadDocument } from '../src/api/documents.js'
-import { setAuthToken } from '../src/api/client.js'
+import { ApiError, setAuthToken, setUnauthorizedHandler } from '../src/api/client.js'
 
 function stubFetch() {
   const calls = []
@@ -107,4 +107,50 @@ it('上传用 XHR 也带上 Bearer 头——它是全项目唯一不走 client.j
   // 一旦有人在本文件后面追加测，没还原就会让它看到上一个账号的令牌。
   setAuthToken('')
   delete global.XMLHttpRequest
+})
+
+// Task 8：上传这条出口（XHR，全项目唯一不走 request/postStream 的）也要交状态码，
+// 并且 401 一样得把界面喊回登录页——三条出口漏一条，"票过期了还停在原界面上"就还在。
+describe('上传的失败出口也带状态码（Task 8）', () => {
+  // jsdom 本来就有 XMLHttpRequest，这里换掉必须在 afterEach 里**还原**而不是 delete。
+  // （上一节那条测就是 delete 的，而本节的 RealXHR 在收集阶段就抓好了真身，还原得回去。）
+  const RealXHR = global.XMLHttpRequest
+
+  afterEach(() => {
+    global.XMLHttpRequest = RealXHR
+    setUnauthorizedHandler(null)
+  })
+
+  it('XHR 的非 2xx 失败回 ApiError，状态码来自 xhr.status', async () => {
+    let captured
+    global.XMLHttpRequest = class {
+      constructor() { captured = this; this.upload = {}; this.headers = {} }
+      open() {}
+      setRequestHeader(k, v) { this.headers[k] = v }
+      send() {}
+    }
+    const file = { name: 'a.txt' }
+    const p = uploadDocument(file)
+    captured.status = 415
+    captured.responseText = JSON.stringify({ detail: '只支持 txt / pdf / docx' })
+    captured.onload()
+    const err = await p.catch((e) => e)
+    expect([err.status, err.message]).toEqual([415, '只支持 txt / pdf / docx'])
+  })
+
+  it('上传撞 401 同样触发登出回调（三条出口一条都不能漏）', async () => {
+    let captured
+    let hits = 0
+    setUnauthorizedHandler(() => { hits += 1 })
+    global.XMLHttpRequest = class {
+      constructor() { captured = this; this.upload = {} }
+      open() {} setRequestHeader() {} send() {}
+    }
+    const p = uploadDocument({ name: 'a.txt' })
+    captured.status = 401
+    captured.responseText = JSON.stringify({ detail: '未登录或登录已过期' })
+    captured.onload()
+    await expect(p).rejects.toBeInstanceOf(ApiError)
+    expect(hits).toBe(1)
+  })
 })

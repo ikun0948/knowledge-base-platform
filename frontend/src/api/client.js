@@ -34,6 +34,45 @@ export function detailFromText(text, status) {
   return `HTTP ${status}`
 }
 
+// ApiError：前端唯一需要的"带状态码的错误"。三条 HTTP 出口（request / postStream / 上传的 XHR）
+// 共用它，`status = 0` 表示"手上根本没有响应"——网络层失败、流读到一半断、帧解析失败。
+// 必须 extends Error：既有 21 条 client.test.js 判据里有一串 rejects.toThrow(文案)，
+// 它只读 message；换成普通对象会让那串全红，而红的理由是"测法"不是"行为"。
+export class ApiError extends Error {
+  constructor(message, status = 0) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+// advisory ②：运行中撞 401（票在会话中途过期）以前只弹一句横幅，界面还停在"已登录"，
+// 用户对着一个必然再 401 的输入框反复点发送。这一格把"该登出"交给界面层决定——
+// client.js 不认识 user、不认识 localStorage，它只负责"认出 401"和"喊一声"。
+// 单槽不是列表：全项目只有 App.vue 一个订阅者，多个订阅者要先有真实需求。
+let onUnauthorized = null
+
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = typeof handler === 'function' ? handler : null
+}
+
+function notifyUnauthorized(status) {
+  if (status !== 401) return
+  // 回调抛错不许盖掉原错误：横幅上该出现的是后端那句 detail，不是一句 TypeError
+  try {
+    onUnauthorized?.()
+  } catch {
+    /* 静默：这一格失败给不出可行动的中文，而 401 的文案已经在路上 */
+  }
+}
+
+// HTTP 状态引起的错误只有一个构造点。三条出口各自 new 一遍的坏法是
+// "同一个 401 在两个入口两种文案"——detailFromText 的注释早就为这件事写过一次。
+export function httpError(text, status) {
+  notifyUnauthorized(status)
+  return new ApiError(detailFromText(text, status), status)
+}
+
 export async function request(path, { method = 'GET', body, headers = {}, signal } = {}) {
   const isJson = body !== undefined
   let res
@@ -50,9 +89,9 @@ export async function request(path, { method = 'GET', body, headers = {}, signal
     })
   } catch {
     // fetch 只在网络层失败时 reject：此时没有 detail 可读，给一句能行动的中文
-    throw new Error('无法连接后端，请确认 uvicorn 已在 :8000 运行')
+    throw new ApiError('无法连接后端，请确认 uvicorn 已在 :8000 运行')
   }
-  if (!res.ok) throw new Error(detailFromText(await res.text(), res.status))
+  if (!res.ok) throw httpError(await res.text(), res.status)
   // 204 No Content 没有响应体：res.json() 会在空文本上抛 SyntaxError，
   // 把"操作成功"变成一条报错。登出、后面的删档类端点都走这一格。
   if (res.status === 204) return null
@@ -74,16 +113,18 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
     })
   } catch (err) {
     if (signal?.aborted) throw err  // 调用方主动中断（AbortError / TimeoutError）原样上抛
-    throw new Error('无法连接后端，请确认 uvicorn 已在 :8000 运行')
+    throw new ApiError('无法连接后端，请确认 uvicorn 已在 :8000 运行')
   }
   if (!res.ok) {
-    // 流开始前的失败（422/502/500）仍是普通 HTTP：状态码 + detail 照旧
-    throw new Error(detailFromText(await res.text(), res.status))
+    // 流开始前的失败（422/409/502/500）仍是普通 HTTP：状态码 + detail 照旧。
+    // Task 11 的"没配模型"横幅认的是 status === 409，不是这句文案的子串。
+    throw httpError(await res.text(), res.status)
   }
   // 反代把 SSE 缓冲成整包、或 200 落地一张 HTML 错误页时 res.ok 仍为真，读循环只会拿到零帧：
   // 先认内容类型，否则"根本没有流"会被当成"读完了一条空流"。
   if (!String(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
-    throw new Error('响应不是 SSE 事件流，请检查代理配置')
+    // status 照实填 res.status（这一格手上确实有一枚成功的响应）：填 0 会把它谎报成"连不上后端"。
+    throw new ApiError('响应不是 SSE 事件流，请检查代理配置', res.status)
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -97,7 +138,7 @@ export async function postStream(path, payload, onEvent, { signal } = {}) {
         chunk = await reader.read()
       } catch (err) {
         if (signal?.aborted) throw err  // 调用方主动（cancel 或 AbortSignal.timeout 的 TimeoutError）都原样传播
-        throw new Error('流式响应中断，请重试')
+        throw new ApiError('流式响应中断，请重试')
       }
       if (chunk.done) break
       buffer += decoder.decode(chunk.value, { stream: true })
@@ -129,7 +170,8 @@ function dispatch(frame, onEvent) {
   try {
     data = JSON.parse(dataLines.join('\n'))
   } catch {
-    throw new Error('流式帧解析失败，请重试')
+    // 这一格在 dispatch() 里：手上只有帧文本、没有 response，只能 0
+    throw new ApiError('流式帧解析失败，请重试')
   }
   onEvent(event, data)
 }

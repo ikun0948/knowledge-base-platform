@@ -3,7 +3,7 @@
 // 都钉成断言——桩掉 fetch，不需要真服务。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { detailFromText, postStream, request, setAuthToken } from '../src/api/client.js'
+import { ApiError, detailFromText, postStream, request, setAuthToken, setUnauthorizedHandler } from '../src/api/client.js'
 
 function fakeReader(chunks, { failAt = -1, err } = {}) {
   let i = 0
@@ -243,5 +243,59 @@ describe('Authorization 注入：三条出口一条都不能漏', () => {
       text: async () => '', json: async () => { throw new SyntaxError('Unexpected end of input') },
     }))
     await expect(request('/api/auth/logout', { method: 'POST' })).resolves.toBeNull()
+  })
+})
+
+// 阶段二 Task 8：错误对象要带状态码，401 要能把界面喊回登录页。
+// 为什么状态码非要有不可：Task 11 要把"没配模型"（409）、"后端断了"（0）、"票过期"（401）
+// 分三条路处置；今天它们塌成一句 Error.message，界面只剩"弹横幅 / 不弹"两个选项。
+describe('ApiError：状态码与 401 通知（阶段二 Task 8 + advisory ②）', () => {
+  afterEach(() => {
+    delete global.fetch
+    setUnauthorizedHandler(null)   // 单槽：不清就会把上一个 it() 的闭包留给下一个
+  })
+
+  it('非 2xx 的错误对象带真状态码，文案仍是 detail 原文（extends Error 是硬要求）', async () => {
+    stubFetch(jsonResponse({ detail: '会话不存在' }, 404))
+    const err = await request('/api/history/x').catch((e) => e)
+    expect(err).toBeInstanceOf(Error)          // 既有 21 条判据里那串 rejects.toThrow(文案) 只认 Error 的 message
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.status).toBe(404)
+    expect(err.message).toBe('会话不存在')
+  })
+
+  it('网络层失败没有响应，状态码是 0 而不是 undefined', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    const err = await request('/api/anything').catch((e) => e)
+    expect(err.status).toBe(0)
+    expect(err.message).toBe('无法连接后端，请确认 uvicorn 已在 :8000 运行')
+  })
+
+  it('流开始前的 409 在 HTTP 阶段就把状态码交出来（Task 11 的地基）', async () => {
+    stubFetch(jsonResponse({ detail: '你的模型名单是空的，请先在设置里添加一个模型' }, 409))
+    const err = await postStream('/api/chat/stream', {}, () => {}).catch((e) => e)
+    expect([err.status, err.message]).toEqual([409, '你的模型名单是空的，请先在设置里添加一个模型'])
+  })
+
+  it('401 触发回调、403 不触发；request 与 postStream 两条出口都算（XHR 那条在 documents-api.test.js）', async () => {
+    const seen = []
+    setUnauthorizedHandler(() => seen.push('cleared'))
+    stubFetch(jsonResponse({ detail: '未登录或登录已过期' }, 401))
+    await expect(request('/api/documents')).rejects.toBeInstanceOf(ApiError)
+    expect(seen).toEqual(['cleared'])
+    stubFetch(jsonResponse({ detail: '权限不够' }, 403))
+    await expect(request('/api/documents')).rejects.toBeInstanceOf(ApiError)
+    expect(seen).toEqual(['cleared'])           // 403 不许蹭这一枪
+    // 正文标题写着"三条出口"却只打了 request 一枪；流式那条同样必须通知，
+    // 否则"聊天发到一半票过期"就是漏网的出口。
+    stubFetch(jsonResponse({ detail: '未登录或登录已过期' }, 401))
+    await expect(postStream('/api/chat/stream', {}, () => {})).rejects.toBeInstanceOf(ApiError)
+    expect(seen).toEqual(['cleared', 'cleared'])
+  })
+
+  it('回调自己抛错时，原始那句 detail 照样上抛（回调坏了不许顶掉真错误）', async () => {
+    setUnauthorizedHandler(() => { throw new TypeError('回调写坏了') })
+    stubFetch(jsonResponse({ detail: '未登录或登录已过期' }, 401))
+    await expect(request('/api/documents')).rejects.toThrow('未登录或登录已过期')
   })
 })

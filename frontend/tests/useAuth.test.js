@@ -79,4 +79,28 @@ describe('useAuth', () => {
     await signIn({ identifier: 'a@b.com', password: 'hunter2-pass' })
     expect(localStorage.getItem('auth_token')).toBe('l'.repeat(43))
   })
+
+  it('patchMe 用后端回的整行覆盖 user，传空值时一个字段都不动', () => {
+    getMe.mockResolvedValue({ user: USER })
+    localStorage.setItem('auth_token', 'p'.repeat(43))
+    const { bootstrap, patchMe, user } = useAuth()
+    return bootstrap().then(() => {
+      patchMe({ ...USER, nickname: '改名了', models: ['qwen-max'] })
+      expect(user.value.nickname).toBe('改名了')
+      expect(user.value.models).toEqual(['qwen-max'])
+      patchMe(null)          // 204 那类端点回 null：不许把 user 抹成 null
+      expect(user.value.nickname).toBe('改名了')
+    })
+  })
+
+  it('clearAuth 是模块级的同一份：两次 useAuth() 调用共享它（401 回调要的就是这件事）', () => {
+    getMe.mockResolvedValue({ user: USER })
+    localStorage.setItem('auth_token', 'q'.repeat(43))
+    return useAuth().bootstrap().then(() => {
+      localStorage.setItem('auth_token', 'r'.repeat(43))
+      useAuth().clearAuth()   // 换一个调用方
+      expect(useAuth().isLoggedIn.value).toBe(false)
+      expect(localStorage.getItem('auth_token')).toBe(null)
+    })
+  })
 })
