@@ -152,6 +152,16 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     expect(app.text()).toContain('上一个账号的答案')
     expect(localStorage.getItem('auth_token')).toBe(TOKEN)
     expect(localStorage.getItem('session_id')).toBe(SID)
+    // 前置事实（vm 层）：三拍把上一个账号的东西写进了组件实例的 ref。
+    // 走 VTU 的 setupState 通道读 app.vm.*——读的是组件实例、不是 composable 模块，
+    // 不违反本文件"不 mock composable"的口径。
+    // 实数由桩的形状决定：/api/documents 回 1 篇（DOC）、队列没有任何入队入口、
+    // /api/history 回 HISTORY_ROWS 2 行。queue 这一格是给下面归零断言的对照，不钉 enqueue。
+    expect({
+      documents: app.vm.documents.length,
+      queue: app.vm.queue.length,
+      messages: app.vm.messages.length,
+    }).toEqual({ documents: 1, queue: 0, messages: 2 })
 
     // X-3 的判据并进这里（不另开 it()）：登出前挂一句上一次登录失败的文案
     const { authError } = useAuth()
@@ -170,7 +180,14 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
     expect(app.find('.auth-screen').exists()).toBe(true)
     expect(app.find('.user-rail').exists()).toBe(false)
     expect(app.find('.app-shell').exists()).toBe(false)
-    expect(app.findAll('.queue-item')).toHaveLength(0)
+    // 登出清空三句（App.vue 的 documents.value = [] / queue.value = [] / messages.value = []）的
+    // **唯一判据就是下面这三句 vm 层断言**：DOM 层观测不到——登出时 clearAuth() 置 user = null，
+    // `.app-shell` 连同 DocumentPanel / MessageList 整棵卸载，屏上没有残留可断。
+    // 这里原本是一条 `findAll('.queue-item')` 长度 0 的 DOM 断言，**永久绿**（那个场景从头到尾
+    // 没有队列项，`.queue-item` 只由 FileUploader 在入队后渲染），2026-10-07 收掉、改由 vm 层钉。
+    expect(app.vm.documents).toEqual([])
+    expect(app.vm.queue).toEqual([])
+    expect(app.vm.messages).toEqual([])
     // X-3：authError 由 handleSignOut 清掉。
     // 照实说：DOM 那一句单独不构成判据——重挂的 AuthPanel 表单为空，「请填写账号」会压住后端文案，
     // 残留本来就在屏上看不见。有牙的是 authError 这个模块级 ref 本身。两句都留着：

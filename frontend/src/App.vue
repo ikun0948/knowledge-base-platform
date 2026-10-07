@@ -45,13 +45,10 @@ onMounted(async () => {
   // 启动第一拍（spec 5.2）：手上没令牌就一个请求都不发，
   // 否则未登录的人一进站就撞一串 401 横幅。
   if (await bootstrap()) {
-    // 三拍裸奔的代价是"停在空白工作区、控制台留一条 unhandled rejection"，
-    // 而 refresh/hydrate/restore 的内部 catch 只覆盖各自的正常失败路径。
-    try {
-      await enterWorkspace()
-    } catch {
-      error.value = '工作台加载失败，请刷新重试'
-    }
+    // 这里不兜 try/catch：三拍各自吞错并写自己的横幅（refresh→listError、
+    // hydrate→selectionError、restore→error 且 return false），都不上抛，
+    // enterWorkspace() 不可能 reject。2026-10-07 撤销 Task 7 的 X-4（当时判为死代码）。
+    await enterWorkspace()
   }
 })
 
@@ -69,13 +66,8 @@ async function handleAuth({ mode, payload }) {
     return
   }
   setSession(sid)   // 后端铸造的对话 id 覆盖本地（spec 5.3）：重新登录就是新对话
-  // 到这儿登录已经成功（user 已置、令牌已落），三拍里任何一拍 reject 都不该把人
-  // 留在一个空白工作区里连句提示都没有——那正是"我登录了但什么都没有"的观感。
-  try {
-    await enterWorkspace()
-  } catch {
-    error.value = '工作台加载失败，请刷新重试'
-  }
+  // 同 onMounted：三拍各自吞错并写自己的横幅，所以这里不兜（2026-10-07 撤销 X-4）。
+  await enterWorkspace()
 }
 
 async function handleSignOut() {
