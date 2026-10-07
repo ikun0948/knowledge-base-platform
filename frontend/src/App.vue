@@ -44,7 +44,15 @@ async function enterWorkspace() {
 onMounted(async () => {
   // 启动第一拍（spec 5.2）：手上没令牌就一个请求都不发，
   // 否则未登录的人一进站就撞一串 401 横幅。
-  if (await bootstrap()) await enterWorkspace()
+  if (await bootstrap()) {
+    // 三拍裸奔的代价是"停在空白工作区、控制台留一条 unhandled rejection"，
+    // 而 refresh/hydrate/restore 的内部 catch 只覆盖各自的正常失败路径。
+    try {
+      await enterWorkspace()
+    } catch {
+      error.value = '工作台加载失败，请刷新重试'
+    }
+  }
 })
 
 // 登录/注册成功后的两拍在这里，而不是 AuthPanel 里：
@@ -61,7 +69,13 @@ async function handleAuth({ mode, payload }) {
     return
   }
   setSession(sid)   // 后端铸造的对话 id 覆盖本地（spec 5.3）：重新登录就是新对话
-  await enterWorkspace()
+  // 到这儿登录已经成功（user 已置、令牌已落），三拍里任何一拍 reject 都不该把人
+  // 留在一个空白工作区里连句提示都没有——那正是"我登录了但什么都没有"的观感。
+  try {
+    await enterWorkspace()
+  } catch {
+    error.value = '工作台加载失败，请刷新重试'
+  }
 }
 
 async function handleSignOut() {
@@ -70,6 +84,9 @@ async function handleSignOut() {
   abortStream()
   await signOut()      // 后端失败已在 useAuth 里被 catch 吞掉，所以这里一定走到下面的清理
   clearSession()       // auth_token 与 session_id 一起清（spec 5.3）
+  // authError 不在 clearAuth() 的账上（那边只清令牌与 user），而登出后整屏换成登录页：
+  // 这里清的是上一次登录尝试留下的文案，别让它盖到下一个人的空表单。
+  authError.value = ''
   // 界面此刻换成登录页，但 App 实例还在、这些 ref 也还在：不清的话下一个人登录后
   // 会在 enterWorkspace 覆盖之前瞥见上一个账号的文件名。documents/queue/messages 都是
   // composable 返回的 ref，直接赋空数组就行；选中项必须走 clearSelection（它同时回写 localStorage）。
