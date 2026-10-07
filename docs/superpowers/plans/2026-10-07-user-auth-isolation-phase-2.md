@@ -3405,9 +3405,17 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task9.tx
 Run: `cd frontend && npm test`
 Expected: 全绿，条数与上一轮一致（这一步一条判据都不新增）。
 
+> **修订（2026-10-08 实跑，Step 1）**：两处与正文不符，都已按实跑落地。
+> ① 起点条数：**117 是 Task 8 时点的旧锚**（Task 9 的收口轮已把终态推到 141/14 并写进过 Task 9 的修订块），本 Task 每一步的实测基线都是 **141 passed (141) / Test Files 14 passed (14)**。Step 1 跑完全量就是这一格。
+> ② 第三条钉（`:43-44` → `findAll('.chat-controls button')`）**在 Step 1 这一轮做不到**：`.chat-controls` 是 Step 3 才引入的包裹层，先改测试就把 Step 1 的"行为零变化、全量照绿"给破了。照正文执行时实测 `Tests 1 failed | 4 passed (5)`（`findAll` 返回 0 项），确认是**顺序缺陷而不是实现缺陷**之后，这一格挪进 Step 3 与包裹层同轮提交（同一 commit，判据没有少）。Step 1 本轮只落 `:15`、`:18`、`:51` 三处 + 两个类名。
+
 - [ ] **Step 2: RED —— 四条新判据（两段结构 / option 逐项 / 改选 emit / 空名单与 pending 的禁用）**
 
 `ChatInput.test.js` 末尾追加一节。`mountInput` 工厂（`:8-10`）已经只传 `modelValue`，新 prop 全有默认值 ⇒ 既有 5 条不会因为新 prop 红。
+
+> **修订（2026-10-08 实跑，Step 2）**：四条照抄落地，RED 实测 `Tests 4 failed | 5 passed (9)`，四条都红在 `.model-select` / `.chat-controls` 不存在这一类，符合"新行为的红"的预期。
+> **但第一条判据与它自己的模板互相矛盾**：`controls.map((c) => c.classes()[0])` 读的是每个子节点的**第一个 class 令牌**，而 Step 3 的模板把发送按钮写成 `class="btn chat-send"`——第一个令牌是 `btn`。Step 3 实现完那一轮实测：`AssertionError: expected [ 'model-select', 'btn' ] to deeply equal [ 'model-select', 'chat-send' ]`（`Tests 1 failed | 8 passed (9)`）。
+> 这句话要钉的契约本来是"控件行的两个子节点：下拉在前、发送在后"（它自己的注释就写着"DOM 顺序只保证下拉在按钮左边这一件事"），跟 class 字符串谁在前面无关。交付因此改成 `expect(controls).toHaveLength(2)` + `controls[0].classes()).toContain('model-select')` + `controls[1].classes()).toContain('chat-send')`。**不许**的反向修法：把模板改成 `class="chat-send btn"` 去迁就原判据——那是让测试的形状反过来定义生产代码，而且下次谁再加一个 `btn-*` 前缀类就又红一次。
 
 ```js
 describe('ChatInput：两段式与模型下拉（Task 10）', () => {
@@ -3577,6 +3585,10 @@ function onKeydown(event) {
 
 > `max-width: 45%` 是宽屏档：模型名可以长到 100 字（Task 2 的上界），不限宽就会把发送按钮推到 `.chat-main` 的边界外。`<select>` 对超长文本自己截断，不需要 `text-overflow`。
 
+> **修订（2026-10-08 实跑，Step 4）**：两个锚点位都还准（`variables.css` 的 `--side-width: 320px;` 后面紧跟 `}`；`layout.css` 的 `.chat-input` 仍在 `:266-273`）。落地时的两点实况：
+> ① 现有 `.chat-input` 已经带着 `gap: 8px / padding: 12px 20px / background / border-top` 四行，与正文的替换块逐字相同，所以真正的改动只有 `align-items: flex-end` → `flex-direction: column` + `align-items: stretch` 两行（不是整块重写，diff 也因此只有 2 行改动 + 注释）。
+> ② **正文没提的坑（挂到 Task 12 量，不在本轮假装已验）**：`.chat-textarea` 带着 `flex: 1`（`:275`），主轴从横转竖之后它的意思是**纵向伸展**，而 `flex-basis: 0%` 遇自动高度的容器 + `min-height: 44px` 的下限，最坏情况是输入区比 `rows="2"` 的自然高度矮一截（约两行 → 44px 一行半）。jsdom 没有布局引擎，本机又没装 `puppeteer-core`（Task 12 的视口判据要装它，见用户记忆里的 Edge 探针配方），所以本轮只交 CSS 与结构判据。Task 12 要量的那一格：**登录进工作区后 `.chat-textarea` 的 `offsetHeight` 是否 ≥ 它 `rows=2` 的自然高度（≈50px）、`.chat-controls` 是否仍在下一行右对齐、≤768 时下拉+发送是否塌成两行而不撑破 `.chat-input` 的左右内边距**。若确认塌到 44px，一行修法：`.chat-textarea` 的 `flex: 1` 改成 `flex: none`（竖排里它本来就不该伸展，容器是内容高度）。
+
 - [ ] **Step 5: App.vue 接线 + useChat 载荷加 `model_name`**
 
 `App.vue` 在 `question`（`:30`）附近加三行与一个 computed，并把 `handleSend`（`:129-135`）的载荷补一个字段：
@@ -3678,6 +3690,10 @@ async function handleSend(text) {
 
 两处配套改动：① 记账处（`:79`）改成 `calls.push({ url, method: init.method ?? 'GET', body: init.body })`；② 该测的 `/api/chat/stream` 在桩里回的是 `application/json`，`postStream` 必然在 content-type 那一格抛"响应不是 SSE 事件流"——**这不影响判据**：fetch 已经发生并记账，抛错发生在其后，且 `useChat.send` 的 catch 会把横幅写成那句、撤掉两条气泡。测的只是载荷，不是流。
 
+> **修订（2026-10-08 实跑，Step 6）**：这条测落地了，另有两处偏离要记。
+> ① **`ME.user.models` 本轮就从 1 项抬成 2 项**（`['qwen-max', 'qwen-turbo']`，`default_model` 仍是 `'qwen-max'`）。正文把"给 `meUser(over)` 构造器"排在 Task 11，但这条测的前提就是**有第二个 option 可换**：名单只有一项时 jsdom 的 `select.setValue('qwen-turbo')` 找不到目标、值原样不动，测会红在桩上而不是红在接线上——那种红最骗人。Task 11 落 `meUser(over)` 时**必须保持两项**，别把它缩回去。既有 6 条没有一条**断言名单内容**（登出那条现在会去点下拉，但它断的是清理结果），所以抬成两项不动任何既有判据（实测本文件 8 条全绿）。
+> ② 登出那条测（`:156` 起）多了一格前置：点「退出登录」**之前**先 `await app.find('.model-select').setValue('qwen-turbo')` 并断 `app.vm.modelOverride === 'qwen-turbo'`，之后才断 `expect(app.vm.modelOverride).toBe('')`。不加这一手，那条断言永远绿（modelOverride 从不被赋值），`resetWorkspace()` 里新加的归零就没有牙——与 Task 9 给 `settingsOpen` 补的那一手同一个套路。
+
 - [ ] **Step 7: 全量门禁 + 样式门禁**
 
 ```bash
@@ -3687,6 +3703,13 @@ grep -rn "#[0-9a-fA-F]\{3,8\}\b\|rgba(\|rgb(" src/styles/layout.css src/styles/v
 Expected: 全绿。新增 **6 条**（`ChatInput.test.js` 4、`useChat.test.js` 1 新（另 1 条为扩写，条数不变）、`App.auth-gate.test.js` 1）；文件数不变（14）。G-4 那条 grep 必须 **0 命中**（口径：`variables.css` 自己的 token 定义也算命中就整体排除它，两处之一命中都要改——本 Task 在 `layout.css` 新写的 5 条规则一个颜色字面量都不该有）。
 
 变异自证两条：① 把 `currentModel` 的 `opts.includes(modelOverride.value)` 那半删掉 → App 层那条测红（换模型不再生效）；② 把 `useChat` 的 `if (model_name)` 改成无条件 `payload.model_name = model_name` → "键都没有"那条测红。
+
+> **修订（2026-10-08 实跑，Step 7）**：门禁实数 **`Test Files 14 passed (14)` / `Tests 148 passed (148)`**（正文预期 147 = 141+6，多的那 1 条是下面变异①的补偿测）；`npm run build` 出 `index-*.css 13.14 kB`、`index-*.js 100.61 kB`（Task 9 是 99.69 kB，+0.92 kB 是 ChatInput 的下拉与 App 的 computed）；G-4 那条 grep 对 `src/styles/layout.css` **0 命中**（`variables.css` 按既有口径整体排除，它自己就是 token 定义处）。
+> **变异自证① 的预期是错的**：照正文删掉 `&& opts.includes(modelOverride.value)` 之后，`npx vitest run tests/App.auth-gate.test.js` 实测 **`Tests 7 passed (7)`——全绿**。原因很直白：那条测 `setValue('qwen-turbo')` 选中的名字**本来就在名单里**，门禁删不删结果都一样；`opts.includes` 那半只在"**名单变了而旧选中项不在新名单里**"时才起作用，而本轮没有任何测造得出这个场景。也就是说照正文交付，`currentModel` 里三分之一的逻辑处于无牙状态。
+> 补法（多出的那 1 条）：新增一条 `选中的模型被从自己名单里删掉后，下拉回落到默认而不是抱着那个名字` —— 先 `setValue('qwen-turbo')`，再把模块级 `user` 换成 `models: ['qwen-max']`（这正是 `SettingsModal.applyModels` 删模型后 `patchMe` 的形状：它只改名单与默认，碰不到 App 层的 `modelOverride`），`await nextTick()` 后断下拉落到 `qwen-max`。重跑变异①：**`expected '' to be 'qwen-max'`，`Tests 1 failed | 7 passed (8)`**（没有门禁时 `:value` 指向一个已不存在的 option，jsdom 把 `select.value` 落成空串，红得具体）。
+> 追加的变异③（给 Step 6 那手补偿测用的）：摘掉 `resetWorkspace()` 里的 `modelOverride.value = ''` → 登出那条红，`expected 'qwen-turbo' to be ''`，`1 failed | 7 passed (8)`。
+> 变异② 照正文成立：`payload.model_name = model_name` 无条件赋值 → "键都没有"那条红，`expected true to be false`，`Tests 1 failed | 16 passed (17)`。
+> 三轮变异都是**手工编辑**：本项目按字节实测过行尾——同一个文件内部是统一的，但 `App.vue` / `useChat.js` / `*.css` / `ChatInput.vue` 是 CRLF，而 `tests/*.test.js` 是 LF（`core.autocrlf=true`，仓库 blob 两侧都是 LF，所以内容 diff 不受影响）。正因为两套并存，脚本化变异（sed/正则批处理）在本仓库禁用，见项目记忆。每轮先 `cp` 到 `/tmp` 备份、跑完复原并用 `sha256sum` 双向确认字节一致（App.vue 复原后 `a32d851f…`、useChat.js 复原后 `f41d1f1a…`，与变异前同值）。
 
 - [ ] **Step 8: 提交**
 
