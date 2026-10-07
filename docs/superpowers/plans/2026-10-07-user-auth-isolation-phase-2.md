@@ -4016,6 +4016,8 @@ def test_scan_actually_reaches_every_source_dir():
 Run: `cd backend && python -m pytest tests/test_observability.py -q`
 Expected: 全绿（含既有两条 logger 判据）。
 
+> **修订块（Task 12 实跑，2026-10-08）**：Step 1 代码块里那句注释写的是"**排除三处**"，而 `EXCLUDED_DIRS` 实际是**四枚**（`tests`/`__pycache__`/`data`/`.venv`）——多出来的 `.venv` 今天是**纯预防项**（2026-10-08 实测 `backend/` 下不存在它），列在这里的理由是"有人在这儿建虚拟环境时，site-packages 不该一夜之间把门禁的扫描面撑成几百个第三方文件"。提交时把注释改成了"排除四处"并给 `.venv` 写了这一句，所以**仓库里的代码与计划代码块的注释现在不同**，以代码为准。另：`>= 22` 的下界实测来自本轮的 **23 个**文件（Task 4 之后），RED 用的是 `>= 999`。
+
 - [ ] **Step 2: 后端三门（一个进程、一个 pytest、不起 uvicorn 时才能跑前两条）**
 
 ```bash
@@ -4038,6 +4040,8 @@ grep -rn "<style" src/components/ src/App.vue | wc -l
 grep -rn "console\.log\|debugger" src/ | wc -l
 ```
 Expected: `npm test` 全绿（基线 117 + Task 8 的 14 + Task 9 的 10 + Task 10 的 6 + Task 11 的 6 = **153**，文件数 **14**；⚠️ 这个和只是对账用，台账写当轮汇总行实数）；`build` exit 0；后三条 grep 分别 **0 / 0 / 0**。
+
+> **修订块（Task 12 实跑，2026-10-08）**：实数 **154，不是 153**。多出来的一枚是 Task 10 修正轮补的「选中的模型被从自己名单里删掉后下拉回落到默认」——它本来就不在这串加数里（Task 10 台账的 R4 记过这条偏差，当时就该顺手把这里的和改掉）。本轮汇总行原文：`Test Files 14 passed (14)` / `Tests 154 passed (154)`；`build` exit 0（`index-CUrklGmJ.css 13.49 kB │ gzip 3.20 kB`、`index-DQP49TXO.js 101.15 kB │ gzip 37.89 kB`）；三条 grep 实测 **0 / 0 / 0**。
 
 - [ ] **Step 4: 起真服务（一份，只一份）**
 
@@ -4066,6 +4070,13 @@ Expected: `npm test` 全绿（基线 117 + Task 8 的 14 + Task 9 的 10 + Task 
 | 10 | 375×800 | `.chat-controls` 不塌：`document.querySelector('.chat-input').scrollWidth <= innerWidth`，且 `.model-select` 与 `.chat-send` 的 `getBoundingClientRect()` 都在视口内 |
 | 11 | 375×800 | `.setup-banner` 与 `.settings-model-row` 各自 `scrollWidth <= innerWidth`（后者是"名字+默认+两个按钮"四件那一行，Task 9 加了 `flex-wrap` 就为这一条） |
 | 12 | 500×900 | 中间档：`.picker-backdrop` 与 `.settings-panel` 都不遮在聊天按钮之下（阶段一记过一次"窄屏浮层遮住聊天按钮"）；`window.__probe` 回读 `innerWidth === 500` |
+
+> **修订块（Task 12 实跑，2026-10-08；五条都是"判据本身跑不出来说的形状"，不是应用坏了）**：
+> ① **判据 4 的"`.setup-banner` 当场消失"在它前一条判据留下的状态下不可达**：判据 3 刚把模型名单删空，`setupProblem` 的第二条门仍成立，正确行为是**换句**（api_key 那句 → 名单那句）。改成断"句子切换"——它同样是 `patchMe` 当场把新 user 落进 App 状态的证据，而且比"消失"更强；"横幅真的消失"由判据 5 在加完两枚模型之后验。
+> ② **判据 7 括号里的"或直接 `fetch('/api/chat/stream', …)`"造不出界面横幅**：那条只能证明后端回 409，而红色 `.error-banner` 是 `useChat` 的 catch 写进 App 的 `error` 的，**必须让界面自己发**。可用配方：配齐凭证 + 加一枚模型（横幅消失、App 状态里有一枚）→ `DELETE /api/auth/me/models/{name}` 绕过界面把服务端名单清空（App 状态就此过期）→ 点发送 → 409 落红色横幅，文案与后端原句逐字相同。
+> ③ **判据 8 的 B 侧不能等 `.picker-results` 非空**：空池是正确行为，此时那个 `<ul>` 整块不渲染，只剩 `.picker-hint` 那句「没有匹配的文档块」；而 `.picker-hint` 与 busy 态的「搜索中…」共用同一个类名（`ChunkPickerModal.vue:119/132`），所以"终态"判据要显式排除带「搜索中」的那格。同理 **判据 6 不能按 `.message === 0` 断**：`MessageList.vue:41` 在历史为空时渲染唯一一格欢迎占位，正确口径是"前后相等 + 打进去的那句话没出现在消息区"。
+> ④ **判据 12 的"零 error"必须限定区间**：探针第一步 `localStorage.clear()` 之前会带上一轮遗留的过期票进首页，`/api/auth/me` **必回 401**（Task 8 的"票过期落回登录页"路径，是 resource 级状态码不是页面 JS 错误）。基线要取在登录成功那一刻，否则设计行为会被判成故障。
+> ⑤ **本机 `puppeteer-core` 25.12.0 的 API 位移与两处 `display:none`**：`page.uploadFile` **已不存在**，要 `page.$('.file-input')` 拿句柄再 `handle.uploadFile(path)`；`.file-input`（`layout.css:119`）与 ≤768 档的 `.side-panel`（`layout.css:101`）都是 `display:none`——前者上传前显形一次即可（文件仍走 `onPick → useDocuments` 同一条链路），后者必须先点 `.panel-toggle` 才点得到 `.rail-*` / `.picker-open`。另：持久化的 `tmp-edge-profile` 会跨次运行留着 `auth_token`，不清就直接落进工作区、注册流程找不到 `.auth-panel`。
 
 **控制台纪律**：每条判据跑完打印 `console` 与 `pageerror` 计数，第 12 条要求**零 error**（`warning` 可以留着但要逐条写进台账说明是什么）。
 
