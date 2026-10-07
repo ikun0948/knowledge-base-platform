@@ -1092,6 +1092,12 @@ Expected: 全绿（`-m "not migration"` 是默认；`test_chroma_data.py` 整组
 > ② 现存 `run_migrations` 里有一句正文未提的 **`if not docs: pending = {"parent": [], "child": []}`**（归户零行就把清单清空）。新实现必须删掉它——新语义下清单读的是"**已**有主人的向量"，那句的前提已不存在，留着恰好会把 advisory ① 要修的自愈清单重新清空。评审若问"为什么少了一句"，答案在这里。
 > ③ `tests/test_chroma_data.py:86` 的注释里还写着旧名 `vector_ids_without_owner`，改名后它是过期文字；与 `migrations.py` 顶部注释同一口径顺手改（纯文字）。另实测 `UserModel`（`database.py:150-163`）只有 `id`/`user_id`/`name`/`is_default` 四列、**没有 `created_at`**，所以 `seed_default_llm` 那句裸 `INSERT INTO user_models (user_id, name, is_default)` 不会撞 NOT NULL；将来若给这表补时间戳列，这句要同步改。
 
+> **修订（2026-10-07，Task 3 实跑纠偏）**，本 Task 正文有三处事实已过期、一处口径需按现状读：
+> ① Step 3 里那句「基线 **11 父 + 22 子**」作废。2026-10-07 重钉的活基线是 **4 父 + 10 子**（`tests/test_chroma_data.py:11-12` 的 `PARENT_COUNT`/`CHILD_COUNT`，且 `PARENT_IDS`/`CHILD_IDS` 长度一致；旧计数来自那批被删到 `chunk_count` 归零的文档）。生产码注释已按 4/10 写。
+> ② Step 3 的 `stamp_vector_owner` 注释里「（**原注释一字不改**）」是自指——它引用的正是本 Task 要替换的那段注释，实施时按新语义重写，不作为约束。
+> ③ Step 1 那条自愈判据的 docstring 说「第二遍的 `get` 看到已戳就**零写**」，与它自己的断言 `second["vectors_stamped"] == 3` 相反。**以断言为准**：补戳清单每次开机都重算，第二遍把擦掉的戳**重新补上 3 条**，这才是 advisory ① 要的自愈；"零写"只发生在 `stamp_vector_owner` 被重复调用而 metadata 未变时（由 `test_stamp_merges_existing_metadata_and_skips_stamped` 的最后一条断言钉住）。
+> ④ Step 3 的 `FakeConn` 分支前缀照抄 `SELECT C.VECTOR_ID FROM` 会**永远不命中**：新 SQL 选了 `c.vector_id, d.user_id` 两列，整条串是 `SELECT c.vector_id, d.user_id FROM parent_chunks c …`，而 `head` 是**整条 SQL** 大写化后的串（不是列清单），`FROM` 前隔着 `, D.USER_ID`，于是 `startswith("SELECT C.VECTOR_ID FROM")` 恒假。实施时前缀放宽为 `SELECT C.VECTOR_ID`，并按 WHERE 里的条件（`D.USER_ID IS NOT NULL` 是否出现）决定收哪批行——这是让「生产码把 `IS NOT NULL` 写回 `IS NULL` 必须跑红」成立的必要条件。严重度交本轮评审裁定。
+
 - [ ] **Step 6: 提交**
 
 ```bash
