@@ -371,6 +371,71 @@
 - Task 12: **交付时必须对用户说的两句（计划 Step 8 原文要求）**：① **建议轮换 `DEFAULT_USER_PASSWORD`**；② **阶段二起未配 key 的用户开始收 409**，是预期翻转不是回归，且第一条 409 的文案是「你的模型名单是空的」而不是「没配 api_key」（`_llm_context` 先判名单空、后验凭证），别按文案去找 key。此外本 Task 还要补第三句：**12 条浏览器判据全部在真服务 + 真凭证上跑过，12/12 绿**，Task 9/10/11 各自挂下来的"界面未量"条目本轮全部闭合（掩码显示、`flex-wrap`、横幅贴合、浮层遮罩、历史与文档隔离）。
 - Task 12: **本轮的验证缺口（如实记）**：12 条判据都是**几何与文案层面**的界面证据，没做**跨浏览器**（只有本机 Edge headless）、没做**真触屏**（375 档是视口模拟不是设备模拟，`touch` 行为未验）、也没做**并发**（两个标签页同时改名单那条只有 Task 10 的补偿测，界面未量）。默认用户那档在本轮只以 live ④ 组的身份出现，没在界面上手验。
 
+## 全分支终审（阶段二，`cd7316d..e60dcf4`，2026-10-08）
+
+- **范围与构成**：BASE `cd7316d`（计划提交本身，不含任何实现）。区间 **35 笔 = 18 代码（feat/fix/test/refactor）+ 17 文档（docs）**，终态 HEAD `e60dcf4`。`git status` 干净、无远端、未推送、未 rebase、未 amend。
+- **流程偏离（必须在交付时向用户明示，本条是这条分支最大的方法论事实）**：23:35 用户明令「你直接接管,然后执行到任务完成」⇒ **Task 6 收口 + Task 7-12 全部由控制者一人执行**，未派实施代理、未派任务评审、未抽 brief，**本节是"作者=审查者"的自审**，不具备独立评审的对抗性。前 5 个 Task（阶段二 Task 1-5）仍有独立的实施/评审代理与修正轮，其结论可交叉引用。缓解措施：所有承重结论本轮**重新直查**（下列七条给命令与命中数），且每条挂账都必须在本节落到一个动词（已闭合／保持现状／顺延），不许写"待定"。
+- **七条承重断言直查（全部本轮亲测，不采信任何轮的报告）**：
+  ① `UserOut(` 全仓**唯一**构造点 = `api/auth.py:50`（`grep -rn "UserOut("` 除类定义外只这一处）⇒ "端点不回原文 key" 的铁律仍住在一个地方；`schemas/auth.py:89` 只有 `api_key_masked`，没有 `api_key` 字段。
+  ② 默认模型解析**唯一**函数 = `schemas/auth.py:142 default_model_of`，消费者三处（`api/auth.py:57`、`:84`、`api/chat.py:52`），全仓 `_default_of` 零命中 ⇒ 设置侧与问答侧不可能分叉。
+  ③ `chat_history` **三臂都带 `user_id`**：读 `database.py:487`、写 `:508`、删 `:525`（grep 逐条命中）⇒ Task 6 的"GET 加了过滤、DELETE 忘了"这类半截交付没有发生。
+  ④ `main.py:31-40` 的 `STATUS_BY_ERROR` **六键**，含 `NotConfiguredError: 409` ⇒ 409 是注册过的领域语义，不是裸 HTTPException 的偶然。
+  ⑤ 后端裸 `print` grep **0 命中**（且扫描面本身在 `6ffff74` 已被证明有牙：真实变异 `tmp_advisory_probe/probe.py` 被新扫描抓到、旧写死清单抓不到）。前端 `src/` 的 `console.log|debugger` grep **0 命中**。
+  ⑥ `api/chat.py:44-53` 的 `_llm_context` 顺序实测确认：**先判名单空（409 EMPTY_MODEL_LIST）、再验载荷里的模型名、最后 `llm_config_for`** ⇒ 交付时那句"第一条 409 是『名单是空的』，别按文案去找 key"是真话。
+  ⑦ `_reload` 的离线无牙**本轮重验**：把 `update_me`/`update_llm` 两处 `_user_out(db, _reload(db, user))` 退回成 `_user_out(db, user)` ⇒ `tests/test_api_auth.py` **47 passed**（零红），离线确实抓不到它；真服务侧的证据是 Task 12 判据 4（存完 key 横幅当场换句，而那次换句吃的就是 PUT 响应体）。
+- **终审过程中我自己的一次事故（如实记，正是 sha256 对拍救的）**：还原上面那条变异时用了 `allow_multiple`，结果命中**三处**而不是两处——`GET /me`（`api/auth.py:130`）本来就是 `_user_out(db, user)`，它是只读端点、不该也不需 `_reload`，被我顺手"还原"成了一个不存在的改动。`sha256sum` 与基线不符 + `git diff` 露出那个多余 hunk 才抓出来，改回后 sha 逐字相同（`d78e82a6…`）。**教训**：`allow_multiple` 只能用于"我确认整个文件里这句话就只有一种归属"的场景；涉及变异还原时**先 grep 计数再决定用不用它**，并且一律以 sha/diff 为准，不以"我改了两处"的记忆为准。
+- **终审落地的三笔改动**：
+  `4c45e96` **必修**：`DELETE /api/auth/me/models/{name}` → `{name:path}`。起因是 Task 8 挂下来的 M-A（`%2F`）——它当时写的是"未验"。本轮用一次性探针（`C:/Users/31439/AppData/Local/Temp/fe2-route-probe/app.py`，两种路由形状各一份，真 uvicorn :8000 + `npm run dev` 代理两档各打四种 URL，**跑完即删、目录已 rm、不入库**）实测：`{name}` 对 `a%2Fb` 与 `a/b` **都回 404**，`{name:path}` 两种都 **200 且解出的名字就是 `a/b`**；离线 `TestClient` 行为与真 uvicorn **一致**（这点很关键，否则这条判据只能住 live 组）。影响面不是纸面风险：OpenRouter 一类网关的模型 id 本身就是「厂商/模型」，而 `frontend/src/api/auth.js:57` 的注释自己就写着"带空格与斜杠的真存在"——即**加得进去、永远删不掉，只能改库**。RED 用改动前的路由实测（`1 failed, 46 deselected`，失败理由 `assert 404 == 200`），GREEN 后整文件 `47 passed`；后端两门实数 **306 passed / 2 skipped / 2 deselected / 1 warning** 与 **285 passed / 25 deselected / 1 warning**（较收口时的 305/284 各 +1，就是新增那条）。
+  `a145f65` **收 Task 2 记给 Task 12 的第 ④ 条挂账**：`api/auth.py::_reload` 与 `test_api_auth.py::FakeAuthDB` 各有一句"实测见修正轮 1 报告的变异 M4"，而 `.superpowers/sdd/` 被该目录内 `.gitignore`（内容 `*`）排除 ⇒ 注释指向一个干净检出里翻不到的文件。已改成仓库内锚点（提交号 + "本注释即唯一留痕"），顺带把同一段里"真判据落在 Task 12"的**未来时**改成已兑现的出处，并把 46 条纠成本轮实测的 47 条。
+  `e60dcf4` **收 Task 9 的 M-A**：`App.vue:158` 的 `?? '我'` 是永不执行的兜底（上一行已用 `if (avatar && …)` 保证非空），删掉；下一行空昵称那条 `: '我'` 保留（真的会走到）。前端两门复跑 `14 files / 154 passed`、build exit 0（`index-DGgHp3J3.js 101.15 kB │ gzip 37.89 kB`，尺寸与收口时一致）；`App.vue` 行尾复量 302 CRLF / 0 孤立 LF。
+- **挂账 Minor 逐条裁决（11 个 Task 一条不落，每条给动词）**：
+  | 出处 | 事项 | 裁决 |
+  |---|---|---|
+  | Task 1 M-1 | 半迁移态替身无人用 | **保持现状**：替身能力多于消费者不是缺陷，补用例属覆盖扩展不属修复 |
+  | Task 1 M-2 | `IntegrityError` 把外键失败折成 `False` | **保持现状**：调用方只拿布尔值，且 MySQL 侧外键失败也该是"这次写没成"；改抛会逼六个端点各加一层翻译 |
+  | Task 1 M-3 | unique 约束分支零覆盖 | **已闭合**（修正轮 F2 补两条 422 分支判据 + 代理独立复算） |
+  | Task 1 M-4 | `update_user_password` 没被任何判据调用 | **已闭合**（Task 2 修正轮 F4：先存旧哈希再断"变了 + 新口令能登、旧口令 401"） |
+  | Task 1 M-5 | `list_user_models` 无 rollback 的不对称 | **保持现状**：只读方法不写，不对称是形状不是缺陷 |
+  | Task 1 M-6 | 外键/索引/`user_id` 非空未钉 | **顺延阶段三**（与 Task 6 M2 同族，见下方清单 ④） |
+  | Task 1 M-7 | `and` 合并断言失败会回显 api_key 实际值 | **已闭合**（Task 7 R3 把 `rag.calls == [] and rag.stream_calls == []` 拆两行；全仓其余 `and` 合并断言不含真凭证） |
+  | Task 1 M-8 | `fakes.py:124` 假用户行缺两格 | **已闭合**（Task 2 给 `FakeAuthDB` 补 `api_key/base_url`，本轮 grep 命中 `:38/:80-82`） |
+  | Task 1 复评三处文字 Minor | `_update_user` docstring 自相矛盾等 | **已闭合**（Task 2 那笔逐字节读过 diff，同值重写口径改成"当前驱动下 `0` 只有一种来路"） |
+  | Task 2 concern 4 | `add_user_model` 判空+插入非原子，并发可留两枚默认 | **保持现状 + 顺延**：读侧 `default_model_of` 取第一枚带标记的，行为可预期；要堵得加唯一约束/锁，属产品级决定（清单 ⑤） |
+  | Task 2 I-2 | fake 别名 vs 真库快照 ⇒ `_reload` 离线无牙 | **已裁定并留痕**（本轮直查 ⑦ 重跑变异 47 passed；真判据 = Task 12 判据 4；`a145f65` 把注释里的假引用改掉） |
+  | Task 2 M-1 | `ModelIn` 注释引用尚不存在的 `ChatRequest.model_name` | **已闭合**（Task 7 加了这个键，注释现与代码同源；本轮 `schemas/auth.py:126` 命中） |
+  | Task 2 M-2 | 设默认时空白名回 409 而非 422 | **保持现状**（当时裁定不变：409 那句"模型不在你的名单里"对空白名同样诚实） |
+  | Task 2 M-3 | DELETE 无法分辨"删掉了"与"本来就没有" | **保持现状**：端点回整份名单，界面按名单渲染，无需知道刚才有没有东西 |
+  | Task 2 M-6 | `AVATARS` 没有交给前端的出口 | **顺延阶段三**（清单 ②：现在是两份副本 + `PASSWORD_MIN` 三份） |
+  | Task 2 out-of-scope | `LlmIn.api_key` 的 `min_length=8` 量在 strip **之前** | **顺延阶段三（升为 advisory ①）**：`"  sk-x  "` 会存成 4 字符 key；与 Task 2 已修的"纯空白"同族但不同因（那个是"strip 后为空"，这个是"strip 后变短"），修法是 field_validator 里 strip 完再量 |
+  | Task 3 M-3 | `FakeConn` 分支表长成第二套 SQL 引擎（15 格） | **保持现状**：它是替身不是引擎，扩到 16 格的边际成本远低于换架构；已记"长前缀要先排"这条纪律今天没被违反 |
+  | Task 3 M-6 | `UNOWNED_VECTOR_ROWS` 名不副实 | **保持现状**：改名会牵动判据文本，语义已在 docstring 里说清 |
+  | Task 3 M-7 | seed 早退只看 `api_key`；野 `user_id` 留孤儿行 | **保持现状**：两种态今天都造不出（`ensure_default_user` 保证主人存在），是"将来"的账 |
+  | Task 3 → Task 12 的 ⑤⑥ | 真服务重启记 `迁移完成:` 实数 + 记一次缺 key 的 `llm_seeded: False` 分支 | **部分兑现**：本轮真服务重启过、`users/models` 形状实测（`meShape` 五键），但**没专门为"缺 key 的 .env"重启一次**（那要把 `.env` 改坏再改回，风险大于收益）⇒ 转阶段三顺清 ⑥，如实记为缺口 |
+  | Task 4 ①②③ | 9 vs 10 的数字口径、缺返回类型标注、同源判据是间接钉法 | **保持现状**：①已在计划回写；②本仓类型标注稀疏，单点补齐反成噪音；③factory 那条判据 + 结构判据两条合起来咬得住 |
+  | Task 5 M3 | `create_retriever`/`get_parent_documents` 的 `user_id` 无类型标注 | **保持现状**（同 Task 4 ②） |
+  | Task 5 | `$and` 措辞略宽 | **保持现状**：docstring 不与代码矛盾，池为空时确实是裸 `{user_id}` |
+  | Task 5 | 两枚同名 `FakeConfig` 可否合并 | **顺延阶段三**（清单 ③）：共用那份已被 Task 5 扩到四键，局部那份住 `test_migrations.py`，合并会牵动迁移组判据，收益只有"少一个类名" |
+  | Task 6 M2 | `ChatHistory.user_id` 的 FK 只在新建库存在 | **保持现状 + 顺延**（清单 ④）：老库无 FK、删账号会留孤儿行；列注释已写明这层不对称 |
+  | Task 7 M-A | `test_api_auth.py:440` 函数名承诺 `ChatRequest.model_name` 上界、实测 `models` 端点 | **保持现状**：Task 7 已补注释；问答侧的 max_length 由 schema 同源钉（`schemas/auth.py:126` 那句），要专判据属覆盖扩展 |
+  | Task 7 M-B | 设置侧对"第一个 vs 最后一个"无判据 | **不改，理由已核实**：`default_model_of` 只有一枚定义（直查 ②），问答侧那条回落判据红掉就能抓住它被改坏；设置侧只是同一个函数的另一个消费者 |
+  | Task 8 M-A | `%2F` 的代理归一化风险 | **已闭合**（`4c45e96`，见上）——本条从"未验"变成实测并修在生产路由上 |
+  | Task 8 M-B | 401 那条测没断 `queue` | **保持现状**：该场景没有入队入口，断它是空转 |
+  | Task 8 M-C | `ApiError.status` 的取值域（0/真码/200）无类型层约束 | **保持现状（本轮新证据）**：`grep -rn "\.status" frontend/src/` 显示消费者只有 `client.js` 内部与 `documents.js` 的 `xhr.status` 判断，**界面层不按 `err.status` 分支**（Task 11 的裁定就是"不按状态码改写文案"），所以 200 那一格不可能被误读成成功；`client.js:126` 已注明"status 照实填" |
+  | Task 9 M-A | `?? '我'` 死分支 | **已闭合**（`e60dcf4`） |
+  | Task 9 M-B | 弹窗只在 setup 那次回填，无 `watch user` | **保持现状**：弹窗每次 `v-if` 新挂载，边界已在台账与本节留痕 |
+  | Task 9 M-C | `.settings-*` 复用 `.picker-*` 两个类做底座 | **保持现状**：Task 12 判据 11/12 已把两档 rect 量过，耦合是样式层的、不是判据层的 |
+  | Task 10 R1-R4 / Task 11 R1-R4 | 八条裁定 | **全部维持**，其中 Task 10 R4（补那条计划里没有的回落测）与 Task 11 R2（`meUser` 默认两项）是本轮判据数 154 与桩形状的直接原因，终审复核无异议 |
+- **阶段三开工单（本轮发现的、明确不在阶段二范围，八条，每条写清"要闭合得做什么"）**：
+  ① `LlmIn.api_key`/`base_url` 的长度界量在 strip 之前 ⇒ 要闭合就在 validator 里 strip 完再量，并给一条"8 格里 4 格空白 + 4 字符 key"的判据。
+  ② 前端与后端的枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）⇒ 要么加一枚 options 端点，要么前端集中 constants 并用判据钉住与后端逐字相同。
+  ③ 两枚同名 `FakeConfig`（`tests/fakes.py` 与 `tests/test_migrations.py:175`）⇒ 合并前要先确认迁移组判据不依赖局部那份的四键形状。
+  ④ `ChatHistory.user_id`/`documents.user_id` 的 FK 只存在于新建库 ⇒ 任何"注销账号"功能动手前必须先补 FK 或显式级联删行，否则老库留孤儿。
+  ⑤ `user_models` 的"至多一枚默认"靠应用层两步（判空 + 清场），并发插入可留两枚默认 ⇒ 要堵得加唯一约束（MySQL 无部分索引，得用生成列或应用级锁）。
+  ⑥ 迁移的"缺 key 半态"分支（`llm_seeded: False`）至今没有在真 `.env` 上跑过一次 ⇒ 闭合需要一个能临时改 `.env` 的受控窗口（本轮判定风险大于收益，故未做）。
+  ⑦ FastAPI 默认 422 会把刚提交的入参回显进 `detail[*].input`；前端 `detailFromText` 只在**缺 `msg` 时**降级为整项 `JSON.stringify`（`client.js:32`），而 pydantic 的 item 恒带 `msg` ⇒ 今天不外印，但这条兜底路径是**明文 key 出现在界面上的唯一通道**。要闭合就在 fallback 里剥掉 `input` 键（会削弱 M-j 那条"原文是唯一的排错线索"，属产品取舍）。
+  ⑧ 视口/交互的真浏览器回归是一次性脚本（Task 12 探针全文附在本节下方，`puppeteer-core` 以 `--no-save` 残留在 `frontend/node_modules`）⇒ 没有常驻测试，下次改布局要重新造轮子；要不要固化属独立决定。
+- **终审结论**：**Approved**。0 Critical / 0 Important 遗留；三条本应修的已在终审落地（`4c45e96`、`a145f65`、`e60dcf4`），其余全部落到"保持现状（带理由）"或"阶段三顺延清单（带闭合动作）"，没有一条写"待定"。终态门禁：**后端 306 passed / 2 skipped / 2 deselected / 1 warning**、**285 passed / 25 deselected / 1 warning**（`-m "not live and not migration"`）、**前端 14 files / 154 passed**、build exit 0、三条样式 grep 0/0/0；live 两组本轮未重跑（改动只碰 `DELETE /me/models/{name}` 这一枚路由与两处注释/一行死代码，`grep -rn "me/models" tests/test_live_*.py` **0 命中** ⇒ live 组无消费者，且重启会烧真实配额）。
+
 ### 附：Task 12 探针脚本全文（`frontend/tmp-layout-probe.mjs`，跑完即删，故全文留档）
 
 ```js
