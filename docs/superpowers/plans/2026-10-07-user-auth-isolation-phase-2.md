@@ -1377,6 +1377,10 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task4.tx
 > ② `backend/api/chat.py` 的四处 rag 调用 `:41/:50/:75/:79` 与 `import` 行 `:7` **实测仍准**（该文件从阶段一收口后没被动过），按行号改没问题。
 > ③ `tests/fakes.py` 的 `FakeConfig`（现只有 `CHROMA_PERSIST_DIR` 一键）与 `tests/test_migrations.py:175` 的局部 `FakeConfig`（Task 3 新建，四键）**现在并存**：本 Task 只扩**共用那份**（补三键 + 口令，供 chat/rag 两组测试用），`test_migrations.py` 的局部那份不动。两份同名类重复一事记全分支终审（可否改成 import 共用）。
 
+> **修订（2026-10-07，Task 5 实跑纠偏），两条：**
+> ① Step 1 的 `test_get_parent_documents_dedupes_shared_parent` 桩体原文有 bug：新 `where` 形状是 `{"$and": [...]}`，桩里再读 `where['parent_id']` 会 `KeyError`，而生产 `get_parent_documents_by_metadata` 把 `.get()` 包在 try/except 里、KeyError 被吞成空回溯 ⇒ **实现正确该测也永远红**。实跑改为语义等价的 `pid = where["$and"][0]["parent_id"]` 再用 `pid` 组装返回；`assert where == ...` 一行逐字未动。
+> ② Step 8 的算式「−2 +4」漏了两项：被整段替换掉的两条旧 retriever pin（−2）与 Step 7 新增的结构判据（+1）。实测净变化 = +5（3 retriever + 1 ctx + 1 结构）− 4（2 退役 + 2 旧 pin）= **+1** ⇒ Task 4 终态 290 → **291 passed / 2 skipped / 2 deselected / 1 warning**；live 20 passed（控制者亲跑）。
+
 
 - [ ] **Step 1: 写读侧过滤的 RED（只改 `test_vector_store.py`）**
 
