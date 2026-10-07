@@ -376,3 +376,14 @@
 - **0 必修 ⇒ 不派集中修复轮**。五条 advisory（迁移补戳窗口、令牌过期只弹横幅不自动登出 `client.js:55`、hydrate 失败路径判据、live 测令牌无界增长、`test_observability.py:16-17` 扫描目录写死）全部进**阶段二开工单**，不在阶段一补。
 - 工作树复核干净（`git status --short` 空）。
 - **下一步 = `superpowers:finishing-a-development-branch`**，以及交付时那两句：建议轮换 `DEFAULT_USER_PASSWORD`（明文在 `0b22116` 之前进过 history）；阶段一不解决"未配 key 不能问"。
+
+## 收口（finishing-a-development-branch，控制器 2026-10-07）
+
+三门在终态 HEAD `4738fd3` 上**重跑**（不引用之前任何一次绿灯）：后端 `python -m pytest -q` **257 passed / 2 skipped / 2 deselected in 43.54s**、前端 `npm test` **117 passed / 13 files in 5.02s**、`npm run build` **exit 0**（js 92.22 kB gzip 35.32、css 10.92 gzip 2.85，与 Task 8 那次逐字节同量）。跑完 `git status --short` 仍为空。
+
+环境探测：`GIT_DIR == GIT_COMMON`（普通仓库，非 worktree）、分支 `master`、`git remote -v` **空**。据此菜单三条的真实情况：①"本地合回基线"无对象可执行（按 2026-10-06 的同意直接在 master 实施，无 feature 分支、无 worktree 要清）；②"推送开 PR"缺远端，不替用户猜仓库地址；③"保持现状"。
+
+**用户选③：保持现状，到此收口。** 阶段一交付完成，`master` HEAD 即最终态。
+
+- 交付时要说的两句：**建议轮换 `DEFAULT_USER_PASSWORD`**（明文在 `0b22116` 脱敏之前进过 git history，仓库文件里已 0 命中但历史可翻）；**阶段一有意不解决"配好 key 才能问"**，设置按钮 `disabled`、对话走 `.env` 平台 key。
+- 阶段二开工单 = 终审五条 advisory（`migrations.py:184-189` 补戳窗口、`client.js:55` 令牌过期不自动登出、hydrate 失败路径判据、`test_live_stream.py:34-50` 令牌无界增长、`test_observability.py:16-17` 扫描目录写死）+ spec `:357` 那一大列既有边界（`chat_history.user_id` 读写过滤、每用户 api_key/base_url、`llm_factory`、`$and` 读侧收窄、SettingsModal、模型下拉、409 门）。
