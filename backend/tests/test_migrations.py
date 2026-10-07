@@ -1,4 +1,5 @@
-"""迁移的四条纪律：缺列才 ALTER、已戳不再写、重复跑零副作用、口令空则账号不可登录。
+"""迁移的纪律：缺列才 ALTER、已戳不再写、重复跑零副作用、口令空则账号不可登录，
+步骤 4 抄 `.env` 三键时一人至多立一枚默认。
 
 这里用假 Connection 记录发出去的 SQL，为的是把"先查再改"这个决策本身钉死——
 真 MySQL 上的 ALTER 语义归 live 组，那是另一条判据。
@@ -17,14 +18,14 @@ class FakeConn:
     """只实现 migrations 用到的那几件事：查 information_schema、执行 DDL、跑 SELECT/UPDATE。"""
 
     def __init__(self, existing_columns=(), user_rows=(), owned_doc_ids=(),
-                 existing_indexes=()):
+                 existing_indexes=(), user_models=()):
         self.columns = set(existing_columns)          # {("documents", "user_id")}
         self.indexes = {(t, i) for (t, i) in existing_indexes}   # {("documents", "idx_documents_user_id")}
         self.users = list(user_rows)                  # [(id, identifier)]
         self.owned_docs = set(owned_doc_ids)          # 已有 user_id 的文档 id
         self.inserted = []                            # INSERT INTO users 的参数，用来验写了哪个哈希
         self.llm = {}                                 # 默认用户手上的 api_key/base_url（步骤 4 写它）
-        self.user_models = []                         # [(user_id, name, is_default)]
+        self.user_models = list(user_models)          # [(user_id, name, is_default)]
         self.executed = []                            # 记 DDL/DML，SELECT 不记
 
     def execute(self, sql, params=None):
@@ -84,20 +85,30 @@ class FakeConn:
             self.executed.append(text)
             return _Result([])
         if head.startswith("SELECT ID FROM USER_MODELS"):
-            rows = [1 for (u, n, _d) in self.user_models
-                    if u == params["uid"] and n == params["n"]]
+            # 这个前缀两个消费者共用：带 `:n` 是 (uid, name) 查重，只带 `:uid` 是"名单是否为空"的探询。
+            if "n" in params:
+                rows = [1 for (u, n, _d) in self.user_models
+                        if u == params["uid"] and n == params["n"]]
+            else:
+                rows = [1 for (u, _n, _d) in self.user_models if u == params["uid"]]
             return _Result(rows)
         if head.startswith("INSERT INTO USER_MODELS"):
-            self.user_models.append((params["uid"], params["n"], True))   # SQL 里 is_default 写死 1
+            # is_default 随 `:d` 参数走（生产码按"名单是否为空"决定），不再写死 True
+            self.user_models.append((params["uid"], params["n"], bool(params["d"])))
             return _Result([])
         if head.startswith("SELECT C.VECTOR_ID"):
             key = "parent" if "PARENT_CHUNKS" in head else "child"
             # 假连接按 SQL 里的 WHERE 决定收哪批行：新语义（`d.user_id IS NOT NULL`）收**已归户**的，
             # 阶段一那句 `d.user_id IS NULL` 收未归户的。生产码里这一格取反就是 advisory ① 的全部
             # 内容，所以这里必须读条件、不能只看前缀——否则判据没牙。
+            if "D.USER_ID IS NOT NULL" not in head and "D.USER_ID IS NULL" not in head:
+                raise AssertionError("补戳 SQL 的归属条件读不出来，改这里请同步 FakeConn")
             owned_only = "D.USER_ID IS NOT NULL" in head
-            # 真 SQL 返回 (vector_id, d.user_id) 两列；这里的主人恒为 1，因为 FakeConn 只有一个用户
-            return _Result([(vid, 1) for vid, doc_id in UNOWNED_VECTOR_ROWS[key].items()
+            # 真 SQL 返回 (vector_id, d.user_id) 两列。主人必须**随文档走**（`100 + doc_id`），
+            # 这条判据的全部内容就是这个映射：生产码若把它写成恒 1，`test_run_migrations_stamps_
+            # after_documents_are_claimed` 里"两枚父向量主人不同"的断言当场红。
+            return _Result([(vid, 100 + int(doc_id))
+                            for vid, doc_id in UNOWNED_VECTOR_ROWS[key].items()
                             if (doc_id in self.owned_docs) == owned_only])
         raise AssertionError(f"FakeConn 没料到的 SQL: {text[:120]}")
 
@@ -247,7 +258,12 @@ def test_run_migrations_stamps_after_documents_are_claimed():
     summary = migrations.run_migrations(FakeEngine(FakeConn()), client, FakeConfig())
 
     assert parent.requested == [["pv1", "pv2"]] and child.requested == [["cv1"]]
-    assert parent.items["pv1"] == {"document_id": "3", "user_id": "1"}
+    # 主人随文档走：pv1/pv2 的文档不同 ⇒ 两枚戳的主人必须不同（生产码写成恒 1 就会在这里红）
+    assert parent.items["pv1"] == {"document_id": "3", "user_id": "103"}
+    assert parent.items["pv2"] == {"document_id": "4", "user_id": "104"}
+    assert parent.items["pv1"]["user_id"] != parent.items["pv2"]["user_id"]
+    # 子块"合并写回不丢原键"：document_id 留着，user_id 是新补的那一枚
+    assert child.items["cv1"] == {"document_id": "5", "user_id": "105"}
     assert summary["vectors_stamped"] == 3
     assert summary["documents_claimed"] == 9
     assert summary["llm_seeded"] is True and summary["model_seeded"] is True
@@ -300,6 +316,19 @@ def test_seed_does_nothing_when_env_has_no_key():
     assert conn.user_models == []      # 没有 key 却塞一个模型名 = 造一条必 409 的半套配置
 
 
+def test_seed_does_not_add_a_second_default_when_the_list_already_has_one():
+    """名单里已有一枚默认（用户登录后自己加的）时，seed 只把 `.env` 的 key 抄进去，
+    新插的那枚必须是非默认——写死 `is_default=1` 会打破"一人至多一枚默认"这条不变量。"""
+    conn = FakeConn(user_rows=[(1, "default@local")], user_models=[(1, "m-existing", True)])
+    out = migrations.seed_default_llm(conn, 1, "sk-from-env", "https://dashscope/v1",
+                                      "qwen3.7-flash")
+    assert out == {"llm_written": True, "model_added": True}
+    assert conn.llm["api_key"] == "sk-from-env"
+    defaults = [m for m in conn.user_models if m[2] is True]
+    assert len(defaults) == 1 and defaults[0][1] == "m-existing"
+    assert conn.user_models[-1] == (1, "qwen3.7-flash", False)
+
+
 def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():
     """advisory ①：MySQL 已归户、Chroma 还没戳之间挂掉，下次开机必须把这批向量补上。
 
@@ -323,7 +352,7 @@ def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():
                                                            "child_document": child}),
                                         FakeConfig())
     assert second["vectors_stamped"] == 3, "归户之后就不再有补戳清单——advisory ① 回来了"
-    assert parent.items["pv1"] == {"document_id": "3", "user_id": "1"}
+    assert parent.items["pv1"] == {"document_id": "3", "user_id": "103"}
 
 
 def test_stamp_uses_each_documents_own_owner():

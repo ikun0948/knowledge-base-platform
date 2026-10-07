@@ -152,8 +152,14 @@ def seed_default_llm(conn, user_id: int, api_key, base_url, model) -> dict:
         exists = conn.execute(text("SELECT id FROM user_models WHERE user_id = :uid AND name = :n"),
                               {"uid": user_id, "n": model}).fetchall()
         if not exists:
+            # is_default 与 core/database.py 的 add_user_model 同口径：名单为空才立默认。
+            # 写死 1 会在"用户先加了模型、之后 .env 才补上 key"的序列里造出两枚默认，
+            # 与本仓"一个用户至多一枚 is_default"的不变量冲突（读侧按 id 升序取第一枚）。
+            first = conn.execute(text("SELECT id FROM user_models WHERE user_id = :uid LIMIT 1"),
+                                 {"uid": user_id}).fetchall()
             conn.execute(text("INSERT INTO user_models (user_id, name, is_default) "
-                              "VALUES (:uid, :n, 1)"), {"uid": user_id, "n": model})
+                              "VALUES (:uid, :n, :d)"),
+                         {"uid": user_id, "n": model, "d": 1 if not first else 0})
             conn.commit()
             added = True
     return {"llm_written": True, "model_added": added}
