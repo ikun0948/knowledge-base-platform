@@ -2144,6 +2144,13 @@ git -c user.name="31439" -c user.email="31439@local" commit -F /tmp/fe2-task6.tx
 
 > **交付时必说的一条连带**：归户只发生在**跑过迁移**的库上。没跑过的库里老行 `user_id` 仍是 NULL ⇒ 谁都读不到自己的旧历史（表征是"升级之后历史全空"，不是报错）。真服务重启即自愈；只跑 pytest 的话按 Step 8 那句补 DDL + 再跑一次 `backfill_chat_history`。
 
+> **修订（2026-10-08，Task 6 实跑纠偏）**：四处与正文不符，后续 Task 别再照正文算。
+> ① **Step 9 的 "+3 ⇒ 294" 是错的，实为 +4 ⇒ 295**（控制者亲跑 `295 passed, 2 skipped, 2 deselected, 1 warning`）。原因：`pytest.ini` 的 `addopts = -m "not migration"` **不排除 live**，所以全量本来就含着 live 组，本 Task 新加的那条 live 判据在全量里也 +1。自洽算式：`276 离线（-m "not live"）+ 21 live-db = 295 passed`，另加 `2 skipped`（`test_live_stream.py` 要 :8000 真服务）与 `2 deselected`（migration）= 299 条收集。⇒ **Task 7-12 预估全量条数时，新增的 live 判据也要计进全量。**
+> ② **Step 1 的 RED 实测 3 条，但反向重演时有 2 条正文没预告的连带红**：`test_ensure_columns_alters_only_when_missing`（`== 3` 的列数 pin）与 `test_ensure_indexes_creates_only_when_missing`（索引数 pin）。Step 7 的连带触点表里没有这两条，本 Task 已一并改到 4 列 / 2 索引——下一个人若从 RED 起做，别把它们当成自己改坏了。
+> ③ **落地后锚点现值**（Task 7 抽取时按内容定位，别照正文行号）：`rag_system.py` 十处历史调用在 `:49/:65/:101/:108/:130/:153/:173/:199/:209/:234`；`database.py` 三方法在 `:479/:494/:520`；`api/history.py` 两枚端点调用在 `:34/:46`；`api/chat.py` 的 `_require_owned_parents` docstring 变长（`:16-30`）。
+> ④ **本机真库已归户**：`backfill_chat_history` 实测 `chat_rows_claimed = 43`、剩余 NULL 0 行；`chat_history.user_id` 列与 `idx_chat_history_user_id` 索引均已在库上（Step 8 那句 DDL 本轮返回 `columns: [] indexes: []`）。Task 12 的真服务重启只需确认 `迁移完成:` 那一行，不必再手工 ALTER。
+> ⑤ **流程账（并发写入）**：本 Task 收口期间工作树被两轮回流的实施代理与控制者**同时**动过（`rag_system.py:108`、`api/history.py`、`core/database.py` 两臂、`core/migrations.py` 都曾瞬态变脏）。双方最终都还原、HEAD 与工作树逐字节一致（sha256 双证），但门禁数在并发窗口内不可信。⇒ 后续任何变异自证只在 `git status --porcelain` 为空 + 目标文件 sha256 已记基线的配对前提下做，且同一棵树上一次只留一个写入者。
+
 ---
 
 ## Task 7: 问答端点吃用户自己的凭证 + 三条 409 门禁（含 advisory ④）
