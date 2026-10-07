@@ -250,10 +250,14 @@ DEFAULT_USER_PASSWORD=
 真实 `backend/.env` 追加一行（**只写，不打印**）：
 
 ```bash
-cd backend && printf 'AUTH_TOKEN_TTL_DAYS=30\nDEFAULT_USER_PASSWORD=<REDACTED-ROTATED-2026-10-09>' >> .env \
+cd backend && printf 'AUTH_TOKEN_TTL_DAYS=30\nDEFAULT_USER_PASSWORD=<演示口令，见下方勘误>\n' >> .env \
   && grep -c "^DEFAULT_USER_PASSWORD=" .env
 ```
-预期输出：`1`。**不要 `cat .env`**；这条 `grep -c` 就是唯一的验证动作。口令真值 `kb-default-2026` 会出现在 Task 8 的 live 手测里，属演示账号，随时可改（改完必须重启后端才生效——`.env` 改动不会热加载）。
+预期输出：`1`。**不要 `cat .env`**；这条 `grep -c` 就是唯一的验证动作。
+
+> **2026-10-07 脱敏勘误（Task 8 收口前）**：这两格原文写的是口令真值，已按本仓口径抹掉——**`.env` 的键值不进文档、不进日志、不进断言消息**，而计划文是入库文件，留一份明文等于给后来人多一个泄漏面（真值仍只在 `backend/.env` 一处，本行不构成损失）。需要登录 `default@local` 时用
+> `python -c "from config.config import Config; print(len(Config.DEFAULT_USER_PASSWORD))"`
+> 这类**只打长度**的探针确认它存在；要真用它，在同一条命令里取值传进去，**不要 print 出来**。这一句同时废止原文那句"口令真值会出现在 Task 8 的 live 手测里"——Task 8 的浏览器手测用自己现造的一次性账号（`probe-ui%` + `ui-pass-123`），不需要默认账号的口令。
 
 > **2026-10-06 修订（Task 1 执行期）：这条命令与 Global Constraints 打架，按约束裁**
 > 散文写"追加一行"，而逐字命令往真实 `.env` 塞了**两个键**。`AUTH_TOKEN_TTL_DAYS` 是调参键，`Config` 里默认 30 就能用，没有任何东西需要它出现在真实配置里。**裁定：真实 `backend/.env` 只留 `DEFAULT_USER_PASSWORD` 那一行**（`backend/.env.example` 作为模板保留两键不动，`Config.AUTH_TOKEN_TTL_DAYS` 与 `test_config.py` 的 `SANCTIONED_ATTRS` 也不为此改）。验证因此是两条计数：`grep -c "^AUTH_TOKEN_TTL_DAYS=" backend/.env` = **0**、`grep -c "^DEFAULT_USER_PASSWORD=" backend/.env` = **1**。仍然只数键，不打印内容。
