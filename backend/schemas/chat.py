@@ -14,6 +14,9 @@ class ChatRequest(BaseModel):
     # 老字段 document_ids 不留 shim：唯一客户端是自家前端，同仓同部署，留着就是永不有人删的死入口。
     parent_ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
         default_factory=list, max_length=50)
+    # 用户自带模型名：不在他的名单里就 409（api/chat.py::_llm_context），空着走他的默认模型。
+    # 上界 100 与 user_models.name / ModelIn 同源（Task 2 已记这笔账）。
+    model_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class ChatResponse(BaseModel):

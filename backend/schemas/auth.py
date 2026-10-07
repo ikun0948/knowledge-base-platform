@@ -135,6 +135,27 @@ class ModelsOut(BaseModel):
 # 设置端点（本 Task）与问答端点的模型解析（Task 7）要说同一句话，抄两遍迟早分叉
 MODEL_NOT_IN_LIST = "模型不在你的名单里"
 
+# 同一条理由的第二枚：有 key 但名单是空的人，收到的该是"去添加一个模型"而不是"去填 key"
+EMPTY_MODEL_LIST = "你的模型名单是空的，请先在设置里添加一个模型"
+
+
+def default_model_of(rows) -> str | None:
+    """名单里"现在用哪个模型"的唯一口径：有标记取标记的那个，没标记取名单第一项。
+
+    为什么住在这里而不是端点里：设置侧（`_user_out`/`_models_out`）与问答侧
+    （`api/chat.py::_llm_context`）要的是同一个答案，两处各写一遍迟早分叉——分叉的表现是
+    界面里选中的是 A、实际打出去的是 B。与 `mask_api_key` 同处一身的道理一样：
+    这是"接口把 user_models 这张表说成什么口径"的一部分。
+
+    为什么要有回落：`delete_user_model` 删掉当前默认时**不**动别人的 `is_default`
+    （core/database.py 的 docstring 记着这个取舍），于是"删掉最后一个默认"之后名单会
+    暂时没有标记。读取侧不兜的话 `default_model` 就是 None，而问答侧兜的是第一项——
+    两边必须在同一句上，否则设置里显示有模型、发送却 409。
+    """
+    if not rows:
+        return None
+    return next((name for name, is_default in rows if is_default), rows[0][0])
+
 
 class AuthOut(BaseModel):
     token: str

@@ -8,13 +8,14 @@ import pytest
 from fastapi import APIRouter, Depends
 from fastapi.testclient import TestClient
 
-from exceptions import AuthError, LLMError, RetrievalError, StorageError, UnsupportedDocumentType
+from exceptions import (AuthError, LLMError, NotConfiguredError, RetrievalError,
+                        StorageError, UnsupportedDocumentType)
 from core.database import DatabaseManager
 from main import STATUS_BY_ERROR, create_app
 
 
 def unsupported_type_dep():
-    """五个探针依赖：线上这些异常来自 core 层，测试用 dependency_overrides 换成同款。"""
+    """六个探针依赖：线上这些异常来自 core 层，测试用 dependency_overrides 换成同款。"""
 
 
 def storage_dep():
@@ -30,6 +31,10 @@ def llm_dep():
 
 
 def auth_dep():
+    """见 unsupported_type_dep。"""
+
+
+def not_configured_dep():
     """见 unsupported_type_dep。"""
 
 
@@ -66,6 +71,11 @@ def probe_auth(_=Depends(auth_dep)):
     return {"unreachable": True}
 
 
+@probe_router.get("/not-configured")
+def probe_not_configured(_=Depends(not_configured_dep)):
+    return {"unreachable": True}
+
+
 @probe_router.get("/unhandled")
 def probe_unhandled(_=Depends(unhandled_dep)):
     return {"unreachable": True}
@@ -84,6 +94,9 @@ CENTRAL_MAP = [
     (retrieval_dep, "/api/probe/retrieval", RetrievalError("检索或上下文压缩失败，请稍后重试"), 502),
     (llm_dep, "/api/probe/llm", LLMError("大模型调用失败，请稍后重试"), 502),
     (auth_dep, "/api/probe/auth", AuthError("未登录或登录已过期"), 401),
+    # 文案抄字面量而不是 import NOT_CONFIGURED：这条钉的是"这一类配这一个数字"，
+    # 把常量名接进断言会让 Task 4 的文案改动牵连错误模型测。
+    (not_configured_dep, "/api/probe/not-configured", NotConfiguredError("还没有配置大模型，请先在设置里填写 API Key 与路由"), 409),
 ]
 
 
@@ -108,7 +121,8 @@ def test_central_map_pins_the_status_number_of_every_domain_error(dep, path, err
 def test_central_map_covers_every_domain_error_class():
     """漏一格就等于漏一类：没进表的异常会退化成兜底 500，语义静默改变。"""
     assert set(STATUS_BY_ERROR) == {
-        UnsupportedDocumentType, StorageError, RetrievalError, LLMError, AuthError
+        UnsupportedDocumentType, StorageError, RetrievalError, LLMError, AuthError,
+        NotConfiguredError
     }
 
 

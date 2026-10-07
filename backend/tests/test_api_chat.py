@@ -1,21 +1,23 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
-from deps import get_config, get_db, get_rag_system
+from core.llm_factory import NOT_CONFIGURED
+from deps import get_db, get_rag_system
 from exceptions import LLMError, RetrievalError, StorageError
-from fakes import FakeConfig, FakeOwnedParentsDB, FakeRAG, FakeUser, with_auth
+from fakes import FakeOwnedParentsDB, FakeRAG, FakeUser, with_auth
 from main import create_app
+from schemas.auth import EMPTY_MODEL_LIST, MODEL_NOT_IN_LIST
 from schemas.common import Reference
 
 
 def make_client(rag, db=None, user=None):
     app = create_app()
     app.dependency_overrides[get_rag_system] = lambda: rag
-    # chat 端点现在真的会用到 db（越权白名单），漏这一格那 29 条会一起 500：
+    # chat 端点现在真的会用到 db（越权白名单 + 模型名单），漏这一格那 29 条会一起 500：
     # app.state.db 在测试里根本不存在
     app.dependency_overrides[get_db] = lambda: db or FakeOwnedParentsDB()
-    app.dependency_overrides[get_config] = lambda: FakeConfig()
     with_auth(app, user or FakeUser())
     return TestClient(app)
 
@@ -55,22 +57,44 @@ def test_missing_question_is_422():
 
 class SpyRAG(FakeRAG):
     """假对象不校验参数顺序，而端点是按位置调用的：一次传错位（session_id 与
-    question 互换）在上面的断言里完全看不出来。"""
+    question 互换）在上面的断言里完全看不出来。
+
+    阶段二 Task 7 起它还记两件事：`ctx.user_id`（读侧过滤按谁走的）与 `ctx.llm` 三件套
+    （凭证来自谁的行）。两枚流式覆写**不是生成体**——先 append 再把父生成器 return 出去，
+    这样"记录"发生在端点取事件那一刻。写成 `yield` 的话 append 要等被迭代才执行，
+    而门禁生效时端点压根不迭代，`stream_calls == []` 就成了恒真。
+    """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.calls = []
+        self.stream_calls = []
         self.seen_user_ids = []
+        self.seen_llm = []
+
+    def _spy_ctx(self, ctx):
+        self.seen_user_ids.append(ctx.user_id)
+        self.seen_llm.append((ctx.llm.api_key, ctx.llm.base_url, ctx.llm.model))
 
     def chat_with_documents(self, ctx, question, parent_ids, session_id):
         self.calls.append(("rag", question, list(parent_ids), session_id))
-        self.seen_user_ids.append(ctx.user_id)
+        self._spy_ctx(ctx)
         return super().chat_with_documents(ctx, question, parent_ids, session_id)
 
     def normal_chat(self, ctx, question, session_id):
         self.calls.append(("normal", question, session_id))
-        self.seen_user_ids.append(ctx.user_id)
+        self._spy_ctx(ctx)
         return super().normal_chat(ctx, question, session_id)
+
+    def chat_with_documents_stream(self, ctx, question, parent_ids, session_id):
+        self.stream_calls.append(("rag", question, list(parent_ids), session_id))
+        self._spy_ctx(ctx)
+        return super().chat_with_documents_stream(ctx, question, parent_ids, session_id)
+
+    def normal_chat_stream(self, ctx, question, session_id):
+        self.stream_calls.append(("normal", question, session_id))
+        self._spy_ctx(ctx)
+        return super().normal_chat_stream(ctx, question, session_id)
 
 
 def test_rag_chain_receives_the_payload_in_the_right_positions():
@@ -301,23 +325,7 @@ def test_stream_blank_question_is_plain_http_422_before_any_frame():
 
 
 def test_stream_payload_is_forwarded_in_the_right_positions():
-    class SpyStreamRAG(FakeRAG):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            self.stream_calls = []
-            self.seen_user_ids = []
-
-        def chat_with_documents_stream(self, ctx, question, parent_ids, session_id):
-            self.stream_calls.append(("rag", question, list(parent_ids), session_id))
-            self.seen_user_ids.append(ctx.user_id)
-            return super().chat_with_documents_stream(ctx, question, parent_ids, session_id)
-
-        def normal_chat_stream(self, ctx, question, session_id):
-            self.stream_calls.append(("normal", question, session_id))
-            self.seen_user_ids.append(ctx.user_id)
-            return super().normal_chat_stream(ctx, question, session_id)
-
-    rag = SpyStreamRAG(tokens=["x"])
+    rag = SpyRAG(tokens=["x"])
     # user_id 显式取 5（默认人是 1）：端点若把 `user.id` 换成字面常量 1，只有这条会红（评审 I1）。
     client = make_client(rag, user=FakeUser(user_id=5))
     post_stream(client, {"session_id": "s9", "question": "营收多少",
@@ -325,6 +333,9 @@ def test_stream_payload_is_forwarded_in_the_right_positions():
     post_stream(client, {"session_id": "s9", "question": "你好", "parent_ids": []})
     assert rag.stream_calls == [("rag", "营收多少", ["丙_p_0", "甲_p_0"], "s9"), ("normal", "你好", "s9")]
     assert rag.seen_user_ids == [5, 5], "ctx 传错 = 读侧过滤按别人的边界走"
+    # 这一条用的是缺省 db（名单 [("fake-model", True)]），所以模型名是 fake-model：
+    # 钉的是"用户行里的凭证一路走到链子门口"，与 Task 5 的过渡形态（读 .env）互斥。
+    assert rag.seen_llm == [("sk-fake-user", "https://fake-user/v1", "fake-model")] * 2
 
 
 def test_stream_frames_are_single_line_json_with_readable_chinese():
@@ -376,3 +387,86 @@ def test_stream_headers_forbid_proxy_buffering():
     assert res.headers["x-accel-buffering"] == "no"
     assert res.headers["cache-control"] == "no-cache"
     assert res.headers["content-type"].startswith("text/event-stream")
+
+
+# --- 阶段二 Task 7：每用户凭证 + 三条 409 ---
+
+PAYLOAD = {"session_id": "s1", "question": "q", "parent_ids": []}
+
+
+def configured_db(models=(("qwen-max", True), ("qwen-turbo", False))):
+    """默认给两枚：一枚带 is_default，一枚不带——这样"取默认"和"默认缺失取第一个"
+    两条解析路径各有输入，而忘传 models 的测不会意外走进空名单分支。"""
+    db = FakeOwnedParentsDB()
+    db.user_models = list(models)
+    return db
+
+
+def test_the_callers_own_credentials_reach_the_chain():
+    """本 Task 的全部理由压在这一条：ctx 里的 key/路由/模型来自 users 行，不再来自 .env。
+
+    Task 5 的过渡形态会把 FakeConfig 那三键（sk-fake / https://fake/v1 / fake-model）传下去，
+    这条当场红——它就是"过渡形态不许留在生产里"的哨兵，也是变异自证最省牙的一条：
+    把 `llm_config_for(user, model)` 的 key 换成别人的只红两条（这条 + 流式那条的 `seen_llm`），
+    其余 302 条照绿，说明凭证来源这一格只有这两处判据在守。
+    """
+    rag = SpyRAG(answer="答", refs=[])
+    make_client(rag, db=configured_db()).post("/api/chat", json=PAYLOAD)
+    assert rag.seen_llm == [("sk-fake-user", "https://fake-user/v1", "qwen-max")]
+
+
+@pytest.mark.parametrize("path", ["/api/chat", "/api/chat/stream"])
+def test_a_user_without_credentials_gets_409_and_the_chain_never_runs(path):
+    """spec 3.5 的那道门：没配 key 的人点发送，拿到的必须是 409 + 一句能行动的中文，
+    而且一次都不许打到 LLM 上（打上去 = 用别人的钱 + 上游一句看不懂的 401）。
+
+    两条路径都得钉：流式端点忘了做门禁时状态码会锁死在 200，失败只能落进 error 帧，
+    那时前端看到的是一句"大模型调用失败"而不是"你去设置里填 key"。
+    """
+    rag = SpyRAG()
+    user = FakeUser(api_key=None, base_url=None)
+    res = make_client(rag, db=configured_db(), user=user).post(path, json=PAYLOAD)
+    assert res.status_code == 409, res.text
+    assert res.json() == {"detail": NOT_CONFIGURED}
+    # 分两行写而不是一行 `and`：红了要立刻看出是哪一个端点漏了门禁
+    assert rag.calls == [], "/api/chat 在门禁之前就跑了链子"
+    assert rag.stream_calls == [], "/api/chat/stream 在 meta 帧之前就跑了链子"
+
+
+def test_an_empty_model_list_gets_its_own_409_text():
+    """有 key 没模型：这不是"没配好 key"，文案得说清缺的是哪一格，否则用户会回去反复填 key。"""
+    rag = SpyRAG()
+    res = make_client(rag, db=configured_db(models=())).post("/api/chat", json=PAYLOAD)
+    assert res.status_code == 409
+    assert res.json() == {"detail": EMPTY_MODEL_LIST}
+    assert rag.calls == []
+
+
+def test_a_model_outside_the_list_is_409_with_the_settings_wording():
+    """下拉里被人手改过的模型名、或别的账号的模型名：与 `PUT /me/models/default` 说同一句话。"""
+    res = make_client(SpyRAG(), db=configured_db()).post(
+        "/api/chat", json={**PAYLOAD, "model_name": "gpt-9"})
+    assert res.status_code == 409
+    assert res.json() == {"detail": MODEL_NOT_IN_LIST}
+
+
+def test_the_default_model_wins_when_the_payload_names_none():
+    rag = SpyRAG(answer="答", refs=[])
+    make_client(rag, db=configured_db()).post("/api/chat", json=PAYLOAD)
+    assert rag.seen_llm[0][2] == "qwen-max"          # is_default 那一枚
+
+
+def test_the_first_model_is_the_fallback_when_none_is_default():
+    """删掉默认行之后 `default_model` 是 None（Task 2 的裁定），问答侧必须同一口径，
+    否则设置里显示有模型、发送却 409。口径住在 schemas/auth.py::default_model_of，
+    全项目只有那一处定义——设置侧与问答侧共用（Task 7 预检裁定 ⑥）。"""
+    rag = SpyRAG(answer="答", refs=[])
+    make_client(rag, db=configured_db(models=(("m-a", False), ("m-b", False)))).post(
+        "/api/chat", json=PAYLOAD)
+    assert rag.seen_llm[0][2] == "m-a"
+
+
+def test_an_explicit_model_name_reaches_the_chain():
+    rag = SpyRAG(answer="答", refs=[])
+    make_client(rag, db=configured_db()).post("/api/chat", json={**PAYLOAD, "model_name": "qwen-turbo"})
+    assert rag.seen_llm[0][2] == "qwen-turbo"

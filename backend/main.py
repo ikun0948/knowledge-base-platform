@@ -19,6 +19,7 @@ from deps import get_config, get_db, get_vector_store
 from exceptions import (
     AuthError,
     LLMError,
+    NotConfiguredError,
     RetrievalError,
     StorageError,
     UnsupportedDocumentType,
@@ -33,6 +34,9 @@ STATUS_BY_ERROR = {
     RetrievalError: 502,
     LLMError: 502,
     AuthError: 401,
+    # spec 3.5 的问答门禁：账号状态没到"能问"的程度。数字选 409 而不是 400/403——
+    # 请求本身合法、令牌也有效，冲突的是资源状态（没配 key），客户端修正配置后重发同一请求就能成功。
+    NotConfiguredError: 409,
 }
 
 

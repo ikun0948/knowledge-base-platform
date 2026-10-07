@@ -4,9 +4,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from core.llm_factory import LLMConfig, RunContext
-from deps import get_config, get_current_user, get_db, get_rag_system
-from exceptions import LLMError, RetrievalError, StorageError
+from core.llm_factory import RunContext, llm_config_for
+from deps import get_current_user, get_db, get_rag_system
+from exceptions import LLMError, NotConfiguredError, RetrievalError, StorageError
+from schemas.auth import EMPTY_MODEL_LIST, MODEL_NOT_IN_LIST, default_model_of
 from schemas.chat import ChatRequest, ChatResponse, mode_of
 
 router = APIRouter(prefix="/api/chat")
@@ -30,22 +31,33 @@ def _require_owned_parents(db, parent_ids, user) -> list[str]:
     return owned
 
 
-def _ctx_from_config(user, config) -> RunContext:
-    """Task 5 的过渡形态：凭证仍来自 `.env`（行为一字不变），但 `user_id` 已经是当前用户。
+def _llm_context(db, user, model_name) -> RunContext:
+    """把"这个人的行 + 他点的那枚模型"折成一次问答的 ctx。三条 409 全在这函数里发。
 
-    这一格不是占位——读侧过滤（`create_retriever`/`get_parent_documents`）吃的就是
-    `ctx.user_id`，传错就是越权。Task 7 把凭证来源换成用户行、在这里加三条 409，
-    所以四个 rag 调用点的形状从本 Task 起不再变化。
+    凭证那一格不在这里重复检查：`llm_config_for` 是本仓唯一知道"什么算配好了"的地方，
+    两处各写一遍迟早分叉（Task 4 的半套配置判据也归它）。
+
+    顺序上先解析模型、后验凭证，代价是"没 key 也没模型"的人先拿到"名单是空的"。
+    可接受：界面上那条横幅（Task 11）在发送之前就按 `llm_configured` + `models.length`
+    说清了缺哪一格，这枚 409 只是给过期标签页和裸 API 客户端的兜底。
     """
-    return RunContext(user_id=user.id, llm=LLMConfig(
-        api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL, model=config.LLM_MODEL))
+    rows = db.list_user_models(user.id)
+    names = [name for name, _ in rows]
+    if not names:
+        raise NotConfiguredError(EMPTY_MODEL_LIST)
+    if model_name and model_name not in names:
+        # 这不是"账号没配好"，是这次请求的载荷不对：走 HTTPException，与 add_model 的 409 同形
+        raise HTTPException(status_code=409, detail=MODEL_NOT_IN_LIST)
+    # 默认口径与设置端点共用 schemas/auth.py 那一枚：界面里选中的与实际打出去的必须是同一个
+    model = model_name or default_model_of(rows)
+    return RunContext(user_id=user.id, llm=llm_config_for(user, model))
 
 
 @router.post("", response_model=ChatResponse)
 def chat(payload: ChatRequest, db=Depends(get_db), rag=Depends(get_rag_system),
-         user=Depends(get_current_user), config=Depends(get_config)):
+         user=Depends(get_current_user)):
     """parent_ids 为空即普通对话，用 mode 回传实际走了哪条链（spec 6.2）。"""
-    ctx = _ctx_from_config(user, config)
+    ctx = _llm_context(db, user, payload.model_name)
     mode = mode_of(payload.parent_ids)
     if mode == "rag":
         _require_owned_parents(db, payload.parent_ids, user)   # ← 在碰 rag 之前
@@ -75,11 +87,11 @@ def _sse(event: str, data) -> str:
 
 @router.post("/stream")
 def chat_stream(payload: ChatRequest, db=Depends(get_db), rag=Depends(get_rag_system),
-                user=Depends(get_current_user), config=Depends(get_config)):
+                user=Depends(get_current_user)):
     """SSE 流式版问答（spec 6.4 帧表逐字）。meta 发出后状态码已定格 200：
     之后的失败一律降级为 error 帧，前端读 detail，HTTP 语义让位于流协议。
     /api/chat 原样保留——spec 十一节的回退路径。"""
-    ctx = _ctx_from_config(user, config)
+    ctx = _llm_context(db, user, payload.model_name)
     mode = mode_of(payload.parent_ids)
     if mode == "rag":
         # ← 必须在 frames() 之外：流一旦开播状态码就锁死在 200，越权只能落进 error 帧，

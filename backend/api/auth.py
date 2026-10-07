@@ -14,7 +14,8 @@ from core.security import (ALGORITHM, PBKDF2_ITERATIONS, hash_password, hash_tok
                            new_token, verify_password)
 from deps import bearer_token, get_config, get_current_user, get_db
 from schemas.auth import (AuthOut, LlmIn, LoginIn, MeOut, MODEL_NOT_IN_LIST, ModelIn,
-                          ModelsOut, PasswordIn, ProfileIn, RegisterIn, UserOut, mask_api_key)
+                          ModelsOut, PasswordIn, ProfileIn, RegisterIn, UserOut,
+                          default_model_of, mask_api_key)
 
 router = APIRouter(prefix="/api/auth")
 logger = logging.getLogger("kb.api.auth")
@@ -39,19 +40,6 @@ def default_nickname(identifier: str, identifier_type: str) -> str:
     return f"用户{identifier[-4:]}"
 
 
-def _default_of(rows) -> str | None:
-    """名单里"现在用哪个模型"的唯一口径：有标记取标记的那个，没标记取名单第一项。
-
-    为什么要有回落：`delete_user_model` 删掉当前默认时**不**动别人的 `is_default`
-    （core/database.py 的 docstring 记着这个取舍），于是"删掉最后一个默认"之后名单会
-    暂时没有标记。读取侧不兜的话 `default_model` 就是 None，而 Task 7 的问答链兜的是
-    第一项——两边必须在同一句上，否则用户界面选中的和实际打出去的对不上。
-    """
-    if not rows:
-        return None
-    return next((name for name, is_default in rows if is_default), rows[0][0])
-
-
 def _user_out(db, user) -> UserOut:
     """把"User 行 + user_models 表"折成 UserOut。全项目唯一组装点，别在端点里各拼一遍。
 
@@ -66,7 +54,7 @@ def _user_out(db, user) -> UserOut:
         llm_base_url=user.base_url or "",
         api_key_masked=mask_api_key(user.api_key),
         models=[name for name, _ in rows],
-        default_model=_default_of(rows),
+        default_model=default_model_of(rows),
     )
 
 
@@ -93,7 +81,7 @@ def _reload(db, user):
 
 def _models_out(db, user) -> ModelsOut:
     rows = db.list_user_models(user.id)
-    return ModelsOut(models=[name for name, _ in rows], default_model=_default_of(rows))
+    return ModelsOut(models=[name for name, _ in rows], default_model=default_model_of(rows))
 
 
 def _issue(db, config, user) -> AuthOut:

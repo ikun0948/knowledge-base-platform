@@ -1,10 +1,8 @@
 class FakeConfig:
+    # 只剩 /api/health 读的这一格（main.py 的健康检查报持久目录）。
+    # 阶段二 Task 7 起问答凭证来自用户行，此前挂在这里的 OPENAI_* 三键随之拆掉——
+    # "写了没人读"的字段在本仓是负资产（FakeVectorStore.stamped_user 记过同一笔账）。
     CHROMA_PERSIST_DIR = "fake://chroma"
-    # Task 5 的过渡 ctx 组装要读这三格（`api/chat.py::_ctx_from_config`）。
-    # 值故意与真 .env 不同：判据看的是"传下去了"，不是"传对了什么"。
-    OPENAI_API_KEY = "sk-fake"
-    OPENAI_BASE_URL = "https://fake/v1"
-    LLM_MODEL = "fake-model"
 
 
 class FakeDatabase:
@@ -24,10 +22,20 @@ class FakeOwnedParentsDB:
 
     def __init__(self):
         self.calls = []
+        self.user_models = None   # None ⇒ 用下面那份缺省名单
 
     def owned_parent_ids(self, parent_ids, *, user_id):
         self.calls.append((tuple(parent_ids), user_id))
         return list(dict.fromkeys(parent_ids))
+
+    def list_user_models(self, user_id):
+        """默认一枚带 default：那 30 条 chat 测要能过 `_llm_context` 的名单检查。
+
+        绝不往 self.calls 里记——`test_api_chat.py` 的
+        `test_rag_question_passes_the_parent_pool_through_the_whitelist` 逐字比较那一份，
+        多记一笔就把"白名单收到正确的 user_id"那条判据撞红。
+        """
+        return self.user_models if self.user_models is not None else [("fake-model", True)]
 
     def get_chat_history(self, session_id, *, user_id, limit=10):
         return []
@@ -122,16 +130,20 @@ class FakeRAG:
 class FakeUser:
     """认证依赖在端点测试里的最小替身。
 
-    业务代码只读 `.id`（归属）与 `.nickname`/`.avatar`（出参），所以这里只给这几个字段：
-    多给一个用不到的字段，就多一个"测试通过但真 ORM 行里没有它"的坑。
+    业务代码读 `.id`（归属）、`.nickname`/`.avatar`（出参），阶段二起 `api/chat.py::_llm_context`
+    还读 `.api_key`/`.base_url`（凭证）。缺省给一对假凭证而不是 None：问答测有 30 条，
+    每条都要 200 才有意义，"没配 key"那条路径自己传 None。
     """
 
-    def __init__(self, user_id=1, identifier="probe@local", nickname="探针"):
+    def __init__(self, user_id=1, identifier="probe@local", nickname="探针",
+                 api_key="sk-fake-user", base_url="https://fake-user/v1"):
         self.id = user_id
         self.identifier = identifier
         self.identifier_type = "email"
         self.nickname = nickname
         self.avatar = "auto"
+        self.api_key = api_key
+        self.base_url = base_url
 
 
 def with_auth(app, user=None):

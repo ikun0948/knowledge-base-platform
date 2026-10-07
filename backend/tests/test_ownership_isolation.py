@@ -33,6 +33,8 @@ class OwnerAwareDB:
         self.doc_owner = OWNER
         self.rows = [SimpleNamespace(id=7, filename="甲.txt", chunk_count=1,
                                      created_at=datetime(2026, 10, 6))]
+        # 人人都有的这一枚，只为让 Task 7 的名单门禁放行——越权那两枪必须红在 404
+        self.user_models = [("fake-model", True)]
 
     def _record(self, name, user_id):
         self.calls.append((name, user_id))
@@ -83,6 +85,13 @@ class OwnerAwareDB:
         if not self._record("owned_parent_ids", user_id):
             return []
         return [pid for pid in dict.fromkeys(parent_ids) if pid == "甲.txt_parent_0"]
+
+    def list_user_models(self, user_id):
+        """Task 7 的门禁在查白名单**之前**读名单，缺这格时两条越权判据会红在 409 而不是 404。
+
+        名单内容与归属无关（人人都有这一枚），所以不记进 self.calls——那份是逐字比较的。
+        """
+        return list(self.user_models)
 
     def get_chat_history(self, session_id, *, user_id, limit=10):
         return []
