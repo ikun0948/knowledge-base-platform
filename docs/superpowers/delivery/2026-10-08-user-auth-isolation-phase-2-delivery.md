@@ -50,7 +50,7 @@
 5. **改密码不吊销其它设备的令牌**：会话表 30 天绝对过期，只有登出才删行。
 6. **界面上选中的那枚模型就是实际发出去的那枚**：设置侧与问答侧共用 `schemas/auth.py:142 default_model_of` 这一个函数（全仓 `_default_of` 零命中），不可能分叉。
 7. **未配置时是「事前禁发 + 紫横幅」**，两条路都堵（按钮 `:disabled` 与 `submit()` 门禁各一半）；真收到 409 时落红色横幅，且**前端不改写后端文案**（英文 detail 原文照抄在中文冠语之后）。
-8. **`PASSWORD_MIN` 是 6 不是 8**（`schemas/auth.py:13`），前端两处已同步。
+8. **`PASSWORD_MIN` 是 6 不是 8**（`schemas/auth.py:13`）。前端原有两处各写一份，阶段三第 ② 条（`ee117fd`）起只有 `frontend/src/constants.js` 一枚，且由 `backend/tests/test_frontend_constants.py` 钉住与后端逐字相同——不再依赖"记得两边一起改"。
 9. **默认账号 `default@local` 的初始口令来自 `.env` 的 `DEFAULT_USER_PASSWORD`**；该键为空则这个账号只作归属锚点、不可登录。
 10. **建议轮换 `DEFAULT_USER_PASSWORD`**：它在脱敏提交 `0b22116` 之前进过 git history，仓库文件现在 0 命中但历史可翻。
 
@@ -90,7 +90,7 @@
 ## 八、阶段三开工单（明确不在阶段二范围，每条给「要闭合得做什么」）
 
 1. ~~`LlmIn.api_key`/`base_url` 的长度界量在 **strip 之前**~~ ⇒ **已闭合（2026-10-08，`de8499d`）**：两格的 `min_length/max_length` 从 `Field` 搬进 `field_validator`，strip 完再量并返回洗净值；补了三条判据（靠空白凑够 8 位的 key 现在 422 且不写库、正好 255/500 位的合法值不再因为多贴空格被拒）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
-2. 前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）⇒ 加一枚 options 端点，或前端集中 constants 并用判据钉住与后端逐字相同。
+2. ~~前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）~~ ⇒ **已闭合（2026-10-08，`ee117fd`）**：走的是"前端集中 constants + 判据钉住"那条路（否决 options 端点——它要进认证白名单、要给同步表单加异步态、首屏仍需一份兜底副本，那正是本条要消灭的东西）。七枚镜像字面量收进 `frontend/src/constants.js`（第 7 枚是此前只以 `maxlength="100"` 形态存在的模型名上界），新增 `backend/tests/test_frontend_constants.py` 直读两端源码钉四件事：只许一枚模块声明、镜像值与后端权威值逐字相同、头像与标签同枚覆盖、模板属性里不许写死数字（顺带消灭 `AuthPanel.vue:119`「至少 6 位」与两处 `maxlength`）。判据放 pytest 而非 vitest：改后端不改镜像、或改镜像不改后端，都在**同一道后端门**上红。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 3. 两枚同名 `FakeConfig`（`tests/fakes.py:1` 与 `tests/test_migrations.py:182`）⇒ 合并前先确认迁移组判据不依赖局部那份的四键形状。
 4. `ChatHistory.user_id` / `documents.user_id` 的外键**只存在于新建库** ⇒ 做任何「注销账号」功能之前必须先补 FK 或显式级联删行，否则老库留孤儿。
 5. `user_models`「至多一枚默认」靠应用层两步（判空 + 清场）⇒ 并发插入可留两枚默认；要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）。
