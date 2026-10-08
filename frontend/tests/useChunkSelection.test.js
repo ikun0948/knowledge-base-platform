@@ -7,7 +7,9 @@ vi.mock('../src/api/documents.js', () => ({ listChunks: vi.fn() }))
 import { listChunks } from '../src/api/documents.js'
 // ApiError 来自未被 mock 的 client.js：钉档要钉的就是"真实网络层抛的那个形状"
 import { ApiError } from '../src/api/client.js'
-import { MAX_SELECTED_CHUNKS, useChunkSelection } from '../src/composables/useChunkSelection.js'
+// 上限那枚数字归 constants.js（后端契约的镜像，pytest 两头钉），这里只从那里取
+import { MAX_SELECTED_CHUNKS } from '../src/constants.js'
+import { useChunkSelection } from '../src/composables/useChunkSelection.js'
 
 const KEY = 'selected_parent_ids'
 

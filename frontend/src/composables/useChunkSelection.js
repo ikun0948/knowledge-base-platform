@@ -1,10 +1,9 @@
 import { computed, ref } from 'vue'
 
 import { listChunks } from '../api/documents.js'
+import { MAX_ID_CHARS, MAX_SELECTED_CHUNKS } from '../constants.js'
 
 const STORAGE_KEY = 'selected_parent_ids'
-export const MAX_SELECTED_CHUNKS = 50
-const MAX_ID_CHARS = 100 // 对齐 ParentChunk.parent_id 的 String(100)
 
 // localStorage 是用户能亲手改的地方（DevTools、上个版本的残留），坏值必须在这道关口
 // 就被丢掉，而不是带着进请求 URL——同 useSession 的"坏值构造不可达"，别等后端 422。

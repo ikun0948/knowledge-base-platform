@@ -6,12 +6,17 @@ PASSWORD_MIN 一共三份，权威的那份在 `backend/schemas/auth.py:13`。�
 一句"改动要两边一起改"。那句话不是门禁，是一句要求某个记性很好的人去执行的约定：
 后端把 6 改成 8，前端全仓不会有一条判据红，表征是"注册页说 6 位能过、提交被 422 拒"。
 
-这里把四件事变成判据：
+这里把五件事变成判据：
 ① 这些名字在整个 `frontend/src` 里只许出现在一枚模块里（扫描面 = 交付物，不含 tests）；
 ② 那枚模块里的值必须与后端的权威定义逐字相同（数字、正则原文、头像集合）；
 ③ `AVATARS` 与 `AVATAR_LABELS` 同枚覆盖：加头像忘配标签，界面会给出 undefined 的 aria-label；
 ④ 副本的第二种长相——模板属性里写死的字面量（`maxlength="50"`、`placeholder="至少 6 位"`）——
    也不许存在：那种写法 ① 抓不到，但漂移后果与副本一模一样。
+⑤ 问答契约那三格也算镜像：`schemas/chat.py` 的 `parent_ids` 有两个界（元素 100 = 一条块 id
+   的长度，列表 50 = 最多选几条），`model_name` 有一个界（100，与 `ModelIn.name` 同源）。
+   前端在 `useChunkSelection.js` 里各留了一枚本地常量（`MAX_ID_CHARS`/`MAX_SELECTED_CHUNKS`）。
+   后端把 50 改成 80 时，前端仍然只在本地留 50，表征是"点到第 51 块前端就拦，而直接改
+   localStorage 塞进去的那份会整请求被 422 拒"——两种入口各说一套。
 
 判据放 pytest 而不是 vitest：漂移更可能由后端那一侧引入，而后端改动的人往往不跑 `npm test`；
 反过来只改前端镜像时，本项目的收口口径是三门一起跑，下一道门就红。
@@ -23,16 +28,19 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 SCHEMAS_AUTH = BACKEND_DIR / "schemas" / "auth.py"
+SCHEMAS_CHAT = BACKEND_DIR / "schemas" / "chat.py"
 API_AUTH = BACKEND_DIR / "api" / "auth.py"
 MIRROR = FRONTEND_SRC / "constants.js"
 
-# 七枚"后端拥有、前端镜像"的字面量。后端权威定义分别在哪：
+# 九枚"后端拥有、前端镜像"的字面量。后端权威定义分别在哪：
 #   AVATARS -> api/auth.py 的元组（头像的唯一白名单）
 #   PASSWORD_MIN / EMAIL_RE / PHONE_RE -> schemas/auth.py 顶部三行
 #   PASSWORD_MAX / NICKNAME_MAX / MODEL_NAME_MAX -> schemas/auth.py 各 Field 里的
 #       max_length（后端没有命名，所以按字段名抓行）
+#   MAX_ID_CHARS / MAX_SELECTED_CHUNKS -> schemas/chat.py 的 parent_ids 那条声明
+#       （一条声明两枚界，分两行写：元素界 100 = 一条块 id 的长度，列表界 50 = 最多选几条）
 NAMES = ("AVATARS", "PASSWORD_MIN", "PASSWORD_MAX", "NICKNAME_MAX", "MODEL_NAME_MAX",
-         "EMAIL_RE", "PHONE_RE")
+         "EMAIL_RE", "PHONE_RE", "MAX_ID_CHARS", "MAX_SELECTED_CHUNKS")
 
 
 def _frontend_lines(*suffixes):
@@ -115,6 +123,42 @@ def _py_field_maxes(text, field_pattern):
     return values
 
 
+def _py_statement(text, field):
+    """按字段名切出整条声明（含续行）：括号不平就一直吃下一行。
+
+    逐行正则为什么不够：`parent_ids` 的声明写在两行上，元素界在第一行的
+    `Annotated[str, Field(...)]` 里、列表界在第二行的 `Field(default_factory=list, max_length=50)`
+    里，`^\\s*字段: str.*max_length=` 那种单行模式只会看见第一枚，第二枚静悄悄漏掉。
+    """
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.match(rf"^\s*{field}: ", line)), None)
+    assert start is not None, f"抓不到 `{field}:` 开头的声明：字段改名或挪窝了，先红给你看"
+    stmt, depth = "", 0
+    for line in lines[start:]:
+        stmt += line + "\n"
+        depth += line.count("(") + line.count("[") - line.count(")") - line.count("]")
+        if depth == 0:
+            return stmt
+    raise AssertionError(f"`{field}` 的声明括号没闭合，切片器口径得改：\n{stmt}")
+
+
+def _py_two_bounds(text, field):
+    """把一条带两枚界的声明分成 (元素界, 列表界)，每半必须恰好一枚。
+
+    分界按 ` = Field(` 切：左半边是类型标注（`list[Annotated[str, Field(... max_length=100)]]`，
+    管一条 id 多长），右半边是外层 Field（`max_length=50`，管最多几条）。
+    为什么不用「先出现的算元素」这种顺序判据：把两行合成一行、或多加一枚界时，顺序判据会
+    安静地把两枚界读反，界面表现是「能选 100 条、每条限 50 字」——数字都在，含义换了。
+    """
+    stmt = _py_statement(text, field)
+    head, sep, tail = stmt.partition(" = Field(")
+    assert sep, f"`{field}` 的声明里抓不到 ` = Field(`，形状变了"
+    element, listed = re.findall(r"max_length=(\d+)", head), re.findall(r"max_length=(\d+)", tail)
+    assert len(element) == 1 and len(listed) == 1, \
+        f"`{field}` 该是标注里一枚界 + Field 一枚界，实抓 {element} / {listed}"
+    return int(element[0]), int(listed[0])
+
+
 def _py_avatars(text):
     match = re.search(r"^AVATARS = \((.*)\)$", text, re.M)
     assert match, "api/auth.py 里抓不到 AVATARS = (...) 元组"
@@ -143,6 +187,26 @@ def test_the_frontend_mirror_equals_the_backend_definitions():
     # 头像只比集合不比顺序：后端那枚元组管的是"收不收"（`not in AVATARS` 就 422），
     # 前端的顺序是选择条的显示顺序，属界面自选。比顺序会把"调一下按钮次序"变成跨端改动。
     assert set(_js_string_list("AVATARS")) == set(_py_avatars(api_text))
+
+
+def test_chat_contract_bounds_are_mirrored_too():
+    """问答契约的三格界与前端那三枚镜像必须同数——这一格是 ② 收口时留的账。
+
+    `MAX_ID_CHARS`/`MAX_SELECTED_CHUNKS` 之前是 `useChunkSelection.js` 的本地常量（各一份，
+    注释里写着"对齐 String(100)"），`MODEL_NAME_MAX` 已经进镜像集但只钉了 auth.py 那一头，
+    chat.py 的 `model_name` 界无人核对——同一条请求里两个字段共用一枚上界，只核对一头等于
+    没核对。
+
+    两格刻意不并进来：`core/database.py` 的 `ParentChunk.parent_id = Column(String(100))` 是
+    **存储宽度**不是契约界，合法的改法是加宽列而契约仍留 100，钉成相等会把一次正常迁移判红；
+    `session_id` 的 100 前端没有对应的输入框（它来自 `GET /me`，用户不经手），没有可镜像的面。
+    """
+    chat_text = _text(SCHEMAS_CHAT)
+    element_max, list_max = _py_two_bounds(chat_text, "parent_ids")
+
+    assert _js_number("MAX_ID_CHARS") == element_max
+    assert _js_number("MAX_SELECTED_CHUNKS") == list_max
+    assert {_js_number("MODEL_NAME_MAX")} == set(_py_field_maxes(chat_text, "model_name"))
 
 
 def test_every_avatar_choice_has_a_label():
