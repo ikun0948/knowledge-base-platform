@@ -536,3 +536,57 @@ def test_whitespace_model_name_is_422_and_stays_out_of_the_list():
     # 名单必须是空的：空白名一旦进了 user_models，它就是默认模型，问答侧会拿它去打下游
     body = client.get("/api/auth/me", headers=headers).json()["user"]
     assert body["models"] == [] and body["default_model"] is None
+
+
+# ---------- 阶段三 ①：两格的长度界要量在 strip 之后 ----------
+
+
+def test_api_key_is_too_short_when_the_length_comes_from_padding():
+    """`"  sk-ab  "` 一共 9 格，过得了 `min_length=8`，可 strip 之后只剩 5 格——那不是 key 的长度，
+    是空白的长度。
+
+    修前的形状：schema 放行，端点把 `.strip()` 后的 5 格原样写进 `users.api_key` 并回 200。
+    界面上掩码、`llm_configured` 全都"正常"（非空即算配好），症状推迟到问答侧——上游拿一把
+    被截短过的 key 回 401，而 401 在这里只有一句"未登录或登录已过期"。所以这一格必须在写库
+    之前拦住，并且要断"两格都没被写"。
+    """
+    client, db, headers = _login_llm_client()
+    res = client.put("/api/auth/me/llm", json={"api_key": "  sk-ab  ",
+                                               "base_url": "https://vLLM.internal/v1"},
+                     headers=headers)
+    assert res.status_code == 422, f"strip 后只有 5 位的 key 被当成 9 位放行了：{res.status_code}"
+    assert db.users[0].api_key is None, "不足位的 api_key 被写进了库"
+    assert db.users[0].base_url is None, "路由跟着一起被写了"
+
+
+def test_api_key_padding_does_not_push_it_over_the_column_bound():
+    """反方向：`String(255)` 装得下 255 位的 key，两侧那几格空白不是 key 的一部分。
+
+    修前它会被拒（strip 前 259 > 255），用户只能去手工删空格；而"贴进来一段带换行的 key"
+    恰恰是最常见的用法。这条同时钉两件事：带空白的 255 位 key 收 200，落库的是 **strip 后
+    的整串**（不是带空白的原文——空白进列里会让掩码尾四位变成空格）。
+    """
+    client, db, headers = _login_llm_client()
+    key = "k" * 255
+    res = client.put("/api/auth/me/llm", json={"api_key": f"  {key}  ",
+                                               "base_url": "https://vLLM.internal/v1"},
+                     headers=headers)
+    assert res.status_code == 200, f"255 位的 key 因为两侧空白被拒：{res.status_code} {res.text[:120]}"
+    assert db.users[0].api_key == key, "入库的不是 strip 之后的整串"
+
+
+def test_base_url_padding_does_not_push_it_over_the_column_bound():
+    """路由那一格同族：`String(500)`，界应该量在洗净之后。
+
+    它今天已经有一条 `_looks_like_a_url` 顺手 `.strip()`，所以"落库是干净串"这条在修前也成立；
+    红的是**拒绝方向**——500 位的路由多贴一个空格就 422，而那句 422 的文案来自 pydantic 的
+    长度校验，用户看不出跟空格有关。
+    """
+    client, db, headers = _login_llm_client()
+    url = "https://" + "p" * 492          # 正好 500，与列宽同界
+    assert len(url) == 500
+    res = client.put("/api/auth/me/llm", json={"api_key": "sk-abcdef1234567890",
+                                               "base_url": f" {url} "},
+                     headers=headers)
+    assert res.status_code == 200, f"500 位的路由因为两侧空白被拒：{res.status_code} {res.text[:120]}"
+    assert db.users[0].base_url == url, "入库的不是 strip 之后的整串"

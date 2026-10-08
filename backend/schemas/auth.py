@@ -109,14 +109,32 @@ class PasswordIn(BaseModel):
 
 
 class LlmIn(BaseModel):
-    # 上界对齐两列：String(255) / String(500)
-    api_key: str = Field(min_length=8, max_length=255)
-    base_url: str = Field(min_length=8, max_length=500)
+    # 两格都不写 min_length/max_length：那两个数在 pydantic 里量的是**贴进来的原文**，
+    # 而两侧的空白不是 key 的一部分。写在 Field 上的后果是双向的——
+    # `"  sk-ab  "`（9 格、strip 后 5 格）被当成合法 key 写进库，症状推迟到问答侧的上游 401；
+    # 而正好卡着列宽（String(255) / String(500)）的合法值，多贴一个空格反而吃 422。
+    # 界因此搬进 validator，量在 strip 之后，值也在这里洗净。
+    api_key: str
+    base_url: str
+
+    @field_validator("api_key")
+    @classmethod
+    def _strip_then_measure_key(cls, value: str) -> str:
+        value = value.strip()
+        # 纯空白不在这里报：端点那句「api_key 不能是空白」是一句话的 detail，比 pydantic 的
+        # 数组好读，且 test_blank_api_key_is_422_and_writes_neither_column 钉的就是那句。
+        if value and not 8 <= len(value) <= 255:
+            raise ValueError(f"api_key 去掉首尾空白后须为 8~255 位，当前 {len(value)} 位")
+        return value
 
     @field_validator("base_url")
     @classmethod
     def _looks_like_a_url(cls, value: str) -> str:
-        value = value.strip().rstrip("/")
+        value = value.strip()
+        # 先量长度再验协议：顺序反过来会让"501 位的 http:// 开头串"收到一句答非所问的文案
+        if not 8 <= len(value) <= 500:
+            raise ValueError(f"路由去掉首尾空白后须为 8~500 位，当前 {len(value)} 位")
+        value = value.rstrip("/")
         if not re.match(r"^https?://", value):
             raise ValueError("路由必须以 http:// 或 https:// 开头")
         return value

@@ -156,14 +156,15 @@ def update_password(payload: PasswordIn, db=Depends(get_db), user=Depends(get_cu
 
 @router.put("/me/llm", response_model=MeOut)
 def update_llm(payload: LlmIn, db=Depends(get_db), user=Depends(get_current_user)):
-    # 与上面昵称、下面模型名同层同风格的一条规矩：`LlmIn.api_key` 的 min_length=8 量的是
-    # **strip 之前**的长度，八格空白过得了 schema，进这里却被 `.strip()` 成 ""——
-    # 那一串会直接写进 users.api_key，响应回 200「保存成功」而 llm_configured 是 False、
-    # 掩码是空串，用户以为配好了，Task 7 的 409 门禁再把他挡在门外且界面说不出原因。
-    # 空白必须在写库之前拦住（min_length 的 8 是与上游最小 key 长度对齐的口径，不动它）。
-    if not payload.api_key.strip():
+    # 与上面昵称、下面模型名同层同风格的一条规矩：只拦"空白伪装成有值"这一格。
+    # 两格在 `LlmIn` 里已经 strip 过、长度也量在 strip 之后，所以到这里的值要么是干净串、
+    # 要么是空串——不再有「8 格空白过了 schema、strip 成空串写进库」那条路。
+    # 空串这一格仍要在写库之前拦住：响应用户看到的是 200「保存成功」而 `llm_configured` 是
+    # False、掩码是空串，Task 7 的 409 门禁再把他挡在门外且界面说不出原因（最难查的那种谎）。
+    # 它没并进 schema 的 8~255 那条，是因为这里能给出一句话的 detail，而 pydantic 给的是数组。
+    if not payload.api_key:
         raise HTTPException(status_code=422, detail="api_key 不能是空白")
-    db.update_user_llm(user.id, payload.api_key.strip(), payload.base_url.strip())
+    db.update_user_llm(user.id, payload.api_key, payload.base_url)
     return MeOut(user=_user_out(db, _reload(db, user)))
 
 
