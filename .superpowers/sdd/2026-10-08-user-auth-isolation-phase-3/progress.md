@@ -675,6 +675,118 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 - 本轮**只起一份服务、只有一个 pytest 进程**、全程未跑 `-m migration`；服务停掉之后才跑 live 组（Chroma 单实例锁）。
 - **前端未碰**：diff 只落在 `backend/` 两枚文件 ⇒ `npm test` / `npm run build` 不重跑，口径同 ①②③④⑤，明示不省略。
 
+## 第 ⑦ 条 — 422 的兜底剥掉 `input`：明文 api_key 上界面的唯一通道改成白名单
+
+挂账原文：「422 的 `detail[*].input` 回显，前端只靠 `client.js:32` 那条 fallback 挡着 ⇒ 要闭合就在 fallback 里剥掉
+`input`（代价：削弱「原文是唯一的排错线索」，属产品取舍）」。**使用者选的正是这条路**（「前端 fallback 剥掉 input」），
+所以那句代价不是我的推断，是批准时写下的话——它逐字进了代码注释（「代价如实记：排错时拿不到"后端收到了什么"，
+只能拿"哪一格、哪种错"」）。
+
+### 预检（读的是通道与形状，不是凭证）
+
+- 旧的这一行（改前 `client.js:32`）：`detail.map((item) => item?.msg ?? JSON.stringify(item))`。
+  有 msg 时只抄 msg（这一半本来就安全），**缺 msg 时把整枚 item 拼进界面文案**。
+  pydantic 的校验项形状是 `{type, loc, msg, input, ctx?}`，其中 **`input` 是原样回显的请求值**。
+- 全项目唯一"请求体里带明文凭证"的端点是 `PUT /api/auth/me/llm`（`api_key` 就在 body 里）
+  ⇒ 这一格一旦上屏，key 就出现在界面上。
+- 后端那一侧挡不住：`main.py:79` 只挂领域异常、`:83` 兜 500，**没有 `RequestValidationError` 处理器**
+  ⇒ 422 响应体里 `input` 永远在。界面上看不看得到，全凭前端这一道闸。
+- 闸为什么"唯一"：三条网络出口（`request` / `postStream` / 上传的 XHR `documents.js:52`）**都复用 `httpError`**，
+  而 `httpError` 是 message 的唯一构造点 ⇒ 只要把规则收在 `detailFromText` 这一族，三条出口一起生效。
+  这也是"必须给 `httpError` 本身钉一条判据"的理由，否则"唯一构造点"只是注释里的一句话。
+- 绕过白名单的另一条路是**值写进 msg**（`ValueError(f'{value} 不是 URL')` 那种写法）。实测本仓两处 validator
+  （`schemas/auth.py:127`、`:136`）只把**长度**写进文案（「当前 {len(value)} 位」），不写值 ⇒ 今天这条路不成立，
+  见 Ruling 4，挂账不预判。
+
+### RED → GREEN
+
+- RED（判据先行，聚焦 `frontend/tests/client.test.js`，收集 30 条）：**`2 failed | 28 passed (30)`**。
+  红的两条正是新增的「兜底走白名单，input 与 ctx 一律不上屏」与「`httpError` 直接构造的错误也不带 input」。
+  另两条新增判据（「有 msg 时只抄 msg」「非对象项交出那格本身」）**当场即绿**——如实记：它们的身份是口径钉，
+  不是新功能的实现证据（前者防下一个人在这里"顺手补全上下文"，后者把 `null` 那半的坏法钉住）。
+- GREEN（`frontend/src/api/client.js`，工作树**纯 CRLF** 197/197，改后 9921 字节 / sha `e007f25130bf`；
+  改前 177 行 / git blob 8212 字节）：新增模块级纯函数 `validationItemText(item)`（`:25`）——
+  ① 非对象（含 `null`）→ `JSON.stringify(item)`，与改前完全一致；
+  ② `msg` 只认**非空字符串**，空串与缺键一样走兜底；
+  ③ 兜底是**白名单**：新建一枚空对象，只按 `type`、`loc` 的顺序挑键再 stringify。
+  `detailFromText` 的数组分支改为 `detail.map(validationItemText)`（`:52`）。
+- **挑键顺序刻意为 `type`、`loc`**（与 FastAPI 自己输出的顺序一致）：阶段二既有那条
+  「422 数组里缺 msg 的项降级为 JSON 文本」（`toBe('请求参数不合法：{"type":"too_short","loc":["body","x"]}')`）
+  **期望值一字未改仍绿** ⇒ 这道闸的改动面只有"input 那一格不见了"，没有连带改写任何既有判据。
+
+### 门禁实数（只抄当轮汇总行）
+
+| 门 | 本轮 | 起点 / 口径 |
+|---|---|---|
+| `frontend/tests/client.test.js` | GREEN **30 passed (30)** | 改前该文件 26 条 ⇒ **+4 条** |
+| 前端全量 `npm test` | **158 passed / Test Files 14 passed** | 本轮起点实测 154/14 ⇒ +4 全落在 client.test.js |
+| 前端 `npm run build` | exit 0，产物 `index-CWg0-YgN.js` | 原 `index-CH0iZltg.js`；css `index-CUrklGmJ.css` **未变** |
+| 后端全量 `pytest` | **336 passed / 2 skipped / 2 deselected / 1 warning** | 与 ⑥ 收口时逐字相同（本轮只跑这一门做冲击确认） |
+| `backend/tests/test_frontend_constants.py` | **5 passed** | 它的扫描面是 `frontend/src`，本轮动了 client.js ⇒ 必须单跑 |
+| 后端离线 / `-m live` | **本轮未重跑** | diff 只在 `frontend/` 两枚文件，口径同 ①③，明示不是遗漏 |
+
+### 变异自证（九轮，全部手工 Edit + `cp` 还原 + sha256 双向确认）
+
+基准：`client.js` sha `e007f25130bf`（纯 CRLF 197 行 / 9921 字节）。九轮只改生产码，
+`frontend/tests/client.test.js` 全程 sha `061258ccd126` 不变；每轮还原后重新打 sha，九轮全部回到基准。
+聚焦跑 `frontend/tests/client.test.js`（30 条）。
+
+| 轮 | 变异 | 结果 | 红在哪条 / 为什么是这一组 |
+|---|---|---|---|
+| M1 | 回退成改前的整枚 stringify（`item?.msg ?? JSON.stringify(item)`） | `2 failed` | ⑦ 那条 + `httpError` 那条——两枚新判据对同一条通道的牙齿 |
+| M2 | 白名单多带 `input`（`['type','loc','input']`） | `2 failed` | 同 M1 ⇒ M1 不是"靠缺键侥幸红"，键集才是判据 |
+| M3 | 白名单多带 `ctx` | **`1 failed`** | 只红 ⑦ 那条：`httpError` 的夹具里**故意没有 ctx** ⇒ `input` 与 `ctx` 两面**分开计量**，不是重合的牙齿 |
+| M4 | 白名单去掉 `loc`，只剩 `type` | `2 failed` | ⑦ 那条 + **阶段二既有那条降级判据** ⇒ 线索（哪一格）不是本轮可牺牲项 |
+| M5 | `msg` 口径放宽成"是字符串就用"（空串也算） | `1 failed` | 红在空串那一格：界面实际交出「请求参数不合法：」一句没有内容的中文 |
+| M6 | 非对象守卫收窄成只挡 `null` | `1 failed` | 字符串项落进白名单变成 `{}`，那格的原文消失 |
+| M7 | 非对象守卫去掉 `null` 那半 | `1 failed` | `TypeError: Cannot read properties of null` ——正是那枚断言要拦的坏法（可读的 422 变成"界面自己坏了"） |
+| M8 | 键序换成 `loc` 打头（内容一字未动） | `2 failed` | 两处整枚相等的判据把**键序**也钉住了 ⇒ 口径不是随手写法（与 ⑥ 的 M7 相反方向：那轮换的是值无关的形状，这轮换的是期望值本身的一部分） |
+| M9 | **对照组**：把白名单键集提成模块常量，行为不变 | `30 passed` 全绿 | 判据钉**输出文本**，不钉实现写法；这轮绿了才证明 M8 的红不是过拟合 |
+
+### 用户可见面
+
+- **有 msg 的正常 422 一字未变**：仍是「请求参数不合法：<英文原文照抄>」（M-j 那条口径原样保留）。
+- **变的是兜底那一格**：以前缺 msg 时界面会出现整串 JSON，其中 `input` 就是后端收到的原值（`PUT /api/auth/me/llm`
+  那一枚里是明文 key）；现在只出现 `{"type":…,"loc":[…]}`——**哪一格、犯了哪种错**仍读得出来，
+  **后端收到了什么值**读不出来了。这就是批准时写下的那句代价。
+- 非对象项（后端手写的 detail，如 `['api_key 不能是空白']`）与 `[null]` 的行为与改前**完全一致**（M6/M7 各守一半）。
+- 上传那条（XHR）同受这道闸保护：它复用的就是 `httpError`（`documents.js:52`），所以本轮没有第二种文案的风险。
+
+### Ruling
+
+1. **闸放前端，不在后端挂 `RequestValidationError` 处理器**（使用者选的这条）——界面是"上屏"的必经面，
+   改前端一处就覆盖三条出口；改后端响应体则会把 devtools、代理日志之外的既有 API 消费者一起改掉形状 ——
+   代价：**422 响应体本身仍然带 `input`**，devtools、反向代理访问日志、直接打 API 的脚本都还能看到明文 key。
+   这一面**如实记为边界**，不写成本条已闭合。
+2. **白名单（挑 `type`、`loc`）而不是黑名单（删 `input`、`ctx`）** —— 黑名单要能枚举 pydantic 未来新增的字段，
+   而 `ctx` 允许校验器塞任意值（本轮夹具就是把 secret 同时塞进 `input` 与 `ctx.error`）——
+   代价：以后 msg 之外真正有用的字段（例如 `url` 帮助链接）也一并进不了界面，要放就得同时加判据。
+3. **`msg` 只认非空字符串** —— 空串走兜底，否则界面只剩一句中文前缀（M5 是这一条的自证）；
+   代价：非字符串的 msg（那不是 pydantic 的形状）会被整格丢掉，**宁可丢、不上屏**。
+4. **"值写进 msg"那条绕路本条不处理** —— 实测两处 validator 只写长度（`schemas/auth.py:127`、`:136`），
+   今天不成立；将来谁写成 `ValueError(f'{value} 不是 URL')` 就绕过白名单，而那条判据今天无从下笔 ——
+   **挂账**：真要堵的是"文案里不许出现请求原值"，那是 validator 的纪律，不是 `detailFromText` 的。
+5. **判据钉输出文本、不钉实现形状**（M9 绿 / M8 红一起构成这一条）—— 代价：以后重构 `validationItemText`
+   的内部形状是自由的，但**改键序就是改判据**，得当成口径变更走。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行**（无实施代理、无评审代理），**终审是自评** —— 交付时必须明示。
+- **判据加宽过一遍，变异整批重跑**：初版四条判据写完、跑过四轮之后，又补了三处加宽
+  （`[null]` 那枚断言、把 `ctx` 载荷换成与 `secret` **不同**的标记、空串 msg 那一格）。
+  加宽前跑过的四轮**已在新判据集上重跑**，上表条数全部是重跑后的观测输出；提交信息里也写了这一句，
+  免得下一轮读到混合口径的数。其中"ctx 载荷故意不等于 secret"这一处是本轮真得到的口径——
+  它让 M3 只红 1 条而不是 2 条，两面分开计量才有意义。
+- **一次 Bash 的 `cd` 残留**：先前 `cd backend` 跨调用保留，导致量 `src/api/client.js` 时 `FileNotFoundError`；
+  换绝对路径重测。这是 [[ref-sdd-scripts-need-bash]] 里那句「cd 跨调用保留」的又一次命中。
+- **`git add` 台账的退码 1**（`.superpowers/` 被 gitignore，文件却已 staged）：与 ⑥ 同一现象，
+  按 [[ref-sdd-scripts-need-bash]] 记录的用法处理——add 与 commit 分成两次调用。
+- 行尾如实记：`frontend/src/api/client.js` 工作树**纯 CRLF**（197/197）、`frontend/tests/client.test.js` **纯 LF**（0/352），
+  本轮两枚都保持原样未转换，Edit 自动跟随；测量用字节计数，未用 `grep -c $'\r$'`（[[project-crlf-mutation-hazards]]）。
+- 本轮**未起服务**、**未跑 `-m migration`**；变异只在 `client.js` 一枚文件上，九轮还原全部 sha 回到基准。
+- **后端一行未动**：diff 只落在 `frontend/` 两枚文件 ⇒ 后端只跑全量那一门做冲击确认（336/2/2/1 与 ⑥ 逐字相同），
+  离线门与 live 组本轮**未重跑**，口径同 ①③，明示而非省略。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -685,5 +797,5 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 | ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | **已闭合**（`423a26a`：`ensure_foreign_keys` 按 **(表, 列)** 问 `KEY_COLUMN_USAGE`、不写 `ON DELETE`（RESTRICT）、排在 `ensure_indexes` 之后；预检在真库量到 `chat_history` 43 行孤儿（旧默认账号 id=1 已不存在），经使用者拍板新增 `reclaim_orphaned_owners` **先归户再 ALTER**；单测 +7、live +1（RESTRICT 行为面）+1 格（外键与孤儿的第二遍白卷），十二轮变异自证，真库落库后实测各一枚 FK / 0 孤儿 / 各一枚索引） |
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | **已闭合**（`e0ecfe1`：MySQL 无部分索引 ⇒ 守卫落在 `default_guard` 这枚 **STORED 生成列** + 只盖它一列的**唯一索引**上（NULL 不参与唯一比较 ⇒ 非默认随便多、默认每人至多一枚）；迁移四步各查各的：**数重复 → 降掉除 `MIN(id)` 之外 → 补列 → 建索引**，去重早于建索引是 scratch 表实测钉的（`ALTER` 在两枚默认上照样成功、`CREATE UNIQUE INDEX` 才回 1062，而 lifespan 不兜异常 ⇒ 反了就是后端起不来）；存在性用严格口径问 `GENERATION_EXPRESSION <> ''`（同名普通列的后果是静默的零约束）；顺带堵掉 ⑤ 自己会引入的谎——撞守卫键不再回 409「已在你的名单里」，改为补插成非默认。单测 +8（迁移 6、形状 2）、live +2（引擎本身拒第二枚默认 / 注入钩子把撞键窗口变成确定性可复现），八轮变异逐轮一条红；真库落库后直查列与索引形状、多默认人数 0、行数与默认数未变，另在 scratch 表上把"首次建守卫 + 去重 1 行"整条实测过，真开机一遍拿到 `kb.migrations` 的 summary 原文） |
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | **已闭合**（`6a327ca`，按使用者裁定**不动 `.env`、改判据**：`seed_default_llm` 的三条出口各带一枚常量 `reason`（`env_incomplete` / `already_configured` / `seeded`），`run_migrations` 的 summary 新增 `seed_reason` 把它带进开机日志——原先两条早退回同一个字典，`llm_seeded: False` 分不清是"`.env` 缺键"还是"默认账号已有 key"；「缺 key 半态」由注入的 `IncompleteEnvConfig` 在**离线门**上证两件事（那遍一行没写 + 报得出走了哪条）。判据 +3（`test_migrations.py` 30→33，含 caplog 钉"两遍 no-seed 布尔逐格相同、只有 reason 分开"与"日志里不许出现 key"），另**有意改写**四处整字典相等断言。七轮变异 M1–M6 各红 3–4 条、M7 是对照组（只换字典键序 ⇒ 33 全绿，判据钉值不钉形状）；真开机一遍拿到 `'seed_reason': 'already_configured'`（⑤ 那轮只能推断的这一格现在是日志里读出的事实）。**边界如实记**：真 `.env` 上"缺键"那半本机仍未跑过，证据换成离线判据；"写了 key 但没加模型"的两支因没有各自报名 |
-| ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | 待开工 |
+| ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | **已闭合**（`74d11b8`，按使用者裁定的这条路「前端 fallback 剥掉 input」：新增模块级 `validationItemText`，数组 detail 的每一项只准 **msg（且只认非空字符串）、type、loc** 上屏，兜底改成**白名单挑键**而不是整枚 stringify ⇒ `input`（FastAPI 原样回显的请求值，`PUT /api/auth/me/llm` 那一枚里就是明文 api_key）与 `ctx`（pydantic 允许塞任意值）都到不了界面。键序按 FastAPI 自己的 `type`、`loc` ⇒ 阶段二那条"缺 msg 降级为 JSON 文本"判据**期望值一字未改仍绿**；三条网络出口共用 `httpError` 这一构造点，故 fetch / SSE / 上传 XHR 一起受保护。判据 +4（`client.test.js` 26→30，含 `httpError` 直接构造那条、`null` 项那条、ctx 载荷故意与 secret 不同那条），九轮变异 M1–M8 逐轮只红目标面（M3 只红 1 条证明 input/ctx 两面分开计量）、M9 对照组全绿。前端全量 **158 passed/14 files**、build 产物换 `index-CWg0-YgN.js`；后端一行未动（全量 336/2/2/1 逐字不变，跨端那 5 条单跑绿）。**边界如实记**：只管"上界面"，422 响应体里 `input` 依然在（devtools / 代理日志 / 直连 API 仍可见），要连那一面一起堵得在后端挂 `RequestValidationError` 处理器，不在本条范围；"值写进 msg"的绕路今天不成立（两处 validator 实测只写长度），挂账 |
 | ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | 待开工（`puppeteer-core` 本轮已 `npm prune` 清掉，做它要重装） |
