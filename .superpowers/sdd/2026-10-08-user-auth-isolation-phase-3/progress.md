@@ -265,6 +265,158 @@
   当场 `cp` 还原、核对 sha `f8ca71fd6433` 与那句 `def` 计数回到 1，再改用"文件末尾 + 唯一锚点"重做。
   教训与 10-07 那条同源：**锚点要选唯一且不被替换内容依赖的行**，`Edit` 的"1 replacements"不代表结构完好。
 
+## 第 ④ 条 — 补 `user_id` 的外键：真库里躺着 43 行孤儿，于是先归户再 ALTER
+
+**BASE `8b17698` → 代码 + 判据 `423a26a`（4 files，+356/−9：生产码 `core/migrations.py` `core/database.py`、测试 `tests/test_migrations.py` `tests/test_live_database.py`）。**
+
+### 预检（真库 `mydb`，只读）
+
+`SELECT … FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME='users'` 只回两枚：
+`auth_tokens_ibfk_1`、`user_models_ibfk_1` ⇒ `documents.user_id` / `chat_history.user_id` **确实没有外键**
+（挂账那句"只存在于新建库"被证实）。逐表再量行数、NULL 主人数、孤儿数：
+
+| 表 | 行数 | `user_id IS NULL` | 指向不存在账号 | user_id 上已有的索引 |
+|---|---|---|---|---|
+| `documents` | 13 | 0 | 0（全部 = 30） | `idx_documents_user_id` |
+| `chat_history` | 43 | 0 | **43**（全部 = 1） | `idx_chat_history_user_id` |
+
+`users` 当时只有两行：`(30, default@local)` 与 `(338, 3143958700@qq.com)`。孤儿根因是**默认账号被重铸过、
+id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_chat_history` 的 `WHERE user_id IS NULL`
+永远不会再碰它们。这 43 行的实际处境是**谁也读不到**（`GET /api/history` 按 `user_id` 收窄）**也删不掉**。
+
+后果链：带着孤儿去 `ADD CONSTRAINT` ⇒ MySQL 回 **errno 1452**；而 `run_migrations` 挂在 lifespan 且不兜异常
+⇒ 症状不是"这条迁移没做成"，是**整台后端起不来**。
+
+### 拍板（唯一一次打断使用者，因为要动真数据）
+
+给出三条：① 先归户给默认用户再建 FK ② 有孤儿就跳过那张表、只建 `documents` 那半 ③ 这条退回挂账。
+**使用者选 ①**（`先归户给默认用户再建 FK（推荐）`）。真实数据改动：**43 行 `chat_history.user_id` 1 → 30**，
+原值与反向 SQL 记在这里，可回滚：`UPDATE chat_history SET user_id = 1 WHERE user_id = 30`（只在"确要退回"时执行，
+那 43 行 id=1 现在指向的是不存在的账号）。
+
+### RED → GREEN
+
+- FK 判据 RED：`5 failed / 17 passed`（聚焦 `test_migrations.py`，3.92s）。两类红因：
+  `AttributeError: module 'core.migrations' has no attribute 'ensure_foreign_keys'`、
+  `ValueError: min() iterable argument is empty`（顺序判据拿不到 `ADD CONSTRAINT` 的下标）。
+- GREEN：`ensure_foreign_keys` + `foreign_key_exists`（按 **(表, 列)** 问 `KEY_COLUMN_USAGE`）
+  + `add_foreign_key`（不写 `ON DELETE`）+ `run_migrations` 接线 + summary 加 `foreign_keys_added`
+  → **`22 passed`**。
+- 孤儿判据 RED：`2 failed / 22 passed`（`… has no attribute 'reclaim_orphaned_owners'`、
+  顺序判据那条 `min()` 空集）→ GREEN **`24 passed`**（`orphaned_owner_count` + `reclaim_orphaned_owners`，
+  排在 `ensure_foreign_keys` 之前，summary 加 `orphan_rows_reclaimed`）。
+- 两处**夹具洞**在 GREEN 路上当场补掉（都属"判据自己先骗人"）：
+  ① `FakeConn` 解析 `ADD CONSTRAINT` 时取列名用了 `.split("(")[1].strip()`，拿到的是
+  `` `user_id`)``，键集变成 `{('chat_history', chr(96))}` ⇒ 第二遍判据会以夹具原因长红；改为再 `split(")")`。
+  ② `conn.executed.count("ADD CONSTRAINT") == 2` —— `list.count` 比的是**整元素相等**，`executed` 里存整句 SQL，
+  所以**永远数到 0**，这条幂等判据会**长期假绿**。改为 `sum(1 for s in … if "ADD CONSTRAINT" in s)`，
+  并把理由写进判据注释里（不是只改代码，要让下一个人不再踩）。
+
+### 变异自证（十二轮，全部手工 Edit + `cp` 还原 + sha256 与符号计数双向确认）
+
+聚焦文件纯 LF（实测 `core/migrations.py` CRLF 0 / LF 361）。八轮 FK 的还原基准 sha `9970aa41d026`（17252 字节），
+四轮孤儿的还原基准 sha `6722508c2367`（19783 字节）——每轮还原后都重新打 sha 并 `grep -c` 被替换的那一句回到 1（或 2/5）。
+
+| 轮 | 变异 | 结果 | 红在哪条 |
+|---|---|---|---|
+| N1 | 删掉 `added.append((table, constraint))`（发 DDL 却永远交空清单） | `2 failed / 20 passed` | `…alters_only_when_missing` + `…reports_foreign_keys_and_goes_quiet…` ⇒ 判据吃**返回值**，不吃日志 |
+| N2 | 去掉"先查"这一格，无条件发 `ALTER` | `3 failed / 19 passed` | 缺才 ALTER / 按列不按名 / 幂等三条一起红 |
+| N3 | 按**约束名**问（换成同文件里按名字问的 `index_exists`） | `3 failed / 19 passed` | 同 N2 三条 ⇒ "问法"不是修辞，`documents_ibfk_1` 那个事实答不出来 |
+| N4 | DDL 加 `ON DELETE CASCADE` | `1 failed / 21 passed` | `…never_cascades_at_the_mysql_level`（唯一管级联的那条，不多咬） |
+| N5 | `ensure_foreign_keys` 挪到 `ensure_indexes` 之前 | `1 failed / 21 passed` | `…adds_the_keys_after_the_indexes` |
+| N6 | 函数留着、`run_migrations` 里那一步不接线 | `4 failed / 18 passed` | `NameError: name 'foreign_keys' is not defined`（summary 那几行）——红的四条里 **2 条是本次新增**（`…adds_the_keys_after_the_indexes`、`…reports_foreign_keys_and_goes_quiet…`），**2 条是既有**（`…stamps_after_documents_are_claimed`、`…self_heals_a_crash_between_claim_and_stamp`）⇒ 动 `run_migrations` 的形状一定会被既有判据连带抓住 |
+| N7 | summary 键名 `foreign_keys_added` → `fks_added` | `1 failed / 21 passed` | 幂等/可数那条；同轮 `grep` 实查 `columns_added\|indexes_added\|foreign_keys_added` 生产侧只 `migrations.py:313` 一处命中 ⇒ 键名没有别的消费者，改名=对上游失联 |
+| N8 | `fk_chat_history_user_id` 换成 `fk_chat_history_owner` | `3 failed / 19 passed` | 含逐字 pin 那条（`…default_identifier_is_the_one_the_spec_names` 现同时 pin 三组常量）⇒ 换约束名要过评审 |
+| N9 | 去掉 `if count:` 守卫（零孤儿也发 UPDATE） | `2 failed / 22 passed` | 归户两条（幂等 + 顺序） |
+| N10 | 归户与补外键**先后对调** | `1 failed / 23 passed` | `…runs_before_the_foreign_keys` ⇒ 这条判据钉的就是 1452 那个开机面 |
+| N11 | 归户 `:uid` 写死 `1`（正是这次事故里那个已不存在的旧 id） | `1 failed / 23 passed` | `…sends_dead_rows_back_to_the_default_user`（断言的是 `self.reclaims == [(表, 传进来的 user_id)]`） |
+| N12（对照组） | 计数 SQL 去掉冗余的 `IS NOT NULL` | **`24 passed`（绿）** | 语义等价：NULL 在三值逻辑下本就不进 `NOT IN`。留着 `IS NOT NULL` 是为了**读起来就是"孤儿"的定义**，不是为了正确性——这条现在由变异而不是注释说话 |
+
+### live 侧
+
+- live RED（服务未重启，真库还没被迁移碰过）：`2 failed / 20 deselected`——
+  `documents.user_id 上没有外键：服务没重启过` 与 `Failed: 删掉了仍持有文档的账号 id=714：外键没起作用，RESTRICT 没生效`。
+  两条都在**加完判据、还没落库**的时候红，这就是它们要的证据。
+- 起服务一次（pid 21604，`python -m uvicorn main:app --host 127.0.0.1 --port 8000`）让 lifespan 落库。
+  日志只有 5 行、**没有 `迁移完成`**——root logger 是 WARNING，`logger.info` 那句本来就不出。
+  这条不算证据也不当反证，证据是下面的直查。
+- 落库后直查（不是拿判据当证明）：两张表各**恰好一枚**外键（`fk_documents_user_id` / `fk_chat_history_user_id`，
+  均 `-> users`）、孤儿 **0**、`user_id` 列上各**只一枚**索引、`chat_history` 归属分布 `[(30, 43)]`、
+  `documents` `[(30, 13)]`。
+- 收口：`TaskStop` 掉那个 uvicorn，`netstat` 复确认 8000 空着。
+- 纪律（写进了 live 判据的注释与 docstring）：共享库上**先 assert 再调用**——
+  `ensure_foreign_keys` / `reclaim_orphaned_owners` 在没迁移过的库上会真发 ALTER / UPDATE，
+  顺序一反这条 live 判据自己就会改结构。
+- 新增 live 判据一条：`test_foreign_key_restricts_deleting_a_user_who_still_owns_rows`
+  （探针账号自己造自己删、`default@local` 一次都不出现在 DELETE 里；拦下后还验文档行**仍在**，
+  再删掉文档才删得掉账号——反向那一半也钉住，否则"永远删不掉"也算绿）。
+  `_drop_probe_account` 的 docstring 记下新现实：漏删探针行现在会让清理当场抛 IntegrityError，**静默变响亮**。
+- `tests/test_live_database.py` 现 **22 passed**（含新那条），整文件跑绿。
+
+### 终态门禁实数（台账前复跑，逐条抄汇总行）
+
+- 后端全量 **`323 passed / 2 skipped / 2 deselected / 1 warning`**（40.87s；写本节前的最新一次，另一次 40.97s）
+- 离线门 `-m "not live and not migration"` **`301 passed / 26 deselected / 1 warning`**（35.33s）
+- 聚焦 `tests/test_migrations.py` + `tests/test_test_doubles.py` **`25 passed`**（3.74s）
+- live 文件 `tests/test_live_database.py` **`22 passed`**（3.04s）
+- 对账：`315 + 5（FK 单测）+ 2（孤儿单测）= 322`，`322 + 1（live RESTRICT）= 323`；离线 `294 + 7 = 301`，
+  被 `not live` 挡掉的从 25 涨到 26（正是新加的那条 live）；既有判据一条没被打断。
+- **前端未跑**：本轮 diff 只碰 `backend/` 四枚文件，前端一行未动 ⇒ `npm test` / `npm run build` 不重跑，
+  口径同 ①②③，明示不省略。
+
+### 用户可见面
+
+- **43 行旧对话记录回到可见**：它们从"归属指向不存在的账号"改为归 `default@local`。
+  只有当某台设备的 localStorage 里还躺着当年那批 `session_id` 时才看得到，否则仍是历史数据。
+- **「注销账号」这条路从此被 MySQL 拦下**：仍持有文档的账号删不掉（errno 1451），要删必须两头删
+  （今天本仓没有删账号入口，所以这一条是给将来的人的护栏，不是给今天的用户的）。
+- 每次开机多两次 `COUNT(*) AS orphans` 与一次 `KEY_COLUMN_USAGE` 查询；孤儿清完后归户那步交白卷，
+  `ADD CONSTRAINT` 一条也不发（幂等由单测与 live 两头钉）。
+
+### Ruling
+
+1. **按 (表, 列) 问外键是否存在，不按约束名问** —— `create_all` 建的那枚叫 `documents_ibfk_1`，
+   迁移建的那枚叫 `fk_documents_user_id`，是同一个事实的两个名字；按名字查会在**每一个新库**上再叠一枚
+   重复外键（InnoDB 对不同名不拦，且安静收下）—— 代价：将来真要"换名"时判据不会帮忙（N8 正是要它红，逼评审）。
+2. **不写 `ON DELETE`（= RESTRICT）** —— 文档正文在 MySQL、向量在 Chroma，MySQL 的级联带不走向量；
+   写 CASCADE 等于把"行没了、向量还能被召回"变成开机即定的默认行为 —— 代价：删账号必须先手工清两头，
+   将来做「注销账号」时要多写一段应用层删除流程。
+3. **孤儿归户给默认用户，而不是删行** —— 与 `backfill_*` 同一个前提（改造前只有那一个人在用，
+   行里没有任何别的归属线索）；归户是把数据交还唯一的失主，删是替用户做决定 ——
+   代价：如果那 43 行其实属于别的真人，现在被并进了默认账号名下（本机不可能：users 只有两行，
+   338 是本次改造后新注册的）。
+4. **计数 SQL 里冗余的 `IS NOT NULL` 保留** —— N12 已证它不影响结果（NULL 不进 `NOT IN`），
+   留着是为了让这一句**读起来就是孤儿的定义** —— 代价：多一个"看起来多余"的条件，靠变异记录而不是注释自证。
+
+### 过程偏离与自纠，如实记
+
+- **预检的 SQL 是对的，孤儿数字就在输出里，我却把结论读反了。** 那次直查打的是
+  `… WHERE x.user_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id=x.user_id)`，
+  原始输出两行：`documents rows 13 NULL owner 0 ORPHANS 0` 与 `chat_history rows 43 NULL owner 0 ORPHANS 43`。
+  我在任务账（Task #97）和当轮的话里写成「13/43 行零 NULL、**零孤儿** ⇒ ALTER 无阻塞」，
+  把两张表混成了一句结论。这不是"问法错"（问法本来就是对的），是**读错自己刚打出来的东西**。
+  发现时机：FK 半段 GREEN 之后为写交付面重查（`SELECT user_id, COUNT(*) … GROUP BY user_id` 回 `(1, 43)`，
+  `users` 只剩 30/338）——那一刻才改口，并停下来请使用者拍板。
+  自纠口径：**涉及数据改动的预检，结论要按表逐行抄原始输出，抄完再判断**；一句跨过两张表的结论不许出现。
+- **控制者独自执行**（无 implementer/reviewer 代理），**终审是自评** —— 交付时必须明示这一条。
+- **两处夹具洞都是判据先骗人**：`FakeConn` 的列名解析（红得没道理）与 `list.count`（绿得没道理）。
+  后者方向更坏——实现真破掉时它照样交白卷，属"假绿"，已把理由钉进判据注释。
+- **一次多余的变异重跑，且它的命令描述写错了轮次**：N2 首跑（`tail -6`）已经打印出三条失败函数名，
+  我又保持同一变异状态重跑一次只换 grep 口径（结果一致：`3 failed / 19 passed`），
+  而那次重跑的命令描述被我写成 "Capture N1 mutation failure list"——当时文件状态是 **N2**。
+  表里 N1 记 `2 failed`（`added.append` 被删）、N2 记 `3 failed`（无先查），两条都出自各自的真实运行，
+  没有互相顶替；但下一轮**同一状态不重跑、不复用上一轮的输出**，命令描述要与轮次号一起写。
+- 自己写判据时手滑引用了不存在的 `second_ddl(conn)`：在**跑之前** grep 夹具方法名时抓到，改为 `conn.executed`。
+- 一次 `Edit` 因 `old_string` 与当前缩进不符被拒（N10 第一次尝试），未产生半截状态，按当前文件内容重发成功。
+- `cd backend` 失败一次（Bash 的 `cd` 状态跨调用保留，当时已在 `backend/` 里）⇒ 之后一律绝对路径。
+- 确认"没删掉不该删的行"用的是 `git diff -U0 … | grep '^-'`（只看被删的那几行），**没有**拿 `--stat` 当证据；
+  `git diff --stat` 附带的 CRLF warning 是 `core.autocrlf` 的既有口径，不是本轮引入的异常（工作树实测仍纯 LF）。
+- **这一节曾被压缩丢掉一次**：上一次会话结束时它只存在于对话里、没落盘（那笔 Edit 因参数名写错被拒）。
+  恢复时我手上的备忘把孤儿来源记成"预检问法用了 LEFT JOIN `IS NULL`"——核对转录
+  （`C:\Users\31439\.qoder\projects\D-------------\80c2fc91-….jsonl`，本轮区间）后确认**归因是错的**：
+  两次查询都带了 `NOT EXISTS` / `NOT IN (SELECT id FROM users)`，孤儿数一直是 43。
+  ⇒ 本节只写核对过的版本；教训与记忆里那条"子代理回报先直查再采信"同源：**自己的备忘同样要先直查**。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -272,7 +424,7 @@
 | ① | `LlmIn` 两格长度界量在 strip 之前 | **已闭合**（`de8499d`） |
 | ② | `AVATARS` 两份 / `PASSWORD_MIN` 三份没有单一出口 | **已闭合**（`ee117fd`：七枚镜像收进 `frontend/src/constants.js`，`backend/tests/test_frontend_constants.py` 五条判据两头钉，另消灭三处模板里写死的数字） |
 | ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | **已闭合**（`bcc0296` + 补正 `d89bb29`：预检证明迁移判据吃四键 ⇒ 不合并，迁移那枚改名 `MigrationConfig`；新增 `tests/test_test_doubles.py` 钉"模块顶层 `Fake*` 类名唯一"，六轮变异自证） |
-| ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | 待开工（做任何"注销账号"前必须先补） |
+| ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | **已闭合**（`423a26a`：`ensure_foreign_keys` 按 **(表, 列)** 问 `KEY_COLUMN_USAGE`、不写 `ON DELETE`（RESTRICT）、排在 `ensure_indexes` 之后；预检在真库量到 `chat_history` 43 行孤儿（旧默认账号 id=1 已不存在），经使用者拍板新增 `reclaim_orphaned_owners` **先归户再 ALTER**；单测 +7、live +1（RESTRICT 行为面）+1 格（外键与孤儿的第二遍白卷），十二轮变异自证，真库落库后实测各一枚 FK / 0 孤儿 / 各一枚索引） |
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | 待开工 |
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | 待开工（需要一个能临时改 `.env` 的受控窗口） |
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | 待开工 |
