@@ -179,13 +179,99 @@
 - **一处记录更正**：`bd75263` 的提交信息标题写「两处过程偏离」，而这一节实际列了**三条**
   （脚本化变异、行尾测量假阳性、判据自身的四处自纠）。引用该提交时按三条口径说。
 
+## 第 ③ 条 — 两枚同名 `FakeConfig`：缺陷是重名，不是双份
+
+**BASE `ffc62e0` → 代码 `bcc0296`（2 files，+61/−5）+ 补正 `d89bb29`（1 file，+9/−4）。**
+
+### 预检（挂账原文要求的那一句）
+
+挂账写的是「合并前先确认迁移组判据不依赖局部那份的四键形状」。实测**依赖成立**：
+`core/migrations.py:252-256` 读 `config.DEFAULT_USER_PASSWORD` + `OPENAI_API_KEY` /
+`OPENAI_BASE_URL` / `LLM_MODEL` 四格，而 `tests/fakes.py:1` 那枚只带 `/api/health` 读的
+`CHROMA_PERSIST_DIR`。⇒ **合并这条路直接否掉**（合了就缺一格，或者把阶段二 Task 7 以
+「写了没人读的字段在本仓是负资产」删掉的三键重新塞回交付面），剩下的缺陷只有"重名"这一件事。
+
+### 开工前形态（口径写死，免得下一个人复现不出来）
+
+从 BASE 的 blob 量（不是工作树，`tests/` 当时与 `ffc62e0` 相同）：25 枚 `.py`、
+`Fake*` 前缀的**模块级类声明 13 枚**、去重 12 个名字，唯一重复的是 `FakeConfig`
+（`fakes.py:1`、`test_migrations.py:182`）。不限前缀时是 45 枚声明、43 个名字，
+重复的变成 `Recorder`（×3，全在 `test_llm_factory.py` 的 35/50/66 行、各待在自己的测试函数里）。
+
+### RED → GREEN
+
+- RED：`tests/test_test_doubles.py` 第一次跑 → `1 failed`，红在
+  `同名替身 {'FakeConfig': [('fakes.py', 1), ('test_migrations.py', 182)]}`。
+- GREEN：`test_migrations.py` 那枚改名 `MigrationConfig`（定义 1 处 + 使用 3 处），
+  docstring 里写清"与 `fakes.FakeConfig` 不是同一个替身，也不该合并"并把判据指回
+  `tests/test_test_doubles.py` → 聚焦 **`18 passed`**。
+
+### 变异自证（六轮，全部手工编辑 + `cp` 还原 + sha256 双向确认）
+
+| 轮 | 变异 | 结果 | 说明 |
+|---|---|---|---|
+| N1（对照组） | 把 `MigrationConfig` 再改成与 `fakes.py` 无关的 `MigrationProbe` | `18 passed`（**绿**） | 判据管的是"重名"这件事，不是记住了 `FakeConfig`/`MigrationConfig` 这两个具体名字 |
+| N2 | `test_migrations.py` 末尾模块顶层追加 `class FakeRAG: pass` | `1 failed`，红在 `{'FakeRAG': [('fakes.py', 84), ('test_migrations.py', 419)]}` | 不限于 `FakeConfig` 那一对，是通用判据 |
+| N2' | 口径收窄成 `tree.body` 之后重做 N2 | `1 failed`，同一个 `FakeRAG` 集 | 收窄没把该抓的放掉 |
+| N3 | 扫描面的 glob 改成匹配不到任何文件 | `1 failed`，红在空集守卫那句消息 | 目录挪窝/改名时这条判据不会静默假绿 |
+| N4 | 函数体内放一枚 `class FakeRAG`（口径 = `tree.body`） | `1 passed`（**绿**） | 函数内的局部类出不了那个函数，同名互不可见，不是本条的缺陷 |
+| N4b（反证） | 同一枚 N4 变异挂着，把扫描面临时改回 `ast.walk` | `1 failed`，红在 `{'FakeRAG': [('fakes.py', 84), ('test_migrations.py', 420)]}` | 证明"顶层 vs 整棵树"是有后果的口径选择，不是注释里的装饰话 |
+
+- 还原校验：`test_migrations.py` `f8ca71fd6433`、`test_test_doubles.py` `8069f2565de3`、
+  `fakes.py` `911d5c4abff3`（全程未参与变异）—— 与变异前快照 `mut3e/` **逐字节相同**；
+  `_mutation_N` 标记在 `tests/*.py` grep 零命中，唯一命中是一枚过期 `.pyc`。
+
+### 终态门禁实数（还原后复跑）
+
+- 后端全量 **`315 passed / 2 skipped / 2 deselected / 1 warning`**（40.83s）
+- 离线门 `-m "not live and not migration"` **`294 passed / 25 deselected / 1 warning`**（35.29s）
+- 聚焦 `tests/test_test_doubles.py tests/test_migrations.py` **`18 passed`**（3.26s）
+- 对账：② 收口是 314 / 293，本轮 +1 枚新判据 ⇒ **既有判据一条没被打断**。
+- 前端未跑：`npm test` / `build` 本轮不重跑 —— diff 只有 `backend/tests/` 两枚文件，
+  生产码与前端一行未动（与 ① 的处理口径一致，不是遗漏）。
+- live 两组未跑：同上理由。
+
+### 用户可见面
+
+**没有可观察的变化**：改的是测试文件里的类名与一枚新判据，生产码零 diff。
+收益在下一轮：以后谁在 `backend/tests/` 再立一枚同名 `Fake*` 替身，后端门当场红，
+不用等评审看见。
+
+### Ruling
+
+1. **钉"名字唯一"，不合并两枚 config 替身** —— 预检实测迁移判据依赖四键形状，
+   合并要么缺一格、要么把 `.env` 三键塞回交付面（Task 7 刚删过）—— 代价：将来真出现
+   "两枚该合成一枚"的正当合并，这条判据不会替人做判断，仍靠评审。
+2. **口径 = 模块顶层 + `Fake*` 前缀** —— 不限前缀会把 `Recorder`×3 那种函数内合法同名判红；
+   用 `ast.walk` 会把局部类算进来（N4b 实测红过）—— 代价：藏在函数体内的同名生产码替身
+   不在射程内（今天实测 0 枚），真有那天需要另加一条。
+3. **改名而不是移动位置**（把迁移那枚搬进 `fakes.py` 也能消重名）—— 搬过去就等于把四键
+   塞进共享交付面，正是 Ruling 1 要挡的方向 —— 代价：`test_migrations.py` 多一枚局部替身，
+   读它的人要看 docstring 才知道它为什么不和 `fakes.FakeConfig` 合体。
+4. **补正单独一笔提交（`d89bb29`），不 amend `bcc0296`** —— 那笔已经在台账口径里是"③ 的代码"，
+   且 `d89bb29` 的 diff 本身带着两轮新实测（N4/N4b），混进前一笔会让变异表与提交对不上 ——
+   代价：③ 占两笔，读的人要知道它们是同一条。
+
+### 过程偏离与自纠，如实记
+
+- **注释里的"35 个类名"是我先写下、后复现不出来的数字**：`Fake*` 口径实测 13，全类名口径 45，
+  35 哪一种都不是。按"数字一律实测"的长期约束，从 BASE 的 blob 重量出 13/12/唯一重复 `FakeConfig`
+  之后才改进注释（`d89bb29`）。这正是本仓记忆里那条"计划数字别凭回忆"的又一次命中。
+- **口径写在注释里、实现却不匹配**：docstring 说"模块级、跨文件可见"，代码用 `ast.walk`
+  连函数体内的一起抓。纠法是把口径钉进实现（`tree.body`）再正反各测一轮（N4 绿 / N2' 红），
+  而不是只把注释改软。
+- **N4 第一次做变异时锚点选错，真写坏了文件**：我把锚点定在 `def test_run_migrations_self_heals_…():`
+  那一行整行替换，等于删掉原测试函数头、把它的 docstring 与函数体挂到我的探针上。
+  当场 `cp` 还原、核对 sha `f8ca71fd6433` 与那句 `def` 计数回到 1，再改用"文件末尾 + 唯一锚点"重做。
+  教训与 10-07 那条同源：**锚点要选唯一且不被替换内容依赖的行**，`Edit` 的"1 replacements"不代表结构完好。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
 |---|---|---|
 | ① | `LlmIn` 两格长度界量在 strip 之前 | **已闭合**（`de8499d`） |
 | ② | `AVATARS` 两份 / `PASSWORD_MIN` 三份没有单一出口 | **已闭合**（`ee117fd`：七枚镜像收进 `frontend/src/constants.js`，`backend/tests/test_frontend_constants.py` 五条判据两头钉，另消灭三处模板里写死的数字） |
-| ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | 待开工 |
+| ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | **已闭合**（`bcc0296` + 补正 `d89bb29`：预检证明迁移判据吃四键 ⇒ 不合并，迁移那枚改名 `MigrationConfig`；新增 `tests/test_test_doubles.py` 钉"模块顶层 `Fake*` 类名唯一"，六轮变异自证） |
 | ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | 待开工（做任何"注销账号"前必须先补） |
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | 待开工 |
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | 待开工（需要一个能临时改 `.env` 的受控窗口） |
