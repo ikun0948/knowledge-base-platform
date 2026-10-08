@@ -573,6 +573,108 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 - 本轮**起了两次服务**（第一次为拿不到 summary 而白起），两次都由 `TaskStop` 收口，`netstat` 复确认 8000 无人 LISTEN；
   全程只有一个 pytest 进程、没有并发跑 `-m migration`（那组是 Chroma 搬家校验，与本条无关，未跑）。
 
+## 第 ⑥ 条 — 「缺 key 半态」第一次可分辨：`seed_default_llm` 的三条出口各挂一块牌子
+
+挂账原文：「迁移的『缺 key 半态』分支从未在真 `.env` 上跑过 ⇒ 闭合需要一个能临时改 `.env` 的受控窗口。」
+**这条路被使用者否决**，选项是「不动 `.env`，改判据」——把 `.env` 改坏再改回，中间任何一次崩溃都会留下一台
+起不来的后端（`run_migrations` 挂在 lifespan 且不兜异常），风险大于收益。于是这条变成两件事：
+**先让两条早退可分辨**，再让「缺 key 半态」在**离线门**上有一次真判据。全程 `.env` 一行未读未写。
+
+### 预检（读的是形状与消费者，不是凭证）
+
+- 开工前的形状：`core/migrations.py:365-369` 两条早退回**同一个字典**
+  `{"llm_written": False, "model_added": False}`——`env 缺键` 与 `账号已有 key` 在返回值与日志里都不分开。
+- 跨任务冲击扫描（`grep -rn "llm_seeded|model_seeded|seed_default_llm|llm_written|model_added"`，全 `backend/`）：
+  消费者**只有两处**——`core/migrations.py` 自己（`run_migrations` 的 seed 调用与 summary 两格）与
+  `tests/test_migrations.py` 的 `:621 :650 :660 :667 :678` 五处。**live 组 0 处**读 summary ⇒ 冲击全在离线门内，
+  live 不需要为这条加判据。
+- summary 那一枚字典**没有任何判据断"整枚相等"**（逐条读 `first[...]` / `second[...]` 都是按键取格）
+  ⇒ 新增一格 `seed_reason` 不会打断既有判据；会被打断的只有那四处"整枚字典相等"的 seed 断言。
+- ⑤ 那轮真开机（`p5boot2.log`）拿到的 `llm_seeded: False`，按当时的返回值**只能推断**走的哪条——
+  这条要闭合的第一半步就是把那句推断变成日志里读得出的一句事实。
+
+### RED → GREEN
+
+- 离线 RED（聚焦 `tests/test_migrations.py`，收集 33 条）：**`8 failed / 25 passed`**，与预期逐条对上——
+  三处新增（`KeyError: 'reason'` / `KeyError: 'seed_reason'`）+ 四处既有整字典相等失配 + stamps 那格新增的一行。
+  既有 ⑤ ④ ③ 的 25 条**原样绿**，说明改写只落在 seed 这一族。
+- GREEN 三段（`core/migrations.py`，纯 LF，改后 489 行 / 28148 字节 / sha `d4d4db07be46`）：
+  ① 两条早退各带 `"reason": "env_incomplete"` / `"already_configured"`；
+  ② 写成功那格带 `"reason": "seeded"`（三格都要报名，不许留白让读日志的人猜）；
+  ③ `run_migrations` 的 summary 接线 `"seed_reason": seed["reason"]`。
+  两格布尔的**名字与口径一个字未动**；docstring 补一段说明"为什么有这一格"与"只准取常量"。
+  → `test_migrations.py` **33 passed**（30→33）。
+- 新增替身 `IncompleteEnvConfig(MigrationConfig)`（`test_migrations.py` 模块顶层）：只抹 `OPENAI_API_KEY`，
+  `base_url` 与模型名都留着——**半套配置才是本机最容易出现的形态**，而 seed 要防的正是"缺一枚还照抄"。
+  命名不带 `Fake` 前缀，所以 ③ 的唯一性判据不管它（如实记：那枚判据的射程是 `Fake*`，不是所有替身）。
+- **中途自己判掉一条没牙的断言**：初版 `test_boot_log_...` 里写的是 `assert lines[1] != lines[2]`，
+  而这两遍用的是**不同的 conn**（`columns_added` 本来就一空一满），那句不等号**必然成立**，
+  跟分辨力无关。换成 summary 级断言：两遍 no-seed 的 `llm_seeded` / `model_seeded` 逐格相同、
+  只有 `seed_reason` 分开它们。改完才跑 GREEN。
+
+### 变异自证（七轮，全部手工 Edit + `cp` 还原 + sha256 双向确认）
+
+基准：`core/migrations.py` sha `d4d4db07be46`（纯 LF 489 行 / 28148 字节）。每轮还原后重新打 sha，七轮全部回到基准；
+七轮只改生产码，`tests/test_migrations.py` 全程 sha `df7568fb4adb` 不变。聚焦跑 `tests/test_migrations.py`（33 条）。
+
+| 轮 | 变异 | 结果 | 红在哪条 / 为什么是这一组 |
+|---|---|---|---|
+| M1 | 第二条早退的 reason 也写成 `env_incomplete`（回到"两条同名"） | `3 failed / 30 passed` | `test_seed_never_overwrites_a_key_the_user_set_himself`、`test_seed_reports_which_early_exit_it_took`、`test_boot_log_tells_the_two_no_seed_faces_apart`——⑥ 的新名字被打回同一个词，三条一起红 |
+| M2 | 「账号已有 key」的守卫永不为真（`if row and …` → `if not row and …`） | `3 failed / 30 passed` | 同 M1 那三条。**M1 与 M2 命中同一组**：这三条对"已有 key 那一格"的分辨力是重合的，不是三个独立面，如实记 |
+| M3 | 函数改了、`run_migrations` 里**不接线** `seed_reason` | `3 failed / 30 passed` | 换成 run_migrations 级那三条（stamps / 半态 / 开机日志），`KeyError: 'seed_reason'`——与 ⑤ 的 R7 同一口径：接线被几条判据消费就红几条 |
+| M4 | `not (api_key and base_url)` → `not (api_key or base_url)`（半套配置照抄） | `3 failed / 30 passed` | 新增的三条红。**既有那条 `test_seed_does_nothing_when_env_has_no_key` 照常绿**（两枚全缺时 `or` 也早退）⇒ "只缺一枚"这一半牙齿是新增的 `no_url` 那格给的，不是老判据带的 |
+| M5 | 写成功那格误标成 `already_configured` | `4 failed / 29 passed` | 两处整字典相等 + stamps 新增行 + 开机日志的 `s_seeded["seed_reason"] == "seeded"` |
+| M6 | `reason` 拼进库里已有的 key（`f"already_configured:{row[0][0]}"`） | `3 failed / 30 passed` | 两条按值断的 + **`test_boot_log` 红在 `"sk-from-env" not in caplog.text` 这一条**（用 `-k` 单跑确认到断言行，不是推断）⇒ "新增一格就多一次泄漏机会"那句注释有判据守着 |
+| M7 | **对照组**：只把早退字典里三格的书写顺序换成 `reason` 打头 | `33 passed` 全绿 | 判据钉的是**值**不是形状/顺序；这轮预期就是绿，绿了才算把"判据会不会误伤写法"这一面量出来 |
+
+### 用户可见面
+
+- **界面一行没变**：seed 只在开机跑，写库条件、返回给前端的字段都原样。变的是**排错的那一句话**：
+  以后开机日志里 `seed_reason` 会直说三种情况之一，"这台机器的 `.env` 没填 key"与
+  "默认账号早就有自己的 key"不再共用一句 `llm_seeded: False`。
+- **真机上的那一遍**（本轮实测，Temp 里的 log config，仓库代码零改动）：
+  `… 'default_user_id': 30, 'documents_claimed': 0, 'chat_rows_claimed': 0, 'llm_seeded': False,
+  'model_seeded': False, 'seed_reason': 'already_configured', 'vectors_stamped': 0`
+  —— 这句日志**能证明的**只有一件事：真库上 `users` 里默认账号（`id=30`）的 `api_key` 非空，
+  所以走的是"不许覆盖"那条。它**为什么**非空是推断（以前某一次开机 seed 成功过，或用户在设置里改过），
+  本轮没有去读那一列的值；⑤ 那轮只能靠读源码推断的分辨力，现在由日志自己说出来了。
+- **`llm_seeded` 的旧读者**（如果有脚本 grep 这句日志）不受影响：两格布尔的位置与值都没动，只是多一枚键。
+
+### Ruling
+
+1. **改判据不动 `.env`**（使用者选的这条，我复核后同意并落地）——真 `.env` 上跑"缺 key 半态"要先把三键改坏，
+   而 lifespan 不兜异常，中途崩一次就留下一台起不来的后端；这一格的**证据换成注入假 config 的离线判据 ——
+   代价：本机始终没有"真配置缺键 + 真 MySQL"的那一遍，理论上留一条只属于真环境的分叉（`Config` 读 `.env` 是
+   `os.getenv` 裸读，见 `config/config.py:30-31`，那两键没有 `validate_required`，所以"空串"与"缺键"在真机上
+   都归到同一个 `not (api_key and base_url)`，分叉面很小）。此格**如实记为边界**，不写成已闭合。
+2. **`reason` 进返回值与 summary，而不是"多打一行日志"** —— 本仓纪律是判据不能吃日志：幂等、走了哪一条、
+   有没有把凭证印出来，三件都要在返回值上断 —— 代价：`seed_default_llm` 的返回字典多一格，
+   凡断"整枚相等"的判据都要跟着改写（本轮 4 处，已逐处注明是有意改写）。
+3. **三条出口全部报名**，不是只给两条早退报名 —— 只给早退报名会让"种上了"那一格在日志里是**空格**，
+   读的人仍要反推；`seeded` 这一格同时把"写成功"与 `model_seeded: False` 的语义分开（后者只说结果）——
+   代价：**"写了 key 但没加模型"的两支因（`LLM_MODEL` 为空 / 名单已有同名）没有各自报名**，挂账。
+4. **`reason` 只准取常量**，M6 是这一条的自证 —— summary 整枚进日志，`api_key` 一旦能被拼进任何一格，
+   就等于在开机日志里印凭证（本仓已有 `UserOut` 单一构造点守这个面，见 [[project-api-key-leak-surfaces]]）——
+   代价：以后想让它带上下文（例如带缺的是哪一枚键）必须同时补一条"不许带值"的判据。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行**（无 implementer / reviewer 代理），**终审是自评** —— 交付时必须明示。
+- **一次 Edit 把下一条判据的 `def` 行当锚点吃掉了**：给 `test_migrations.py` 插入三条新判据时，
+  `old_string` 用了 `def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():` 这一行，
+  替换文本里忘了把它写回去 ⇒ 那条判据的 docstring 当场悬空。工具输出里看到，下一笔 Edit 补回 `def` 行，
+  随后用 `--collect-only` 复确认收集数（33）与 `git diff` 里 `^-` 的行。**这正是 [[project-crlf-mutation-hazards]]
+  里记的"锚点唯一但形状错"那一族**：拿函数头当锚点就得把函数头写回 new_string。
+- **一次自己判自己没牙**（见 RED→GREEN 末段）：`lines[1] != lines[2]` 换成 summary 级断言。
+  这条是在**跑 GREEN 之前**改的，不是事后补的，所以那条初版从未变绿过。
+- **`--log-config` 的 logger 名沿用 ⑤ 查到的 `kb`**（不是 `core.migrations`），本轮一次开机就拿到 summary，
+  没有再白起一次。后台进程由 `Stop-Process` 收口（先按 `CommandLine` 核对 PID 23908 再杀），
+  复确认 `Get-NetTCPConnection -LocalPort 8000 -State Listen` 计数 0。
+  后台任务壳子回报的退码是 127（进程被强制停止后的包装层返回值），与启动是否成功无关——
+  证据是 `p6boot.log` 里有 `Application startup complete` 与那句 summary，如实记下免得下轮把 127 当"起不来"。
+- 本轮**只起一份服务、只有一个 pytest 进程**、全程未跑 `-m migration`；服务停掉之后才跑 live 组（Chroma 单实例锁）。
+- **前端未碰**：diff 只落在 `backend/` 两枚文件 ⇒ `npm test` / `npm run build` 不重跑，口径同 ①②③④⑤，明示不省略。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -582,6 +684,6 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 | ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | **已闭合**（`bcc0296` + 补正 `d89bb29`：预检证明迁移判据吃四键 ⇒ 不合并，迁移那枚改名 `MigrationConfig`；新增 `tests/test_test_doubles.py` 钉"模块顶层 `Fake*` 类名唯一"，六轮变异自证） |
 | ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | **已闭合**（`423a26a`：`ensure_foreign_keys` 按 **(表, 列)** 问 `KEY_COLUMN_USAGE`、不写 `ON DELETE`（RESTRICT）、排在 `ensure_indexes` 之后；预检在真库量到 `chat_history` 43 行孤儿（旧默认账号 id=1 已不存在），经使用者拍板新增 `reclaim_orphaned_owners` **先归户再 ALTER**；单测 +7、live +1（RESTRICT 行为面）+1 格（外键与孤儿的第二遍白卷），十二轮变异自证，真库落库后实测各一枚 FK / 0 孤儿 / 各一枚索引） |
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | **已闭合**（`e0ecfe1`：MySQL 无部分索引 ⇒ 守卫落在 `default_guard` 这枚 **STORED 生成列** + 只盖它一列的**唯一索引**上（NULL 不参与唯一比较 ⇒ 非默认随便多、默认每人至多一枚）；迁移四步各查各的：**数重复 → 降掉除 `MIN(id)` 之外 → 补列 → 建索引**，去重早于建索引是 scratch 表实测钉的（`ALTER` 在两枚默认上照样成功、`CREATE UNIQUE INDEX` 才回 1062，而 lifespan 不兜异常 ⇒ 反了就是后端起不来）；存在性用严格口径问 `GENERATION_EXPRESSION <> ''`（同名普通列的后果是静默的零约束）；顺带堵掉 ⑤ 自己会引入的谎——撞守卫键不再回 409「已在你的名单里」，改为补插成非默认。单测 +8（迁移 6、形状 2）、live +2（引擎本身拒第二枚默认 / 注入钩子把撞键窗口变成确定性可复现），八轮变异逐轮一条红；真库落库后直查列与索引形状、多默认人数 0、行数与默认数未变，另在 scratch 表上把"首次建守卫 + 去重 1 行"整条实测过，真开机一遍拿到 `kb.migrations` 的 summary 原文） |
-| ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | 待开工（需要一个能临时改 `.env` 的受控窗口） |
+| ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | **已闭合**（`6a327ca`，按使用者裁定**不动 `.env`、改判据**：`seed_default_llm` 的三条出口各带一枚常量 `reason`（`env_incomplete` / `already_configured` / `seeded`），`run_migrations` 的 summary 新增 `seed_reason` 把它带进开机日志——原先两条早退回同一个字典，`llm_seeded: False` 分不清是"`.env` 缺键"还是"默认账号已有 key"；「缺 key 半态」由注入的 `IncompleteEnvConfig` 在**离线门**上证两件事（那遍一行没写 + 报得出走了哪条）。判据 +3（`test_migrations.py` 30→33，含 caplog 钉"两遍 no-seed 布尔逐格相同、只有 reason 分开"与"日志里不许出现 key"），另**有意改写**四处整字典相等断言。七轮变异 M1–M6 各红 3–4 条、M7 是对照组（只换字典键序 ⇒ 33 全绿，判据钉值不钉形状）；真开机一遍拿到 `'seed_reason': 'already_configured'`（⑤ 那轮只能推断的这一格现在是日志里读出的事实）。**边界如实记**：真 `.env` 上"缺键"那半本机仍未跑过，证据换成离线判据；"写了 key 但没加模型"的两支因没有各自报名 |
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | 待开工 |
 | ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | 待开工（`puppeteer-core` 本轮已 `npm prune` 清掉，做它要重装） |
