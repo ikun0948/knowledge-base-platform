@@ -1,6 +1,7 @@
 """backend/tests 里的替身不许同名（阶段三 ③）。
 
-开工前的形态（实测）：`tests/` 下 35 个类名里恰好重复 1 个 —— `FakeConfig`。
+开工前的形态（实测口径 = `tests/*.py` 里 `Fake*` 前缀的类声明，BASE `ffc62e0`）：
+13 枚声明、12 个名字，唯一重复的一个是 `FakeConfig`。
 一枚在 `fakes.py:1`，只带 `/api/health` 读的 `CHROMA_PERSIST_DIR`；另一枚在
 `test_migrations.py:182`，带 `run_migrations` 读的 `DEFAULT_USER_PASSWORD` +
 `.env` 三键（`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`LLM_MODEL`，见 `core/migrations.py:252-256`）。
@@ -20,16 +21,20 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 
 def _fake_class_declarations():
-    """返回 [(文件名, 行号, 类名)]，只收 `Fake*` 前缀的类声明。
+    """返回 [(文件名, 行号, 类名)]，只收**模块顶层**、`Fake*` 前缀的类声明。
 
     口径限定在 `Fake` 前缀：这一族的约定就是"生产码的替身"，名字应当全局唯一。
     其它辅助类（`_Result`、`FakeConn` 之外的私有小工具）不在本条射程内——
-    把它们一起纳进来会让这条判据去管它不该管的私事。
+    把它们一起纳进来会让这条判据去管它不该管的私事。实测：去掉前缀过滤后 `tests/`
+    有 45 枚类声明，重复的是 `Recorder`（`test_llm_factory.py` 的 35/50/66 行，
+    各自定义在不同的测试函数体内，作用域就是那个函数，同名互不干扰）——
+    这条判据一开工会红，而且红在管不着的地方：它管的是**模块级、跨文件可见**的替身名字。
     """
     found = []
     for path in sorted(TESTS_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
+        # 顶层而非 ast.walk：函数体内的局部类出不了那个函数，同名互不可见，不是本条的缺陷。
+        for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name.startswith("Fake"):
                 found.append((path.name, node.lineno, node.name))
     return found
