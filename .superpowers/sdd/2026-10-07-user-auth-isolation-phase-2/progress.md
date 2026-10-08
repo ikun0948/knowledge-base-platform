@@ -436,6 +436,10 @@
   ⑧ 视口/交互的真浏览器回归是一次性脚本（Task 12 探针全文附在本节下方，`puppeteer-core` 以 `--no-save` 残留在 `frontend/node_modules`）⇒ 没有常驻测试，下次改布局要重新造轮子；要不要固化属独立决定。
 - **终审结论**：**Approved**。0 Critical / 0 Important 遗留；三条本应修的已在终审落地（`4c45e96`、`a145f65`、`e60dcf4`），其余全部落到"保持现状（带理由）"或"阶段三顺延清单（带闭合动作）"，没有一条写"待定"。终态门禁：**后端 306 passed / 2 skipped / 2 deselected / 1 warning**、**285 passed / 25 deselected / 1 warning**（`-m "not live and not migration"`）、**前端 14 files / 154 passed**、build exit 0、三条样式 grep 0/0/0；live 两组本轮未重跑（改动只碰 `DELETE /me/models/{name}` 这一枚路由与两处注释/一行死代码，`grep -rn "me/models" tests/test_live_*.py` **0 命中** ⇒ live 组无消费者，且重启会烧真实配额）。
 
+- **交付文档已落盘**：`docs/superpowers/delivery/2026-10-08-user-auth-isolation-phase-2-delivery.md`（十二节：结论 / 门禁实数 / 七条需求对账 / 十条预期表征 / `%2F` 必修 / 安全面 / 挂账裁决摘要 / 阶段三八条 / 验证缺口 / 流程偏离 / 复现验收 / 代码清单）。
+  - 文档里的三门数字**不是在引用上面那些轮次的报告**，是写文档前在 HEAD `25bf2e2` 重跑的：后端全量 `306 passed, 2 skipped, 2 deselected, 1 warning in 74.63s`、离线门 `285 passed, 25 deselected, 1 warning in 65.36s`、前端 `Test Files 14 passed (14)` / `Tests 154 passed (154)`（7.87s）、build exit 0（`index-CUrklGmJ.css 13.49 kB`、`index-DGgHp3J3.js 101.15 kB`，与收口时逐字相同）、三条样式 grep `0 / 0 / 0`。**与上文终审结论那行的数字完全一致 ⇒ 三笔改动之间没有互相打红。**
+  - **行号纠偏一条**（"行号每落地一个 Task 就漂"的老规矩又应验）：阶段三清单 ③ 的局部 `FakeConfig` 住在 `tests/test_migrations.py:`**182**（终审台账与文档初稿都写的 175 是过期行号）。共用那份在 `tests/fakes.py:1`。写文档时逐条 grep 校正的其余四处：`api/auth.py:27` `AVATARS`、`SettingsModal.vue:19`、`PASSWORD_MIN` 三处 `schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`、`client.js:32` 那条 `item?.msg ?? JSON.stringify(item)` 兜底、`main.py` 里 `RequestValidationError` **0 命中**（"没挂处理器"这句仍然成立）。
+
 ### 附：Task 12 探针脚本全文（`frontend/tmp-layout-probe.mjs`，跑完即删，故全文留档）
 
 ```js
