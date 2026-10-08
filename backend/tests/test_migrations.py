@@ -179,8 +179,14 @@ class FakeEngine:
         return False
 
 
-class FakeConfig:
-    """run_migrations 现在读 config 的四格：默认口令 + 迁移种子的三键。"""
+class MigrationConfig:
+    """run_migrations 现在读 config 的四格：默认口令 + 迁移种子的三键。
+
+    与 `fakes.FakeConfig` 不是同一个替身，也不该合并：那枚只带 `/api/health` 读的
+    `CHROMA_PERSIST_DIR`，合并就是把 `.env` 三键重新塞回交付面（阶段二 Task 7 刚以
+    「写了没人读的字段是负资产」删过一次）。同名才是缺陷，两枚各自的形状不是——
+    判据见 `tests/test_test_doubles.py`。
+    """
     DEFAULT_USER_PASSWORD = "secret-pass"
     OPENAI_API_KEY = "sk-from-env"
     OPENAI_BASE_URL = "https://dashscope/v1"
@@ -284,7 +290,7 @@ def test_run_migrations_stamps_after_documents_are_claimed():
     child = FakeCollection({"cv1": {"document_id": "5"}})
     client = FakeChroma({"parent_document": parent, "child_document": child})
 
-    summary = migrations.run_migrations(FakeEngine(FakeConn()), client, FakeConfig())
+    summary = migrations.run_migrations(FakeEngine(FakeConn()), client, MigrationConfig())
 
     assert parent.requested == [["pv1", "pv2"]] and child.requested == [["cv1"]]
     # 主人随文档走：pv1/pv2 的文档不同 ⇒ 两枚戳的主人必须不同（生产码写成恒 1 就会在这里红）
@@ -372,7 +378,7 @@ def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():
     engine = FakeEngine(FakeConn())
     first = migrations.run_migrations(engine, FakeChroma({"parent_document": parent,
                                                           "child_document": child}),
-                                       FakeConfig())
+                                       MigrationConfig())
     assert first["vectors_stamped"] == 3
     # 模拟崩在补戳之前：把 Chroma 的戳擦掉，documents 的 user_id 留着（MySQL 已经 commit 了）
     for item in parent.items.values():
@@ -380,7 +386,7 @@ def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():
     child.items["cv1"].pop("user_id", None)
     second = migrations.run_migrations(engine, FakeChroma({"parent_document": parent,
                                                            "child_document": child}),
-                                        FakeConfig())
+                                        MigrationConfig())
     assert second["vectors_stamped"] == 3, "归户之后就不再有补戳清单——advisory ① 回来了"
     assert parent.items["pv1"] == {"document_id": "3", "user_id": "103"}
 
