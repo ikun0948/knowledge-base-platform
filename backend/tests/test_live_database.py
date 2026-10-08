@@ -586,6 +586,105 @@ def test_foreign_key_restricts_deleting_a_user_who_still_owns_rows(db):
         _drop_probe_account(db, user.id)    # 同上：已删则删不到行
 
 
+def _probe_rows(db, user_id):
+    """按主人数六张表的行数。注销前后各数一次：删之前证明探针真造出了东西，删之后证明删干净了；
+    拿同一把尺子量 `default@local`，就是"这一刀只砍到自己"的证据。
+
+    两张块表**没有 `user_id` 列**，只能经 `documents` join 过去（直接写 `d.user_id` 是 MySQL 1054）。
+    """
+    from core.database import AuthToken, ChatHistory, ChildChunk, Document, ParentChunk, UserModel
+
+    session = db.get_session()
+    try:
+        return {
+            "auth_tokens": session.query(AuthToken).filter(AuthToken.user_id == user_id).count(),
+            "user_models": session.query(UserModel).filter(UserModel.user_id == user_id).count(),
+            "chat_history": session.query(ChatHistory).filter(ChatHistory.user_id == user_id).count(),
+            "documents": session.query(Document).filter(Document.user_id == user_id).count(),
+            "parent_chunks": session.query(ParentChunk)
+                                .join(Document, ParentChunk.document_id == Document.id)
+                                .filter(Document.user_id == user_id).count(),
+            "child_chunks": session.query(ChildChunk)
+                                 .join(Document, ChildChunk.document_id == Document.id)
+                                 .filter(Document.user_id == user_id).count(),
+        }
+    finally:
+        session.close()
+
+
+def _wipe_probe_account(db, user_id):
+    """测试侧的兜底清扫，**故意不调** `delete_user_cascade`：判据红在这一行之前时生产方法
+    还不存在（或正被变异），而这一轮漏下的行会变成共享真库里的永久残留。
+    `_drop_probe_account` 也不够用——④ 之后它只扫三张表，users 那一删会被 documents 顶住。
+    """
+    from core.database import AuthToken, ChatHistory, Document, User, UserModel
+
+    session = db.get_session()
+    try:
+        session.query(AuthToken).filter(AuthToken.user_id == user_id).delete()
+        session.query(UserModel).filter(UserModel.user_id == user_id).delete()
+        session.query(ChatHistory).filter(ChatHistory.user_id == user_id).delete()
+        for doc in session.query(Document).filter(Document.user_id == user_id).all():
+            session.delete(doc)          # 逐行才带得走块：批量 delete 绕开 ORM cascade
+        session.query(User).filter(User.id == user_id).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_delete_user_cascade_removes_every_owned_row_and_nothing_else(db):
+    """注销账号的**删除顺序**只有真库能证：四张表挡着 users、两张块表挡着 documents，错一步就是 1451。
+
+    fake 给不出这条证据——它没有第二张表，FK 也不生效，任何顺序都"过"；
+    `delete_document` 又只管一篇文档，管不到"一个人名下有几篇、每篇几块"。
+    所以这一条把两件事一起钉住：逐行 `session.delete(doc)` 走的那条 ORM cascade 路（写成
+    `query(Document).delete()` 会顶在块表的外键上），以及"只删到自己"。
+    """
+    from core.security import hash_password
+
+    default_id = default_user_id(db)
+    before_default = _probe_rows(db, default_id)
+
+    tag = new_tag()
+    user = db.create_user(identifier=f"{tag}@local", identifier_type="email",
+                          nickname="注销探针", password_hash=hash_password(f"p-{tag}"))
+    doc_id = db.save_document(filename=f"{tag}.txt", file_path="", content="正文",
+                              chunk_count=2, user_id=user.id)
+    parents = [type("D", (), {"page_content": f"父{i}",
+                              "metadata": {"parent_id": f"{tag}_p_{i}"}})() for i in (0, 1)]
+    children = [type("D", (), {"page_content": f"子{i}",
+                               "metadata": {"parent_id": f"{tag}_p_{i}", "child_id": f"{tag}_c_{i}"}})()
+                for i in (0, 1)]
+    db.save_chunks(doc_id, parents, children, [f"vp_{tag}_{i}" for i in (0, 1)],
+                   [f"vc_{tag}_{i}" for i in (0, 1)])
+    tomorrow = datetime.now() + timedelta(days=1)
+    db.create_token(user.id, f"{tag}-t1", tomorrow)
+    db.create_token(user.id, f"{tag}-t2", tomorrow)
+    db.add_user_model(user.id, f"{tag}-m1")     # 第一枚自动成为默认，第二枚是非默认
+    db.add_user_model(user.id, f"{tag}-m2")
+    db.save_chat_history(session_id=f"{tag}-s", user_message="问", assistant_message="答",
+                         user_id=user.id)
+    db.save_chat_history(session_id=f"{tag}-s", user_message="再问", assistant_message="再答",
+                         user_id=user.id)
+    try:
+        assert _probe_rows(db, user.id) == {"auth_tokens": 2, "user_models": 2, "chat_history": 2,
+                                            "documents": 1, "parent_chunks": 2, "child_chunks": 2}, \
+            "探针没造齐：后面的「全 0」就没有东西可删"
+
+        assert db.delete_user_cascade(user.id) == {"auth_tokens": 2, "user_models": 2,
+                                                   "chat_history": 2, "documents": 1, "users": 1}
+        assert _probe_rows(db, user.id) == {"auth_tokens": 0, "user_models": 0, "chat_history": 0,
+                                             "documents": 0, "parent_chunks": 0, "child_chunks": 0}
+        assert db.get_user_by_id(user.id) is None, "账号行还在，可它名下的数据已经没了"
+        assert _probe_rows(db, default_id) == before_default, "越界删到默认账号名下了"
+
+        # 重放要安静：同一把刀落第二次不该炸，也不该报出任何"删了几行"
+        assert db.delete_user_cascade(user.id) == {"auth_tokens": 0, "user_models": 0,
+                                                   "chat_history": 0, "documents": 0, "users": 0}
+    finally:
+        _wipe_probe_account(db, user.id)
+
+
 # 假 key／假路由（计划指定的探针串，不是任何真凭证）。提成模块级常量是为了**单独成句比对**：
 # 与别的断言用 `and` 合并时 pytest 会把整条表达式的实际值打出来，将来这一格换成真凭证，
 # 日志与终端里就会多出它。拆开写还能在红的时候直接看出是哪一格漂了。

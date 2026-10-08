@@ -698,6 +698,44 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def delete_user_cascade(self, user_id) -> dict:
+        """注销账号：一个事务里把这个人名下的行全清掉，交出各表删掉的行数。
+
+        顺序不是风格问题。真库上 `documents` / `chat_history` / `auth_tokens` / `user_models`
+        四张表都带指向 `users` 的外键，而且是 RESTRICT（阶段三 ④ 补的，级联删得走行、删不掉
+        Chroma 里的向量，所以故意不写 `ON DELETE CASCADE`）；两张块表又挡着 `documents`。
+        错一步 MySQL 就回 1451。
+
+        `documents` 那一段必须**逐行 `session.delete(对象)`**：`query(Document).delete()` 走的是
+        SQL 批量删，绕开 unit-of-work，`cascade="all, delete-orphan"` 根本不触发，块表当场顶住。
+        同一条事实在单篇文档上已由 `delete_document` 与 `test_delete_document_cascades_chunks` 钉过。
+
+        删不到行不是错误：账号早没了就报全 0 安静返回，重放第二个请求不该炸。
+        向量不在本方法的职责内——Chroma 不吃 SQL 外键，由调用方在事务**提交之后**清扫（见
+        `api/auth.py` 的 deactivate）。先后是有讲究的：反过来（先扫向量再提交）一旦 MySQL 回滚，
+        就留下"账号还活着、向量已经没了"这种界面上一切正常而召回池空了的状态。
+        """
+        session = self.get_session()
+        try:
+            tokens = session.query(AuthToken).filter(AuthToken.user_id == user_id).delete()
+            models = session.query(UserModel).filter(UserModel.user_id == user_id).delete()
+            history = session.query(ChatHistory).filter(ChatHistory.user_id == user_id).delete()
+            docs = session.query(Document).filter(Document.user_id == user_id).all()
+            for doc in docs:
+                session.delete(doc)
+            session.flush()          # 块表随 documents 一起落，之后才轮得到 users 那一删
+            users = session.query(User).filter(User.id == user_id).delete()
+            counts = {"auth_tokens": tokens, "user_models": models, "chat_history": history,
+                      "documents": len(docs), "users": users}
+            session.commit()
+            logger.info("注销账号 id=%s，删掉的行数: %s", user_id, counts)
+            return counts
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def list_user_models(self, user_id) -> list:
         """返回 [(name, is_default)]，按 id 升序 = 用户添加的顺序。
 
