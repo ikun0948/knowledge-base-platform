@@ -6,7 +6,11 @@
 这里用假 Connection 记录发出去的 SQL，为的是把"先查再改"这个决策本身钉死——
 真 MySQL 上的 ALTER 语义归 live 组，那是另一条判据。外键也一样：它在真库上建成没有、
 RESTRICT 拦不拦得住删账号，都在 live 组。
+⑥ 补的是步骤 4 的**自报家门**：seed 的三条出口（写了 / `.env` 缺键 / 账号已有 key）
+必须各带一枚可分辨的 `reason`，否则开机日志里的 `llm_seeded: False` 永远是一句猜不出来的话。
 """
+
+import logging
 
 from core import migrations
 from core.security import verify_password
@@ -276,6 +280,17 @@ class MigrationConfig:
     OPENAI_API_KEY = "sk-from-env"
     OPENAI_BASE_URL = "https://dashscope/v1"
     LLM_MODEL = "qwen3.7-flash"
+
+
+class IncompleteEnvConfig(MigrationConfig):
+    """`.env` 缺 key 的那半态：三键里只抹掉 `OPENAI_API_KEY`，`base_url` 与模型名都还在。
+
+    ⑥ 的这条分支**从未在真 `.env` 上跑过**，本机也不该去跑（把 `.env` 改坏再改回，
+    中间任何一次崩溃都会留下一台起不来的后端）。所以这一格用注入的假 config 在离线门上证。
+    只抹一枚而不是三枚全空：半套配置才是本机最容易出现的形态——填了路由忘了 key，
+    `seed_default_llm` 要防的也正是"缺一枚还照抄"会造出一条必 409 的名单。
+    """
+    OPENAI_API_KEY = ""
 
 
 def test_ensure_columns_alters_only_when_missing():
@@ -619,6 +634,7 @@ def test_run_migrations_stamps_after_documents_are_claimed():
     assert summary["vectors_stamped"] == 3
     assert summary["documents_claimed"] == 9
     assert summary["llm_seeded"] is True and summary["model_seeded"] is True
+    assert summary["seed_reason"] == "seeded"      # ⑥：种上那一遍也要自报家门，不许留白
     assert "sk-from-env" not in str(summary)     # 汇总进日志：种子 key 绝不能在里面
     assert summary["chat_rows_claimed"] == 3
 
@@ -647,7 +663,9 @@ def test_seed_copies_the_three_env_keys_once():
     conn = FakeConn(user_rows=[(1, "default@local")])
     out = migrations.seed_default_llm(conn, 1, api_key="sk-from-env",
                                       base_url="https://dashscope/v1", model="qwen3.7-flash")
-    assert out == {"llm_written": True, "model_added": True}
+    # ⑥ 有意改写了这几处"整枚字典相等"的期望：新增一格 reason 才能把三条出口分开。
+    # 原有两格的口径一个字没动（llm_written / model_added 还是那两格布尔）。
+    assert out == {"llm_written": True, "model_added": True, "reason": "seeded"}
     assert conn.llm == {"user_id": 1, "api_key": "sk-from-env", "base_url": "https://dashscope/v1"}
     assert conn.user_models == [(1, "qwen3.7-flash", True)]     # 首个模型即默认
 
@@ -657,7 +675,8 @@ def test_seed_never_overwrites_a_key_the_user_set_himself():
     conn = FakeConn(user_rows=[(1, "default@local")])
     migrations.seed_default_llm(conn, 1, "sk-first", "https://a/v1", "m-one")
     second = migrations.seed_default_llm(conn, 1, "sk-second", "https://b/v1", "m-two")
-    assert second == {"llm_written": False, "model_added": False}
+    # ⑥：这一格的 reason 就是那条早退的名字——以前只回 False，开机日志分不清是"缺 key"还是"已有 key"
+    assert second == {"llm_written": False, "model_added": False, "reason": "already_configured"}
     assert conn.llm["api_key"] == "sk-first"
     assert [n for _, n, _ in conn.user_models] == ["m-one"]     # 没追加第二个
 
@@ -665,7 +684,7 @@ def test_seed_never_overwrites_a_key_the_user_set_himself():
 def test_seed_does_nothing_when_env_has_no_key():
     conn = FakeConn(user_rows=[(1, "default@local")])
     assert migrations.seed_default_llm(conn, 1, None, None, "m") == {
-        "llm_written": False, "model_added": False}
+        "llm_written": False, "model_added": False, "reason": "env_incomplete"}
     assert conn.user_models == []      # 没有 key 却塞一个模型名 = 造一条必 409 的半套配置
 
 
@@ -675,11 +694,82 @@ def test_seed_does_not_add_a_second_default_when_the_list_already_has_one():
     conn = FakeConn(user_rows=[(1, "default@local")], user_models=[(1, "m-existing", True)])
     out = migrations.seed_default_llm(conn, 1, "sk-from-env", "https://dashscope/v1",
                                       "qwen3.7-flash")
-    assert out == {"llm_written": True, "model_added": True}
+    assert out == {"llm_written": True, "model_added": True, "reason": "seeded"}
     assert conn.llm["api_key"] == "sk-from-env"
     defaults = [m for m in conn.user_models if m[2] is True]
     assert len(defaults) == 1 and defaults[0][1] == "m-existing"
     assert conn.user_models[-1] == (1, "qwen3.7-flash", False)
+
+
+def test_seed_reports_which_early_exit_it_took():
+    """⑥：三条出口必须报得出名字，尤其**两条早退之间要能分辨**。
+
+    开工前的形状是两条早退回**同一个字典**（`{"llm_written": False, "model_added": False}`），
+    于是开机日志里的 `llm_seeded: False` 是一句猜不出来的话——阶段三 ⑤ 真开机拿到的那一次
+    就是靠读源码才知道走的是"账号已有 key"，而不是 `.env` 缺键。
+    这条判据的全部内容就是最后那个不等号。
+    """
+    no_key = migrations.seed_default_llm(FakeConn(user_rows=[(1, "default@local")]),
+                                         1, None, "https://x/v1", "m")
+    no_url = migrations.seed_default_llm(FakeConn(user_rows=[(1, "default@local")]),
+                                         1, "sk-from-env", None, "m")
+    conn = FakeConn(user_rows=[(1, "default@local")])
+    migrations.seed_default_llm(conn, 1, "sk-first", "https://a/v1", "m-one")
+    already = migrations.seed_default_llm(conn, 1, "sk-second", "https://b/v1", "m-two")
+
+    assert no_key["llm_written"] is no_url["llm_written"] is already["llm_written"] is False
+    # key 与 base_url 缺哪一枚都是"半套配置"，同一个名字：两枚都在才抄得下去
+    assert no_key["reason"] == no_url["reason"] == "env_incomplete"
+    assert already["reason"] == "already_configured"
+    assert no_key["reason"] != already["reason"], (
+        "两条早退又回成同一个值了：日志与返回值一起失去分辨力，⑥ 就白做")
+
+
+def test_run_migrations_with_a_half_env_reports_the_branch_and_writes_nothing():
+    """⑥ 的主体：「缺 key 半态」在真 `.env` 上从没跑过，这一格用注入的假 config 在离线门上证。
+
+    要证的是**两件事**，少一件都没牙：
+    ① 那一遍什么都没写——`users.api_key`/`base_url` 不动，`user_models` 也不塞模型名
+       （塞了就是一条必 409 的半套配置，正是这个分支存在的理由）；
+    ② summary 说得出**是哪一条早退**（`env_incomplete`），而不是只说"没种上"。
+    """
+    conn = FakeConn()
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    summary = migrations.run_migrations(FakeEngine(conn), client, IncompleteEnvConfig())
+
+    assert summary["llm_seeded"] is False and summary["model_seeded"] is False
+    assert summary["seed_reason"] == "env_incomplete"
+    assert conn.llm == {} and conn.user_models == []
+    assert not any("SET api_key" in s for s in conn.executed), \
+        "缺 key 那遍还是发了 UPDATE users：把空串抄进了默认账号"
+    assert "sk-from-env" not in str(summary)     # reason 只准是常量，不许带凭证
+
+
+def test_boot_log_tells_the_two_no_seed_faces_apart(caplog):
+    """⑥ 的病根在**日志**里：三遍开机（种上 / 已有 key / `.env` 缺键）以前只有第一行有内容。
+
+    这里按 logger 名收 `kb.migrations` 的 INFO，验第二、第三行的 `seed_reason` 各不相同，
+    并且整段日志里没有种子 key ——新增一格就多一次泄漏机会，所以这条也要一起钉。
+    """
+    conn = FakeConn()
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    with caplog.at_level(logging.INFO, logger="kb.migrations"):
+        s_seeded = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())   # 种上
+        s_has_key = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())   # 已有 key
+        s_no_key = migrations.run_migrations(FakeEngine(FakeConn()), client,
+                                             IncompleteEnvConfig())                            # 缺键
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "kb.migrations"]
+    assert len(lines) == 3, f"开机日志行没收全（拿到 {len(lines)} 行）：summary 不进日志，判据就是空跑"
+    assert "seeded" in lines[0] and "already_configured" in lines[1]
+    assert "env_incomplete" in lines[2]
+    # 分辨力必须落在 reason 上，不是落在"两遍别的键不一样"上：开工前这两枚字典的
+    # llm_seeded / model_seeded 逐格相同，日志里那一句 `llm_seeded: False` 谁都猜不出是谁。
+    assert s_has_key["llm_seeded"] is s_no_key["llm_seeded"] is False
+    assert s_has_key["model_seeded"] == s_no_key["model_seeded"]
+    assert s_has_key["seed_reason"] != s_no_key["seed_reason"]
+    assert s_seeded["seed_reason"] == "seeded"
+    assert "sk-from-env" not in caplog.text
 
 
 def test_run_migrations_self_heals_a_crash_between_claim_and_stamp():

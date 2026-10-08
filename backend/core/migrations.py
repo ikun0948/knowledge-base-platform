@@ -361,12 +361,18 @@ def seed_default_llm(conn, user_id: int, api_key, base_url, model) -> dict:
     两个返回值都要**可数**，幂等这条判据不能吃日志。
     只在默认用户手上还没有 key 时抄：运行期他改过配置，重启再把 `.env` 盖回去等于每次开机
     偷走一次用户的修改。`api_key` 与 `base_url` 必须同时有值才抄（半套配置只会撞上游 401）。
+
+    `reason`（阶段三 ⑥）：开工前两条早退回的是**同一个字典**，于是开机日志里那一句
+    `llm_seeded: False` 猜不出是谁——"这台机器的 `.env` 没填 key"和"默认账号早就有自己的 key"
+    是同一种症状的两种原因，前者要人去补配置，后者恰恰是不该覆盖用户的修改。
+    现在三条出口各带一个名字，`run_migrations` 的 summary 里叫 `seed_reason`。
+    这一格只准取常量：summary 会整枚进日志，多一格可变量就多一次把凭证印出来的机会。
     """
     if not (api_key and base_url):
-        return {"llm_written": False, "model_added": False}
+        return {"llm_written": False, "model_added": False, "reason": "env_incomplete"}
     row = conn.execute(text("SELECT api_key FROM users WHERE id = :uid"), {"uid": user_id}).fetchall()
     if row and row[0][0]:
-        return {"llm_written": False, "model_added": False}
+        return {"llm_written": False, "model_added": False, "reason": "already_configured"}
     conn.execute(text("UPDATE users SET api_key = :k, base_url = :u WHERE id = :uid"),
                  {"k": api_key, "u": base_url, "uid": user_id})
     conn.commit()
@@ -385,7 +391,7 @@ def seed_default_llm(conn, user_id: int, api_key, base_url, model) -> dict:
                          {"uid": user_id, "n": model, "d": 1 if not first else 0})
             conn.commit()
             added = True
-    return {"llm_written": True, "model_added": added}
+    return {"llm_written": True, "model_added": added, "reason": "seeded"}
 
 
 def vectors_needing_owner(conn) -> dict:
@@ -477,6 +483,7 @@ def run_migrations(engine, chroma_client, config) -> dict:
                "default_user_id": user_id, "documents_claimed": docs,
                "chat_rows_claimed": chats,
                "llm_seeded": seed["llm_written"], "model_seeded": seed["model_added"],
+               "seed_reason": seed["reason"],
                "vectors_stamped": vectors}
     logger.info("迁移完成: %s", summary)   # summary 里没有 api_key：多一个键就多一次泄漏机会
     return summary
