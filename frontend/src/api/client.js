@@ -15,6 +15,25 @@ export function authHeaders(extra = {}) {
   return authToken ? { Authorization: `Bearer ${authToken}`, ...extra } : { ...extra }
 }
 
+// 422 的校验项里只准 msg、loc、type 三格上屏。`input` 是 FastAPI **原样回显的请求值**——`PUT /api/auth/me/llm`
+// 那一枚里带的就是明文 api_key，而后端没有 RequestValidationError 处理器（main.py 只挂领域异常），
+// 响应体里这一格永远在；界面上看不看得到，全凭这里。`ctx` 一起剥：pydantic 允许校验器往里塞任意值。
+// 代价如实记：排错时拿不到"后端收到了什么"，只能拿"哪一格、哪种错"——而本仓的 msg 只写长度不写值
+// （schemas/auth.py 两处 validator 实测），这条通道今天没有可用的信息被剥掉。
+// 兜底挑键的顺序按 type、loc（与 FastAPI 自己输出的一致）：既有的那条"缺 msg 降级为 JSON 文本"判据
+// 因此不必改期望值，这道闸的改动面就只有"input 那一格不见了"。
+function validationItemText(item) {
+  if (item === null || typeof item !== 'object') return JSON.stringify(item)
+  if (typeof item.msg === 'string' && item.msg) return item.msg
+  // 兜底只挑 type 与 loc：能用的一句话 msg 上面已经交出去了，这里再抄一次 msg 等于给
+  // "非字符串的 msg（值可能藏在里面）"留一条上屏的路——那不是 pydantic 的形状，宁可丢。
+  const safe = {}
+  for (const key of ['type', 'loc']) {
+    if (item[key] !== undefined) safe[key] = item[key]
+  }
+  return JSON.stringify(safe)
+}
+
 // 独立成纯函数是因为上传走 XHR（见 documents.js），它手上没有 Response 只有文本，
 // 但错误规则必须和 fetch 那条完全一致，否则同一个 415 在两个入口显示两种文案。
 export function detailFromText(text, status) {
@@ -28,8 +47,9 @@ export function detailFromText(text, status) {
   const detail = body?.detail
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
-    // 数组 detail 来自参数校验（msg 是英文）：冠一句中文，原文照抄在后——翻译会漂、丢弃等于藏 bug（M-j）
-    return `请求参数不合法：${detail.map((item) => item?.msg ?? JSON.stringify(item)).join('；')}`
+    // 数组 detail 来自参数校验（msg 是英文）：冠一句中文，原文照抄在后——翻译会漂、丢弃等于藏 bug（M-j）。
+    // 这里的"原文"指 msg 与 loc/type，**不含 input**：见 validationItemText。
+    return `请求参数不合法：${detail.map(validationItemText).join('；')}`
   }
   return `HTTP ${status}`
 }

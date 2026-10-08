@@ -3,7 +3,7 @@
 // 都钉成断言——桩掉 fetch，不需要真服务。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, detailFromText, postStream, request, setAuthToken, setUnauthorizedHandler } from '../src/api/client.js'
+import { ApiError, detailFromText, httpError, postStream, request, setAuthToken, setUnauthorizedHandler } from '../src/api/client.js'
 
 function fakeReader(chunks, { failAt = -1, err } = {}) {
   let i = 0
@@ -76,6 +76,57 @@ describe('detailFromText', () => {
   it('422 数组里缺 msg 的项降级为 JSON 文本，不让 undefined 混进中文句', () => {
     expect(detailFromText(JSON.stringify({ detail: [{ type: 'too_short', loc: ['body', 'x'] }] }), 422))
       .toBe('请求参数不合法：{"type":"too_short","loc":["body","x"]}')
+  })
+
+  // 阶段三 ⑦：422 的校验项里 `input` 是**原样回显的请求值**——FastAPI 默认把整枚请求体填进这一格，
+  // 而 `PUT /api/auth/me/llm` 的请求体里躺着明文 api_key。后端没有 RequestValidationError 处理器
+  // （main.py 只挂领域异常），响应体里那一格永远在；界面上看不看得到，全凭 detailFromText 这一道闸。
+  // 原先挡住它靠的是"有 msg 就只抄 msg"，兜底那半写的却是 `JSON.stringify(整枚 item)`——
+  // 缺 msg 的形态一旦出现，key 就整串上屏。
+  it('没有可用 msg（缺键或空串）的校验项走兜底时只留 loc 与 type，input 和 ctx 一律不上屏', () => {
+    const secret = 'sk-LEAKCHECK-0123456789abcdef'
+    // ctx 里的载荷**故意与 secret 不同**：这样"input 不许上屏"和"ctx 不许上屏"两面各有独立的牙齿，
+    // 变异时能分辨红在哪一面（两枚都写 secret 就只是一条判据红了两次）。
+    const text = detailFromText(JSON.stringify({
+      detail: [{ type: 'value_error', loc: ['body', 'api_key'], input: secret, ctx: { actual: 3, expected: 8 } }],
+    }), 422)
+    expect(text).not.toContain(secret)
+    expect(text).not.toContain('ctx')
+    expect(text).not.toContain('expected')
+    // 剥掉值不许把线索一起剥掉：哪一格、犯了哪种错，仍然要读得出来
+    expect(text).toContain('"loc":["body","api_key"]')
+    expect(text).toContain('"type":"value_error"')
+    // 空串 msg 不是"能用的一句话"，必须和缺键一样走兜底，否则界面只剩一句「请求参数不合法：」
+    expect(detailFromText(JSON.stringify({
+      detail: [{ type: 'value_error', loc: ['body', 'api_key'], msg: '', input: secret }],
+    }), 422)).toBe('请求参数不合法：{"type":"value_error","loc":["body","api_key"]}')
+  })
+
+  it('有 msg 时只抄 msg，不因为"信息更全"把 input 拼在后面', () => {
+    // 这条今天就是绿的（msg 那半本来不碰 item 其余的键），钉住它是防下一个人在这里"顺手补全上下文"
+    const secret = 'sk-LEAKCHECK-0123456789abcdef'
+    expect(detailFromText(JSON.stringify({
+      detail: [{
+        type: 'string_too_short', loc: ['body', 'api_key'], msg: 'String should have at least 8 characters', input: secret,
+      }],
+    }), 422)).toBe('请求参数不合法：String should have at least 8 characters')
+  })
+
+  it('数组里混进非对象项（后端手写的 detail）时照旧交出那格本身', () => {
+    expect(detailFromText(JSON.stringify({ detail: ['api_key 不能是空白'] }), 422))
+      .toBe('请求参数不合法："api_key 不能是空白"')
+    // null 也走这一格：兜底若在 null 上取 .msg 会抛 TypeError，那条可读的 422 就变成"界面自己坏了"
+    expect(detailFromText(JSON.stringify({ detail: [null] }), 422)).toBe('请求参数不合法：null')
+  })
+
+  it('三条出口共用的那道闸：httpError 直接构造的错误也不带 input', () => {
+    // 上传那条走 XHR（documents.js 手上只有 responseText），它复用 httpError 而不是另写一遍规则；
+    // 所以这道闸必须对 httpError 本身有一条判据，否则"唯一构造点"就只是一句注释。
+    const secret = 'sk-LEAKCHECK-0123456789abcdef'
+    const err = httpError(JSON.stringify({
+      detail: [{ type: 'value_error', loc: ['body', 0], input: secret }],
+    }), 422)
+    expect([err.status, err.message.includes(secret)]).toEqual([422, false])
   })
 
   it('非 JSON 响应体（反代 HTML 错误页）回退到 HTTP 状态码', () => {
