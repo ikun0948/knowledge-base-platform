@@ -27,6 +27,10 @@
 1. 全量门的 **2 个 skip** 是 `-m live` 的两条流式测（本机此刻没有 uvicorn）；它们在 Task 12 的「服务在」那一档真跑过，实数 `23 passed / 286 deselected / 1 warning in 143.72s`，**且无一条 skip**。
 2. 唯一的 **1 warning** 是既有噪声 `core/database.py:13` 的 `declarative_base()` MovedIn20Warning，阶段二没有触碰该行，不属本轮引入。
 3. **上表是阶段二收口那一刻（HEAD `25bf2e2`）的快照，不是现状。** 阶段三 ①②③④ 逐条推进了判据数：写本文档时 HEAD `423a26a` 实测**后端全量 `323 passed / 2 skipped / 2 deselected`、离线门 `301 passed / 26 deselected`、live 整文件 `22 passed`**，前端仍 `154 passed`（阶段三 ④ 未碰前端，故 `npm test`/`build` 未重跑）。每条的增项与逐轮变异实数在 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`，本表保留原值是为了不篡改历史轮次。
+   **现状（HEAD `e1f4d45`，阶段三 ①–⑧ 与 ② 的补账全部闭合后，本轮实测）**：后端全量 `337 passed / 2 skipped / 2 deselected / 1 warning`
+   （那 2 条 skip 仍是需要本机 uvicorn 的流式判据；**live 组含在这一遍里**，`test_live_database.py` 单文件的 24 条是 ⑤ 轮的量、本轮未单文件重跑），
+   后端离线门 `313 passed / 28 deselected`，前端 jsdom `158 passed / 14 files`，
+   `npm run build` → `index-CKhscz7G.js` + `index-CUrklGmJ.css`，浏览器门 21 条需两份服务（本轮未跑）。
 
 ## 三、原始七条需求 → 交付位置与证据
 
@@ -51,7 +55,7 @@
 5. **改密码不吊销其它设备的令牌**：会话表 30 天绝对过期，只有登出才删行。
 6. **界面上选中的那枚模型就是实际发出去的那枚**：设置侧与问答侧共用 `schemas/auth.py:142 default_model_of` 这一个函数（全仓 `_default_of` 零命中），不可能分叉。
 7. **未配置时是「事前禁发 + 紫横幅」**，两条路都堵（按钮 `:disabled` 与 `submit()` 门禁各一半）；真收到 409 时落红色横幅，且**前端不改写后端文案**（英文 detail 原文照抄在中文冠语之后）。
-8. **`PASSWORD_MIN` 是 6 不是 8**（`schemas/auth.py:13`）。前端原有两处各写一份，阶段三第 ② 条（`ee117fd`）起只有 `frontend/src/constants.js` 一枚，且由 `backend/tests/test_frontend_constants.py` 钉住与后端逐字相同——不再依赖"记得两边一起改"。
+8. **`PASSWORD_MIN` 是 6 不是 8**（`schemas/auth.py:13`）。前端原有两处各写一份，阶段三第 ② 条（`ee117fd`）起只有 `frontend/src/constants.js` 一枚，且由 `backend/tests/test_frontend_constants.py` 钉住与后端逐字相同——不再依赖"记得两边一起改"。**② 的补账（`e1f4d45`）后这枚文件共九枚镜像 / 六道判据**：问答契约 `parent_ids` 的两枚界（`MAX_ID_CHARS=100` / `MAX_SELECTED_CHUNKS=50`）与 `model_name` 的界也进了同一出口，前端不再留本地副本。
 9. **默认账号 `default@local` 的初始口令来自 `.env` 的 `DEFAULT_USER_PASSWORD`**；该键为空则这个账号只作归属锚点、不可登录。
 10. **建议轮换 `DEFAULT_USER_PASSWORD`**：它在脱敏提交 `0b22116` 之前进过 git history，仓库文件现在 0 命中但历史可翻。
 
@@ -91,7 +95,22 @@
 ## 八、阶段三开工单（明确不在阶段二范围，每条给「要闭合得做什么」）
 
 1. ~~`LlmIn.api_key`/`base_url` 的长度界量在 **strip 之前**~~ ⇒ **已闭合（2026-10-08，`de8499d`）**：两格的 `min_length/max_length` 从 `Field` 搬进 `field_validator`，strip 完再量并返回洗净值；补了三条判据（靠空白凑够 8 位的 key 现在 422 且不写库、正好 255/500 位的合法值不再因为多贴空格被拒）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
-2. ~~前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）~~ ⇒ **已闭合（2026-10-08，`ee117fd`）**：走的是"前端集中 constants + 判据钉住"那条路（否决 options 端点——它要进认证白名单、要给同步表单加异步态、首屏仍需一份兜底副本，那正是本条要消灭的东西）。七枚镜像字面量收进 `frontend/src/constants.js`（第 7 枚是此前只以 `maxlength="100"` 形态存在的模型名上界），新增 `backend/tests/test_frontend_constants.py` 直读两端源码钉四件事：只许一枚模块声明、镜像值与后端权威值逐字相同、头像与标签同枚覆盖、模板属性里不许写死数字（顺带消灭 `AuthPanel.vue:119`「至少 6 位」与两处 `maxlength`）。判据放 pytest 而非 vitest：改后端不改镜像、或改镜像不改后端，都在**同一道后端门**上红。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
+2. ~~前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）~~ ⇒ **已闭合（2026-10-08，`ee117fd`）**：走的是"前端集中 constants + 判据钉住"那条路（否决 options 端点——它要进认证白名单、要给同步表单加异步态、首屏仍需一份兜底副本，那正是本条要消灭的东西）。七枚镜像字面量收进 `frontend/src/constants.js`（第 7 枚是此前只以 `maxlength="100"` 形态存在的模型名上界），新增 `backend/tests/test_frontend_constants.py` 直读两端源码钉四件事：只许一枚模块声明、镜像值与后端权威值逐字相同、头像与标签同枚覆盖、模板属性里不许写死数字（顺带消灭 `AuthPanel.vue:119`「至少 6 位」与两处 `maxlength`）。判据放 pytest 而非 vitest：改后端不改镜像、或改镜像不改后端，都在**同一道后端门**上红。
+   **② 收口时留的两格账 ⇒ 补账已闭合（2026-10-08，`e1f4d45`）**：问答契约 `schemas/chat.py` 的三格界此前没有跨端判据。
+   预检实测两件事决定了做法——① `parent_ids` 的**两枚界写在两行上**（元素界在 `Annotated[str, Field(...)]` 里、
+   列表界在外层 `Field(default_factory=list, max_length=50)`），② 那套按行匹配的 `_py_field_maxes` 看不见续行 ⇒
+   补一条按**括号深度**切整条声明的切片器（`_py_statement` + `_py_two_bounds`），两枚界**按位置归属**（以深度 0 的
+   ` = Field(` 分半、每半必须恰好一枚）而不是按多重集，否则"两枚界对调"这种最坏情形会全绿；
+   ② `MODEL_NAME_MAX` 虽已在镜像集里但只钉了 `auth.py` 那一头，同一条 chat 请求里的 `model_name` 界无人核对。
+   前端那两枚本地常量（`useChunkSelection.js:6/:7`，注释还写着"对齐 String(100)"，把**契约界**与**存储宽度**混为
+   一件事）收进同一出口 ⇒ 镜像集 **七枚 → 九枚**、判据 **五条 → 六条**；改名/移动的冲击面实测只有一处
+   （`useChunkSelection.test.js:10` 的 import）。**刻意不并进来两格**（理由钉进了那条判据的 docstring，不只留在台账）：
+   `ParentChunk.parent_id = Column(String(100))` 是存储宽度、合法的改法是加宽列而契约留 100；`session_id` 的 100
+   前端没有对应的输入框（它来自 `GET /me`）⇒ 准入条件是"前端真有一处要用这个数字"。RED 实跑 `2 failed, 4 passed`，
+   八轮变异（6 轮各红 1 条 / 1 轮注释对照组全绿 / 1 轮打在接线面：`constants.js` 改 51 ⇒ jsdom `2 failed, 156 passed`，
+   证明那枚常量真是被 composable 用的那一枚）；**用户可见面无行为变化**（100/50 两个数字原值搬家，文案由插值生成）。
+   后端全量 `336 → 337`、离线 `312 → 313`、jsdom 仍 158、build 产物**换 hash**（`index-CWg0-YgN.js` → `index-CKhscz7G.js`，
+   本轮生产码真改了，与 ⑦⑧ 的"hash 未变"不同）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 3. ~~两枚同名 `FakeConfig`（`tests/fakes.py:1` 与 `tests/test_migrations.py:182`）~~ ⇒ **已闭合（2026-10-08，`bcc0296` + 补正 `d89bb29`）**：本条要求的前置检查实测**答案是"依赖成立"**——`core/migrations.py:252-256` 要读四格（默认口令 + `.env` 三键），而 `fakes.py` 那枚只有 `CHROMA_PERSIST_DIR`，所以**合并这条路被实测否掉**（合了要么缺一格，要么把阶段二 Task 7 刚删掉的"写了没人读"三键塞回交付面）。缺陷随之收窄成"重名"这一件事：迁移那枚改名 `MigrationConfig`，并新增 `backend/tests/test_test_doubles.py` 用 AST 钉住**模块顶层 `Fake*` 类名唯一**（口径边界如实记：函数体内的局部同名不在射程内——那种合法同名实测存在，是 `test_llm_factory.py` 35/50/66 行的三枚 `Recorder`，作用域互不重叠；判据的扫描面因此从 `ast.walk` 收窄为 `tree.body`，正反两轮实测确认该抓的一条没漏、不该抓的一条没误伤）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 4. ~~`ChatHistory.user_id` / `documents.user_id` 的外键**只存在于新建库** ⇒ 做任何「注销账号」功能之前必须先补 FK 或显式级联删行，否则老库留孤儿~~ ⇒ **已闭合（2026-10-08，`423a26a`）**：补了 FK，且**刻意不做级联**。三条设计都钉成了判据——① `ensure_foreign_keys` 按 **(表, 列)** 问 `information_schema.KEY_COLUMN_USAGE`，不按约束名问（`create_all` 建的那枚叫 `documents_ibfk_1`，按名字查会在每个新库上再叠一枚重复外键，InnoDB 对不同名不拦且安静收下）；② 排在 `ensure_indexes` **之后**（列上没有可用索引时 InnoDB 会自建一枚、名字就是约束名，我们那枚再补一次 ⇒ 同列两枚，没人报错只多付写放大）；③ **不写 `ON DELETE`**（MySQL 默认 RESTRICT）——级联删得掉 MySQL 行、删不掉 Chroma 里的向量，"行没了、向量还能被召回"正是本仓一路在防的脏数据面；要删就走应用层两头删。原条目给的"或显式级联删行"这条路**被否决并写进判据**（`test_ensure_foreign_keys_never_cascades_at_the_mysql_level`）。「注销账号」从此被 MySQL 拦在 errno 1451 上，孤儿行产生不了。**预检量到计划外的一面并改了真数据**：`chat_history` 43 行的 `user_id` 全是 **1**，而 `users` 只剩 30（`default@local`）与 338——默认账号被重铸过、id 从 1 漂到 30，`backfill_chat_history` 只捡 `IS NULL` 的行，这 43 行从此读不到也删不掉；带着孤儿去 `ADD CONSTRAINT`，MySQL 回 **errno 1452**，而 `run_migrations` 挂在 lifespan 且不兜异常 ⇒ 症状是"整台后端起不来"。经使用者拍板走「先归户再建 FK」：新增 `reclaim_orphaned_owners`（先 `COUNT` 再 `UPDATE`，不拿 rowcount 当证据——本仓方言硬带 `CLIENT_FOUND_ROWS`，同值重写照样回 1），排在 `ensure_foreign_keys` 之前。**真实数据改动：43 行 `chat_history.user_id` 由 1 改为 30**（回滚 SQL 记在台账）。落库后实测：两张表各**一枚**外键、**0** 孤儿、`user_id` 列上各**只一枚**索引。判据：单测 +7、live +1（RESTRICT 行为面：探针账号自己造自己删，`default@local` 一次都不出现在 DELETE 里）+ live 那格「第二遍零 ALTER」扩到外键与孤儿（纪律：**先读 `information_schema` 确认 lifespan 已建好，才敢调那两步验幂等**——测试不许在共享库上发 ALTER/UPDATE）。十二轮变异自证、逐轮条数与还原 sha 见台账 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 5. ~~`user_models`「至多一枚默认」靠应用层两步（判空 + 清场）⇒ 并发插入可留两枚默认；要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）~~ ⇒ **已闭合（2026-10-08，`e0ecfe1`）**：堵在**引擎**上，不选应用级锁。MySQL 没有部分索引，所以守卫落在一枚生成列上——`default_guard INT GENERATED ALWAYS AS (CASE WHEN is_default THEN user_id ELSE NULL END) STORED` + `CREATE UNIQUE INDEX uq_user_models_single_default ON user_models (default_guard)`；唯一索引**不管 NULL**，于是"同一人任意多枚非默认"与"每人至多一枚默认"同时成立。新库由 `create_all` 按 ORM 声明建（`Computed(..., persisted=True)`），已部署库由 `ensure_single_default_guard` 补，四步各查各的、重跑交白卷：**数重复 → 降掉除 `MIN(id)` 之外 → 补生成列 → 建唯一索引**。两处顺序是 scratch 表实测钉出来的，反了不是报错而是**整台后端起不来**（`run_migrations` 挂在 lifespan 且不兜异常，`main.py:59`）：① `ALTER … ADD COLUMN … STORED` 在**已经带着两枚默认**的数据上照样成功（两行都算出同一个 guard，此刻还没有索引管它），紧接着的 `CREATE UNIQUE INDEX` 才回 1062 ⇒ 去重必须早于建索引；② 列必须早于索引。存在性用**严格口径**问（`information_schema.COLUMNS` 带 `GENERATION_EXPRESSION <> ''`）——同名**普通列**被当成"守卫已建好"的后果是**静默的零约束**（那列由应用自己写，不写就整列 NULL，索引正好不管 NULL），比没有索引更糟；表达式全文不能逐字比（MySQL 存成小写 + 反引号），那半由 `SINGLE_DEFAULT_GUARD_EXPR` 与 ORM 声明**同源**钉住（`core/database.py` 从 `core/migrations.py` 导入）。清单给的"应用级锁"这条路**被否决**：本表写入方已有三处（`add_user_model` / `set_default_user_model` / 迁移的 `seed_default_llm`），锁要求每个写入方都自觉拿同一把。另外看着更"原子"的那条捷径 `SET is_default = (name = :t)` **实测否决**——同一份数据，目标 id 排在现任之前回 1062、之后成功，顺序依赖的约束不是约束。**顺带堵掉 ⑤ 自己会引入的谎**：`add_user_model` 原先把所有 `IntegrityError` 都回 False，端点据此回 409「该模型已在你的名单里」；守卫键一进来，"名单里根本没这个名字"也会撞键（另一事务刚立默认、这里 `is_first` 读旧快照），那句话就变成没人能查下去的假话——现在回滚后再查一次名字分流：真在名单里 ⇒ 409，不在 ⇒ 补插成非默认 ⇒ 收下。**真库 `mydb` 已落库**（`default_guard` 实测 `STORED GENERATED`、唯一索引只盖它一列、多默认用户 0、行数与默认数未变，`duplicates_cleared: 0` ⇒ **本条不改任何用户数据**，没有 ④ 那样的归户）。判据：单测 +8（迁移 6 + 形状 2）、live +2（一条问**引擎本身**收不收第二枚默认——INSERT 与 UPDATE 提升都回 1062 且消息里带着索引名；一条用 `_StaleSnapshot` 按 SQL 文本只 spoof 判空那次查询，把撞守卫键的窗口变成确定性可复现，并断言钩子恰好命中一次否则算空跑）。八轮变异逐轮一条红，真开机一遍拿到 `kb.migrations` 的 summary 原文（`single_default_guard` 三格全白卷）；逐轮条数、五条 Ruling 与挂账（索引侧的严格口径、重试嵌套分支、`set_default` 输家的 500）见台账 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
@@ -104,6 +123,12 @@
 - 12 条判据只用了**本机 Edge headless**：没有跨浏览器；375 档是**视口模拟**不是设备模拟，真触屏 `touch` 行为未验。
   ⇒ 阶段三 ⑧ 之后这套探针已常驻（`npm run test:browser`，21 条，见第八节第 8 条），**这三条缺口原样继承**：常驻判据仍然只有本机 Edge headless、375 档仍然是视口模拟不是设备模拟、真触屏 `touch` 仍未验。
 - ⑧ 那 21 条**自己的**三面未堵（都在第八节第 8 条的挂账里逐条给了原因）：`.picker-modal` 的宽度上界 560px 无判据；≤768 的 `height:100dvh` 与继承来的 `100%` 在桌面 headless 上分不出；`.settings-model-row{flex-wrap:wrap}` 属数据相关判据没钉。另：这一门**需要两份服务在跑**，且按裁定"前置条件失败响亮报错、不 skip"——没起服务时它是红的而不是灰的，跑法见第十一节。
+- **② 补账（`e1f4d45`）自己的三面未堵**（理由逐条写在台账那一节的「挂账与边界」里）：
+  ① `frontend/src/api/documents.js:10` 的 `limit = 50`（候选池**每页条数**）没并进镜像集 —— 它与 `parent_ids`
+  的列表界是两个不同事实，数值相同纯属巧合，钉成相等会把一侧的正常改动判红；后端有没有对应的命名权威值本轮未查。
+  ② `layout.css:330`「昵称上限 50 字」与 `:373`「模型名上界 100 字」两处**注释里的数字**不进门禁（② 的形状判据量的是
+  真会生效的模板属性，注释漂移不改行为），代价是注释可与契约漂移。③ 新切片器 `_py_statement` 的两条早退守卫
+  （字段改名 / 括号未闭合）**没有各自的变异轮**，本轮只实测了分半计数与位置归属两轮。
 - **并发未量**：两个标签页同时改名单只有 Task 10 的补偿测，界面侧没有。
 - **默认用户那档没有在界面上手验**（只以 live ④ 组身份出现）。
 - 浮层 backdrop 点击关闭与 Esc 关闭在真浏览器的表现未量（jsdom 判据有）。
@@ -122,13 +147,13 @@
 ```bash
 # 后端（同一时刻只跑一个 pytest 进程；不要起第二个 uvicorn，Chroma 是单实例锁）
 cd backend
-python -m pytest -q                                    # 期望 336 passed / 2 skipped / 2 deselected
-python -m pytest -q -m "not live and not migration"     # 期望 312 passed / 28 deselected
+python -m pytest -q                                    # 期望 337 passed / 2 skipped / 2 deselected
+python -m pytest -q -m "not live and not migration"     # 期望 313 passed / 28 deselected
 
 # 前端
 cd frontend
-npm test                                               # 期望 Test Files 14 / Tests 158（阶段三 ⑦ 后，原 154）
-npm run build                                          # 期望 exit 0，产物 index-CWg0-YgN.js（⑦ 前为 index-CH0iZltg.js）
+npm test                                               # 期望 Test Files 14 / Tests 158（②补账未增减条数，仍与 ⑦ 相同）
+npm run build                                          # 期望 exit 0，产物 index-CKhscz7G.js（②补账前为 index-CWg0-YgN.js）
 
 # 视口/布局的常驻浏览器门（阶段三 ⑧，`frontend/tests-browser/`，独立 config）：
 # 需要两份服务**都在跑**——后端 uvicorn :8000 一份（只起一份）+ 前端 `npm run dev` :5173 一份。
@@ -146,17 +171,20 @@ python -m pytest -q -m live                            # ⑥ 这轮实跑 24 pas
                                                        # 不填没量过的数
 ```
 
-上两行后端期望是**阶段三 ⑥（`6a327ca`）**之后的实数，**⑦ 没有改动它们**（⑦ 的 diff 只落在 `frontend/` 两枚文件，
-后端全量本轮只重跑一次做冲击确认，逐字相同）；前端那行 **158 是 ⑦（`74d11b8`）之后的实数**（⑦ 前 154）。
+上两行后端期望是**② 的补账（`e1f4d45`）**之后重跑的实数（全量只 +1、离线只 +1，都来自那一枚新判据）；
+⑥/⑤ 轮次的实数是 `336 / 312`，⑦ 没有改动它们（⑦ 的 diff 只落在 `frontend/` 两枚文件，
+后端全量当轮只重跑一次做冲击确认，逐字相同）；前端那行 **158 是 ⑦（`74d11b8`）之后的实数**（⑦ 前 154，
+②补账未增减条数）。
 阶段二收口那轮跑在 `25bf2e2`，同两条后端命令的实数是
 `306 passed / 2 skipped / 2 deselected` 与 `285 passed / 25 deselected`（见第二节表格，历史值不追改）。
-增项逐条记在阶段三台账里：① +3、② +5、③ +1、④ +7 单测 +1 live、⑤ +8 单测（迁移 6 + 形状 2）+2 live、
+增项逐条记在阶段三台账里：① +3、② +5、② 补账 **+1 单测**（`test_frontend_constants.py` 5→6 条，镜像集 7→9 枚）、③ +1、④ +7 单测 +1 live、⑤ +8 单测（迁移 6 + 形状 2）+2 live、
 ⑥ +3 单测（`test_migrations.py` 30→33；另**有意改写**四处既有的"整枚字典相等"断言，两格布尔口径未动）、
 ⑦ **+4 前端 vitest**（`frontend/tests/client.test.js` 26→30，后端 0 增项；既有的"缺 msg 降级为 JSON 文本"那条期望值一字未改）。
 ⑧ **jsdom 门 0 增项、浏览器门 +21**（`npm run test:browser`，新目录 `frontend/tests-browser/` + 新 config `vitest.browser.config.js` +
 新 npm script；`frontend/tests/chunk-selection.test.js` 只多了一句断言，所以 **158 这个数字没动**）。
 ⑧ 的 diff 只落在 `frontend/` 且**不含任何生产码**：`npm run build` 两枚产物 hash 与 ⑦ 逐字相同（`index-CWg0-YgN.js` / `index-CUrklGmJ.css`），
-后端三门因此**未重跑**（口径同 ①③⑦），上表的后端期望值仍是 ⑥/⑤ 轮次的实数，不是本轮量过的。
+后端三门在 ⑧ 当轮**未重跑**（口径同 ①③⑦），那句"上表实数是 ⑥/⑤ 轮次的量"只对 ⑧ 那一轮成立 ——
+② 的补账（`e1f4d45`）已把三门重跑成新值（`337 / 313 / 158`，build 换 hash），见上两段。
 
 **验收隔离数据时不要改库**：造「未配 key」「名单为空」两档只能走设置端点（清 `api_key` / 逐条删模型），改库会同时破坏 Task 3 的补戳证据与库内基线（活文档 4 / 父块 4 / 子块 10、`chat_history` 43 行）。探针账号一律挂自己的 `probe_user`，用完即删。
 

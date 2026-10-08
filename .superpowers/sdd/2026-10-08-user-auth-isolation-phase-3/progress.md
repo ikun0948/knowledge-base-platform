@@ -937,12 +937,122 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 - 本轮**未跑 `-m migration`**、未起第二份 uvicorn、未跑后端门（理由见表）；
   `backend/` 一行未动。
 
+## ② 的补账 — 问答契约的三格界进镜像集，前端两枚本地常量收进单一出口
+
+- BASE：`1180f81`（第 ⑧ 条的台账收口）。实现提交 **`e1f4d45`**
+  （4 files / **+76 −8**：`backend/tests/test_frontend_constants.py` +67 −3、
+  `frontend/src/constants.js` +5 −2、`frontend/src/composables/useChunkSelection.js` +1 −2、
+  `frontend/tests/useChunkSelection.test.js` +3 −1）。
+- ② 收口时这两格只写进了项目记忆，**台账正文没有这一条**（② 那一节记到"七枚镜像收口"为止），
+  所以本节所有实数来自本轮的临时证据文件（`kb-118-rounds*.txt` / `kb-118-gates-*.txt` / `kb-118-verify*.txt`）
+  与会话转录回读（jsonl 第 33103 / 33478 两条 tool_result 是原始出处）+ 当场直查，只凭回忆的数字一律不写（[[feedback-subagent-report-verify]]）。
+
+### 预检（全部当场直查，量的是 `e1f4d45^` 那一版）
+
+- **两枚本地常量的位置**：`useChunkSelection.js:6` `export const MAX_SELECTED_CHUNKS = 50`、
+  `:7` `const MAX_ID_CHARS = 100 // 对齐 ParentChunk.parent_id 的 String(100)`
+  —— 那句注释把**契约界**与**存储宽度**当成同一件事，正是 ② 要区分开的两种事实。
+- **改名/移动的冲击面只有一处**：全 `frontend/src` + `frontend/tests` 扫这两个名字，除声明处自身的使用
+  （第 19、20、69、70 行）外，唯一外部消费者是 `useChunkSelection.test.js:10` 那枚 import。
+- **`chat.py:15-16` 的两枚界写在两行上**：元素界在 `Annotated[str, Field(min_length=1, max_length=100)]` 里，
+  列表界在外层 `Field(default_factory=list, max_length=50)`。② 那套按行匹配的
+  `_py_field_maxes`（`^\s*{field}: str.*max_length=(\d+)`）既匹配不上 `list[...]` 那行、更看不见续行 ⇒
+  **必须补一条按括号深度切整条声明的切片器**（`_py_statement` + `_py_two_bounds`）。
+- **`MODEL_NAME_MAX` 虽已在镜像集里，但只钉了 `schemas/auth.py` 那一头**：同一条 chat 请求里的
+  `model_name: str | None = Field(..., max_length=100)` 无人核对 ⇒ 后端只改 chat 那一格时判据不红。
+
+### RED → GREEN
+
+- **RED**（只加判据与两条早退守卫，前端一行未动）：实跑 **`2 failed, 4 passed in 0.45s`**，两条红理由不同：
+  1. 声明集那条红在 `:172`（集合比对：两枚名字还在 `useChunkSelection.js` 里，`constants.js` 没有）；
+  2. 新增那条红在 `:207` → `_js_number` 的早退守卫 `constants.js 里抓不到 \`export const MAX_ID_CHARS = 数字\``。
+  `_py_two_bounds` 先过了（能走到第 207 行）⇒ 红在缺镜像，不在缺解析。
+- **GREEN**：两枚界进 `frontend/src/constants.js`（注释分别写"= schemas/chat.py 里 parent_ids 的元素界 /
+  同一条声明里的列表界"），`useChunkSelection.js` 删两枚本地常量、改从 `../constants.js` import，
+  测试的 import 一起挪走（原地留一句"上限那枚数字归 constants.js，这里只从那里取"）。聚焦 **`6 passed`**。
+- **用户可见面：无行为变化**。两枚数字一个都没改（100/50 原值搬家），文案「最多只能选择 50 个文档块」
+  由插值生成 ⇒ 逐字不变；jsdom 158 条与 build 产物只反映"少了一处声明、多了一处 import"。
+
+### 门禁实数（变异全部还原之后重跑）
+
+| 门 | 结果 |
+|---|---|
+| 焦点 `pytest tests/test_frontend_constants.py` | **`6 passed`**（② 的 5 条 + 本轮 1 条） |
+| 后端全量（含 `-m live`） | **`337 passed, 2 skipped, 2 deselected, 1 warning`**（2 skip 要本机 uvicorn；warning 是 `core/database.py` 的 `declarative_base()` MovedIn20Warning，先前就有） |
+| 后端离线门 | **`313 passed, 28 deselected, 1 warning`** |
+| 前端 jsdom | **`158 passed / 14 files`**（逐字未变） |
+| 前端 build | 退出 0 ⇒ **`index-CKhscz7G.js` 101.39 kB**（**换 hash**：`index-CWg0-YgN.js` → 新；本轮生产码真改了，与 ⑦⑧ 的"hash 未变"不同）+ `index-CUrklGmJ.css` 13.49 kB **未变** |
+| 浏览器门（⑧ 那套 21 条） | **未跑**：要同时起 uvicorn + vite 两份服务，本轮不碰布局与 CSS（`layout.css` 一行未动）；口径同 ①③⑦ |
+| `-m migration` / 真库 | **未跑、未碰**：本轮零迁移、零 DB 触达 |
+
+### 变异自证（八轮，逐轮条数；全部手工 Edit + `cp` 还原 + sha256 与 `git diff --quiet` 双向确认）
+
+| 轮 | 变异 | 结果 | 红在哪条 / 结论 |
+|---|---|---|---|
+| M1 | `chat.py` 元素界 `100` → `80` | `1 failed, 5 passed` | `:207 assert 100 == 80`（带 `where 100 = _js_number('MAX_ID_CHARS')`）。**首跑只抓到汇总行**（grep 口径太窄），还原后另起一轮重跑才拿到理由行 ⇒ 表里这行是重跑那次 |
+| M2 | 列表界 `50` → `60` | `1 failed, 5 passed` | `:208 assert 50 == 60` ⇒ 续行里那枚界真被抓到了（老行匹配口径会漏） |
+| M3 | `model_name` 界 `100` → `90` | `1 failed, 5 passed` | `:209 assert {100} == {90}` ⇒ chat 那一头补上，`MODEL_NAME_MAX` 现在两头都被核对 |
+| M4 | 镜像侧漂移：`constants.js` 的 `MAX_ID_CHARS` → `101` | `1 failed, 5 passed` | `:207 assert 101 == 100` ⇒ **改镜像不改后端也红**（② 那句"两头钉"在这一格仍成立） |
+| M5 | 删掉标注里那枚元素界 | `1 failed, 5 passed` | 红在**形状守卫** `:157`：「`parent_ids` 该是标注里一枚界 + Field 一枚界，实抓 `[]` / `['50']`」⇒ 分半计数生效，不靠值相等 |
+| M6 | 两枚界对调（元素 `50` / 列表 `100`） | `1 failed, 5 passed` | `:207 assert 100 == 50` ⇒ 归属按**位置**（以深度 0 的 ` = Field(` 分半）；若写成多重集，这一轮会**全绿** —— 那才是这条判据真正的牙齿所在 |
+| M7 | 只改注释（对照组） | `6 passed` | 全绿 ⇒ 判据不咬注释，改说明文字不会被打红 |
+| M8 | 接线面：`constants.js` 的 `MAX_SELECTED_CHUNKS` → `51` | jsdom **`2 failed, 156 passed`**、`Test Files 1 failed / 13 passed (14)` | 红在「第 51 块被拒…」与「脏 localStorage 读回即丢…」两条 ⇒ `constants.js` 那枚**真是**被 composable 用的那一枚，不是摆设。这一轮只跑 jsdom 全量（焦点 pytest 同口径的红已由 M4 证） |
+
+- 还原校验（直测）：`schemas/chat.py` 2055 B / `3de94d59e501` / **44 CR + 44 LF**（纯 CRLF）/ `git diff --quiet` == HEAD；
+  `constants.js` 1435 B / `368e2bea23af`；`useChunkSelection.js` 3021 B / `68a2d110cd84`；
+  `useChunkSelection.test.js` 6600 B / `79501d7fd102`；`test_frontend_constants.py` 13099 B / `fac145744c36`；
+  `ChunkPickerModal.vue` 4658 B / `e2294deef5e2`（只被拿来试过锚点，**未进提交**）。
+
+### Ruling（这一轮定下的口径，附代价）
+
+1. **两枚界按位置归属，不按多重集**：以深度 0 处的 ` = Field(` 分半，每半必须**恰好一枚** `max_length`。
+   代价：声明一旦换写法（元素界挪进外层、或改 `conlist`），判据先红在形状守卫上，得人来判
+   "等价重构"还是"口径变更"，不许顺手改绿（与 ⑧ 第 6 条同一类账）。M5/M6 就是这条牙齿被实测过的两轮。
+2. **`ParentChunk.parent_id = Column(String(100))` 刻意不并进来**：那是**存储宽度**不是契约界，
+   合法的改法是加宽列而契约留 100 ⇒ 钉成相等会把一次正常迁移判红。理由写进了那条判据的 docstring（不只留在台账里）。
+3. **`session_id` 的 `max_length=100` 也刻意不并进来**：前端没有对应输入框（它来自 `GET /me`，用户不经手），
+   没有可镜像的面 ⇒ 镜像集的准入条件是"前端真有一处要用这个数字"，不是"后端有 max_length 就算"。
+4. **沿用旧名 `MAX_ID_CHARS` / `MAX_SELECTED_CHUNKS`，不强行改成 auth 那几枚的 `X_MAX` 后缀**：
+   代价是镜像集内部命名不齐；换来的是 diff 只碰四文件、消费者一处跟着挪，不制造"改名顺带扫全仓"的噪声
+   （[[feedback-incremental-reversible]]：先小路径打通，不做本轮范围外的整理）。
+5. **composable 里不留 re-export**：留着就是两处出口，正是 ② 要消灭的形态；测试改直接从 `constants.js` 取。
+
+### 挂账与边界（knowingly 没堵的三面）
+
+1. `frontend/src/api/documents.js:10` 的 `limit = 50`（候选池**每页条数**）与 `:15` 的 `if (limit !== 50)`
+   **没并进镜像集**：它与 `parent_ids` 的列表界是**两个不同事实**（查询分页 vs 请求负载上界），
+   数值相同纯属巧合，钉成相等会把其中一侧的正常改动判红。后端那一头有没有对应的命名权威值，本轮未查 ⇒ 要补得先做预检。
+2. `layout.css` 注释里两处写死的数字（`:330`「昵称上限 50 字」、`:373`「模型名上界 100 字」）**不进门禁**：
+   ② 的形状判据量的是**模板属性**（`maxlength="50"` 那类真会生效的副本），注释漂移不改变行为。
+   代价：注释可与契约漂移，属"文档陈旧"一类，不属"镜像漂移"一类。
+3. `_py_statement` 的两条早退守卫（"抓不到 `{field}:` 开头的声明"、"声明括号没闭合"）**没有各自的变异轮**：
+   它们服务的是字段改名/整体换写法那一类风险，本轮只实测了 M5（分半计数）与 M6（位置归属）。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行**（无实施代理、无评审代理），**终审是自评** ⇒ 交付时明示。
+- **压缩摘要把变异轮数记成「十轮（7 红 / 2 对照 / 1 jsdom）」，实测只有 8 轮（6 红 / 1 对照 / 1 jsdom）**：
+  `kb-118-rounds.txt` 全文只有 R7/R1/R2/R3/R4/R5/R8 七个标签，转录里 grep `R6|R9` 无匹配 ⇒ 不编数，按 8 轮记。
+- **日志标签与本表不是一套**（`R7-swapped-bounds` = 本表 M6、`R1` = M1）：多轮交错编辑后标签失去单调性，
+  本表按"变异内容"重排。教训同 [[project-crlf-mutation-hazards]]：一轮没落标签就进下一轮，事后只能靠 grep 复原。
+- **`grep -c $'\r$'` 这一轮反向假报**：对纯 CRLF 的 `chat.py` 报 `No matches found`（记忆里那条记的是"对纯 LF 假报全命中"）。
+  本轮只用 `tr -cd '\r' | wc -c` 数字节（44/44），一次都不信 grep。
+  **收口后补了一次机制直查**（受控样本 `printf 'a\r\nb\r\nc\n'` = 2 行 CRLF，`grep (GNU grep) 3.0`）：
+  `grep -c $'\r$'` 与 `grep -c "\r$"` 都回 **0**，对 `chat.py` 也回 0 ⇒ **这层 grep 按文本模式读文件，CR 在它眼里不存在**，
+  报 0 不是"没有 CR"而是"看不见 CR"；另一头 `grep -c "$" schemas/auth.py` 实测 **187**（= `wc -l`），
+  正是 ② 那轮"187/187 全命中"的来源（`$'\r'` 被引号处理吃掉后只剩 `$`）。两种方向都错 ⇒ 结论升级成
+  "**grep 不是量行尾的仪器**"，只认字节计数（已同步进 [[project-crlf-mutation-hazards]]）。
+- **一次 Edit 误吞了相邻判据的 `def` 行**（新测试插在 `test_every_avatar_choice_has_a_label` 的函数头上，
+  头像标签那条被并进了新测试）：当场发现、当场拆回；之后收集到 6 条、两条都在（聚焦 `6 passed`，全量 337 亦含二者）。
+  与 ② 那轮的"锚点唯一但形状错"同族，这次错在**锚点选了下一函数的头**。
+- **`Glob` 在中文路径下对 `frontend/src/components/*.vue` 返空**：改用 `ls` 直查（只影响取文件名，不影响任何数字）。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
 |---|---|---|
 | ① | `LlmIn` 两格长度界量在 strip 之前 | **已闭合**（`de8499d`） |
-| ② | `AVATARS` 两份 / `PASSWORD_MIN` 三份没有单一出口 | **已闭合**（`ee117fd`：七枚镜像收进 `frontend/src/constants.js`，`backend/tests/test_frontend_constants.py` 五条判据两头钉，另消灭三处模板里写死的数字） |
+| ② | `AVATARS` 两份 / `PASSWORD_MIN` 三份没有单一出口 | **已闭合**（`ee117fd`：七枚镜像收进 `frontend/src/constants.js`，`backend/tests/test_frontend_constants.py` 五条判据两头钉，另消灭三处模板里写死的数字）**+ 补账 `e1f4d45`**（② 收口时留的两格账：`schemas/chat.py` 的 `parent_ids` 两枚界 + `model_name` 一枚界进镜像集 ⇒ **九枚镜像 / 六条判据**，前端 `MAX_ID_CHARS`/`MAX_SELECTED_CHUNKS` 从 `useChunkSelection.js` 的本地常量收进同一出口；括号深度切片器 + 按位置归属两枚界，八轮变异自证，`6 passed` / 全量 337 / 离线 313 / jsdom 158 / build 换 hash `index-CKhscz7G.js`） |
 | ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | **已闭合**（`bcc0296` + 补正 `d89bb29`：预检证明迁移判据吃四键 ⇒ 不合并，迁移那枚改名 `MigrationConfig`；新增 `tests/test_test_doubles.py` 钉"模块顶层 `Fake*` 类名唯一"，六轮变异自证） |
 | ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | **已闭合**（`423a26a`：`ensure_foreign_keys` 按 **(表, 列)** 问 `KEY_COLUMN_USAGE`、不写 `ON DELETE`（RESTRICT）、排在 `ensure_indexes` 之后；预检在真库量到 `chat_history` 43 行孤儿（旧默认账号 id=1 已不存在），经使用者拍板新增 `reclaim_orphaned_owners` **先归户再 ALTER**；单测 +7、live +1（RESTRICT 行为面）+1 格（外键与孤儿的第二遍白卷），十二轮变异自证，真库落库后实测各一枚 FK / 0 孤儿 / 各一枚索引） |
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | **已闭合**（`e0ecfe1`：MySQL 无部分索引 ⇒ 守卫落在 `default_guard` 这枚 **STORED 生成列** + 只盖它一列的**唯一索引**上（NULL 不参与唯一比较 ⇒ 非默认随便多、默认每人至多一枚）；迁移四步各查各的：**数重复 → 降掉除 `MIN(id)` 之外 → 补列 → 建索引**，去重早于建索引是 scratch 表实测钉的（`ALTER` 在两枚默认上照样成功、`CREATE UNIQUE INDEX` 才回 1062，而 lifespan 不兜异常 ⇒ 反了就是后端起不来）；存在性用严格口径问 `GENERATION_EXPRESSION <> ''`（同名普通列的后果是静默的零约束）；顺带堵掉 ⑤ 自己会引入的谎——撞守卫键不再回 409「已在你的名单里」，改为补插成非默认。单测 +8（迁移 6、形状 2）、live +2（引擎本身拒第二枚默认 / 注入钩子把撞键窗口变成确定性可复现），八轮变异逐轮一条红；真库落库后直查列与索引形状、多默认人数 0、行数与默认数未变，另在 scratch 表上把"首次建守卫 + 去重 1 行"整条实测过，真开机一遍拿到 `kb.migrations` 的 summary 原文） |
