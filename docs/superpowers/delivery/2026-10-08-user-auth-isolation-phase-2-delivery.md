@@ -89,14 +89,14 @@
 
 ## 八、阶段三开工单（明确不在阶段二范围，每条给「要闭合得做什么」）
 
-1. `LlmIn.api_key`/`base_url` 的长度界量在 **strip 之前** ⇒ 在 `field_validator` 里 strip 完再量，并补一条「8 格里 4 格空白 + 4 字符 key」的判据。
+1. ~~`LlmIn.api_key`/`base_url` 的长度界量在 **strip 之前**~~ ⇒ **已闭合（2026-10-08，`de8499d`）**：两格的 `min_length/max_length` 从 `Field` 搬进 `field_validator`，strip 完再量并返回洗净值；补了三条判据（靠空白凑够 8 位的 key 现在 422 且不写库、正好 255/500 位的合法值不再因为多贴空格被拒）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 2. 前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）⇒ 加一枚 options 端点，或前端集中 constants 并用判据钉住与后端逐字相同。
 3. 两枚同名 `FakeConfig`（`tests/fakes.py:1` 与 `tests/test_migrations.py:182`）⇒ 合并前先确认迁移组判据不依赖局部那份的四键形状。
 4. `ChatHistory.user_id` / `documents.user_id` 的外键**只存在于新建库** ⇒ 做任何「注销账号」功能之前必须先补 FK 或显式级联删行，否则老库留孤儿。
 5. `user_models`「至多一枚默认」靠应用层两步（判空 + 清场）⇒ 并发插入可留两枚默认；要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）。
 6. 迁移的「缺 key 半态」分支（`llm_seeded: False`）从未在真 `.env` 上跑过 ⇒ 闭合需要一个能临时改 `.env` 的受控窗口。
 7. 422 的 `detail[*].input` 回显，前端只靠 `client.js:32` 那条 fallback 挡着 ⇒ 要闭合就在 fallback 里剥掉 `input` 键（代价：削弱「原文是唯一的排错线索」，属产品取舍）。
-8. 视口/交互的真浏览器回归是**一次性脚本**（探针全文附在台账下方留档，`puppeteer-core` 以 `--no-save` 残留在 `frontend/node_modules`）⇒ 没有常驻测试，下次改布局要重新造轮子。
+8. 视口/交互的真浏览器回归是**一次性脚本**（探针全文附在阶段二台账下方留档；`puppeteer-core` 等 25 枚 `--no-save` 装进来的包已于 2026-10-08 `npm prune` 清掉，复验 `154 passed` + build 绿、产物 hash 未变 ⇒ 它们不是真依赖，做这条要重新装）⇒ 没有常驻测试，下次改布局要重新造轮子。
 
 ## 九、已知验证缺口（如实记）
 
