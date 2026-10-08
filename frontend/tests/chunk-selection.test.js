@@ -118,6 +118,9 @@ describe('ChunkPickerModal', () => {
     const wrapper = mount(ChunkPickerModal, { props })
     // 一轮 microtask 不够：listChunks 的 promise 落地后还要等 Vue 调度器渲染那一轮
     await flushPromises()
+    // 类名在这里钉死：常驻浏览器判据量"窄屏退成一列"时挂在 .picker-results 上，
+    // 账号没有可选块时它改挂一枚同类名的临时节点——改名就是两边同时量不到东西
+    expect(wrapper.find('.picker-results').exists()).toBe(true)
     await wrapper.find('.chunk-card-body').trigger('click')
     expect(wrapper.emitted('toggle')).toEqual([[chunk]])
     expect(wrapper.find('.chunk-remove').exists()).toBe(false)
