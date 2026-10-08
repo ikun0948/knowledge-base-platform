@@ -417,6 +417,162 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
   两次查询都带了 `NOT EXISTS` / `NOT IN (SELECT id FROM users)`，孤儿数一直是 43。
   ⇒ 本节只写核对过的版本；教训与记忆里那条"子代理回报先直查再采信"同源：**自己的备忘同样要先直查**。
 
+## 第 ⑤ 条 — 「至多一枚默认」交给引擎：STORED 生成列 + 唯一索引，去重必须赶在建索引之前
+
+**BASE `3af77da` → 代码 `e0ecfe1`（5 files，+523/−10：生产码 `core/migrations.py` `core/database.py`、测试 `tests/test_migrations.py` `tests/test_live_database.py` `tests/test_user_models_db.py`）。**
+
+### 预检（真库 `mydb` 只读 + 本机 scratch 表实测）
+
+清单原文给的路是「要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）」，所以先量两条路在本机 MySQL 8.0.39 上成不成立，再选：
+
+- 唯一索引直接盖 `is_default` **建不出来**（那是全员共用一列，第二个用户立默认就撞）；部分索引 `WHERE is_default` 在 MySQL 上不存在。剩下唯一可行的声明式写法就是生成列。
+- 生成列 + 唯一索引这条路**实测成立**，四格都在 scratch 表上量过（不是推理）：① INSERT 第二枚默认 → 1062；② **UPDATE 把非默认那枚提升成默认**也 → 1062（这一格是关键——`set_default_user_model` 才是应用层天天在走的路，只测 INSERT 会整条漏掉）；③ 另一个人立默认**插得进**（guard 里带的是 `user_id`，不是常量）；④ 同一人再加几枚**非默认**照常（唯一索引不理 NULL）。
+- **顺序是量出来会炸的，不是猜的**：`ALTER TABLE … ADD COLUMN … STORED` 在**已经带着两枚默认**的数据上**照样成功**（两行都算出同一个 guard，此刻还没有索引管着它），紧接着的 `CREATE UNIQUE INDEX` 才在同一份数据上回 `1062 Duplicate entry`。⇒ 去重必须早于建索引。而 `run_migrations` 挂在 lifespan 且不兜异常（`main.py:59`）⇒ 反了的症状与 ④ 的 1452 同族：**不是"这条迁移没做成"，是整台后端起不来**。
+- **看着更"原子"的那条捷径被实测否决**：一条语句 `UPDATE user_models SET is_default = (name = :t) WHERE user_id = :u`。同一份数据跑两个方向——目标那枚 id 排在现任**之后**成功、排在**之前**回 1062。顺序依赖的约束不是约束。现行两步形状（先清别人、再立这个）保留。
+- 真库现状逐行抄：`user_models` **1 行、1 枚默认、0 个多默认用户**、无 `default_guard` 列（列清单 `id/user_id/name/is_default`）。⇒ 本条**不动任何用户数据**，因此没有像 ④ 那样打断使用者去拍板；去重那一步在真库上是交白卷的，它的正确性由 scratch 实测 + 离线判据两头供。
+- `information_schema.COLUMNS.GENERATION_EXPRESSION` 存的是**小写 + 反引号**那一份（`` (case when `is_default` then `user_id` else NULL end) ``）⇒ 存在性只能问 `<> ''`，逐字比串必然假红；全文那半改由常量与 ORM 声明同源钉。
+
+### RED → GREEN
+
+- 离线 RED（聚焦 `test_migrations.py` + `tests/test_user_models_db.py`）：**`9 failed / 26 passed`**。两类红因：
+  `AttributeError: module 'core.migrations' has no attribute 'ensure_single_default_guard'`（连带 `generated_column_exists`、`duplicate_default_count`）
+  与形状那两条「`default_guard` 必须是生成列」「唯一索引只盖一列」。
+- GREEN 分两段落地：
+  ① 迁移侧——`generated_column_exists`（严格口径）+ `add_generated_column` + `duplicate_default_count` + `clear_duplicate_defaults`
+  + `add_unique_index` + 入口 `ensure_single_default_guard`（三格返回值都可数）+ `run_migrations` 接线 + summary 加 `single_default_guard`
+  → `test_migrations.py` **30 passed**（24→30）。
+  ② ORM 侧——`default_guard = Column(Integer, Computed(SINGLE_DEFAULT_GUARD_EXPR, persisted=True), nullable=True)`、
+  `Index('uq_user_models_single_default', 'default_guard', unique=True)`，且 `core/database.py:12` **从 `core/migrations.py` 导入那枚表达式**
+  （方向是"声明吃迁移的常量"，无环；同源判据由此才有意义）→ `test_user_models_db.py` **5 passed**（3→5）。
+- live RED：**`2 failed / 22 deselected`**，两条各咬一面——
+  一条红在**前置闸门**（`真库上 default_guard 不是生成列`：闸门放在最前，是为了不把"压根没有约束"误报成"引擎不管"）；
+  一条红在 `AssertionError: 重试把默认位抢走了：[('p5-race-anchor', True), ('p5-race', True)]`。
+- 落库 + GREEN：真库就位后 live 文件 **24 passed**（22→24）。
+- **⑤ 自己会引入的一句谎，顺手堵掉**：`add_user_model` 原先把**所有** `IntegrityError` 都回 False，端点据此回 409「该模型已在你的名单里」。
+  守卫键一进来，"名单里根本没这个名字"也会撞键（另一个事务刚立了默认，而这里的 `is_first` 读的是旧快照）
+  ⇒ 那句话变成**没人能查下去的假话**，而且用户要的那枚也没进去。现在回滚后再查一次名字分流两件事：
+  真在名单里 ⇒ False；不在 ⇒ 补插成**非默认**（NULL 不参与唯一比较，这次不可能再撞守卫）⇒ True。
+  双击两次"添加"（两个不同名字）就能撞进这个窗口，所以它必须有自己的判据——见 live 侧的注入钩子。
+- 一处**夹具洞**在 GREEN 路上当场补掉：`FakeConn` 认去重语句时写的是 `head.startswith("UPDATE USER_MODELS")`，
+  而生产发的是 `` UPDATE `user_models` d JOIN … `` ——带反引号，**永远匹配不上**，这条判据会长期空跑。
+  改成 `head.split()[1].strip("`") == "USER_MODELS"`，理由写进夹具注释。
+
+### 变异自证（八轮，全部手工 Edit + `cp` 还原 + sha256 与符号计数双向确认）
+
+终态实测（也是每轮的还原基准）：`core/migrations.py` sha `861e10dde7ef` / 27454 字节（纯 LF 482 行），
+`core/database.py` sha `20bc51079d2b` / 39942 字节（纯 CRLF 817 行）。R1-R3/R7-R8 改迁移码，R4-R6 改 ORM 声明与 `add_user_model`。
+
+| 轮 | 变异 | 结果 | 红在哪条 |
+|---|---|---|---|
+| R1 | 去掉 `GENERATION_EXPRESSION <> ''`（同名**普通列**也算守卫已就位） | `1 failed / 29 passed` | `test_guard_exists_only_if_that_column_is_really_a_generated_one`。这一格不是修辞：宽松口径的后果是**静默的零约束**——那列由应用自己写，不写就整列 NULL，唯一索引正好不管 NULL，它安安静静管着一列空值，比没有索引更糟 |
+| R2 | 去重挪到 `CREATE UNIQUE INDEX` **之后** | `1 failed / 29 passed` | `test_duplicate_defaults_are_cleaned_before_the_unique_index_is_built`（钉的就是预检量出的 1062 开机面） |
+| R3 | DDL 去掉 `STORED` | `1 failed / 29 passed` | `test_single_default_guard_alters_the_column_before_indexing_it` |
+| R4 | ORM 去掉 `persisted=True` | `1 failed / 4 passed`（形状文件单跑） | `test_user_models_guard_column_is_a_stored_generated_one`——新库走 `create_all`，它与迁移那侧不同源就是分叉 |
+| R5 | 唯一索引多盖一列（`default_guard, user_id`） | `1 failed / 4 passed` | `test_user_models_guard_index_covers_only_the_generated_column`。多盖一列**照样建得出来**，管成了"(user_id, 默认位) 组合"⇒ 与 ②③ 那两条"盖住哪几列才是判据"同一口径 |
+| R6 | 删掉撞键后补插非默认的那半段 | `1 failed / 23 deselected` | `test_add_user_model_retries_as_non_default_when_the_guard_race_wins`——离线三枚 fake 不真建约束，这条路只有真 MySQL + 注入钩子能咬 |
+| R7 | 函数留着、`run_migrations` 里**不接线** | `1 failed / 29 passed` | `test_run_migrations_reports_the_guard_and_goes_quiet_on_reboot`（`NameError: name 'guard' is not defined`）。与 ④ 的 N6 不同（那轮咬 4 条）：⑤ 的接线只被**一条** run_migrations 级判据消费，如实记 |
+| R8 | `SINGLE_DEFAULT_GUARD_EXPR` 里 `user_id` 换成 `1`（全体共用一个 guard 值） | `1 failed / 34 passed`（聚焦 pair） | `test_default_identifier_is_the_one_the_spec_names`（逐字 pin 第三组常量）。**同轮 ORM 同源那条照常绿**——它比的是"两处是不是同一句话"，改常量则两处一起变，这正是单一出口要的效果，不是判据漏牙 |
+
+### live 侧
+
+- **落库方式**：脚本直调 `ensure_single_default_guard(conn)`（真库 `mydb`，`user_models` 只有 1 行 1 枚默认，`duplicates_cleared: 0`
+  ⇒ 无数据改动，反向 SQL 都不需要）。**这不是 lifespan 路径**，所以补了两头的证据：
+- 真库落库后**直查**（不是拿判据当证明）：列 = `('default_guard', 'int', 'STORED GENERATED', '(case when \`is_default\` then \`user_id\` else NULL end)')`；
+  索引 = `('uq_user_models_single_default', 'default_guard', 0)` **只盖一列**、`NON_UNIQUE=0`；多默认用户 `(0,)`；
+  行数与默认数 `(1, Decimal('1'))` 前后一致 ⇒ 去重没误伤。第二遍 `{column_added: False, duplicates_cleared: 0, index_added: False}`。
+- **去重那一格在真表上没被执行过**（真库本来就 0 重复），所以另在 **scratch 表**上把"首次建守卫"整条走了一遍并落盘：
+  初始 `[(1,1,'a',1),(2,1,'b',1),(3,1,'c',0),(4,2,'d',1)]`（同一人两枚默认）→
+  首次 `{'column_added': True, 'duplicates_cleared': 1, 'index_added': True}` →
+  去重后 `[(1,1,'a',1),(2,1,'b',0),(3,1,'c',0),(4,2,'d',1)]`：**留的是 `MIN(id)` 那枚、别人（user 2）那枚一行没动** →
+  第二遍全白卷 → 再插 `(1,'e',1)` 被 `1062 … uq_user_models_single_default` 拦下 →
+  `(5,'f',1)` 与 `(1,'g',0),(1,'h',0)` 照常插进 → `DROP TABLE`，残表 `[]`，全程未碰 `user_models`。
+- **真开机一遍**（本轮唯一的端到端证据，也是本台账第一次拿到 lifespan 的 summary 原文）：
+  起 `python -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-config <Temp>/p5logconf.json`
+  （④ 那轮"日志里没有 `迁移完成`"的根因这次查出来了：root 是 WARNING，而那句挂在 **`kb.migrations`**
+  这只 logger 上，`core/migrations.py:22`——按模块名 `core.migrations` 配等级是配不到的）。
+  `GET /api/health` 回 200（`document_count 4`、`vector_counts parent 4 / child 10` 与基线一致），日志：
+  `INFO kb.migrations: 迁移完成: {'columns_added': [], 'indexes_added': [], 'single_default_guard': {'column_added': False, 'duplicates_cleared': 0, 'index_added': False}, 'orphan_rows_reclaimed': [], 'foreign_keys_added': [], 'default_user_id': 30, 'documents_claimed': 0, 'chat_rows_claimed': 0, 'llm_seeded': False, 'model_seeded': False, 'vectors_stamped': 0}`
+  ⇒ 接线在真 lifespan 里跑到了、且第二遍不改任何东西。收口：`TaskStop` 掉那个 uvicorn，`netstat` 复确认 8000 无人 LISTEN。
+- **`llm_seeded: False` 这一格别读成 ⑥ 的进展**：`seed_default_llm` 有两条早退（`.env` 缺 key / 账号已有 key），
+  两条回的是**同一个值**，日志分不出来。这次开机走的是第二条（`default@local` 早就有 key），⑥ 关心的是第一条 ⇒ ⑥ 的挂账原样保留。
+- 新增 live 判据两条的口径要点：
+  ① `test_engine_itself_rejects_a_second_default_for_the_same_user`——第一条断言是**前置闸门**（列不是生成列就在这里红，
+  而不是把"压根没约束"误报成"引擎不管"）；1062 之外还要**认索引名**（只盯错误号会漏掉"被 `unique(user_id,name)` 拦下"这种张冠李戴）；
+  行数用**相对增长** `len(models) == len(before) + 1` 而不是绝对条数（`probe_user` 是 module 级共享账号，写死数字等于把判据绑在执行顺序上）；
+  `finally` 里连"那次该失败的 INSERT 万一没失败"留下的行一起删。
+  ② `test_add_user_model_retries_as_non_default_when_the_guard_race_wins`——`monkeypatch` 换掉 `db.get_session`，
+  `_StaleSnapshot` 按 **SQL 文本**（不是调用次数）只 spoof 「判空那一次」，让 `is_first` 读到旧快照，
+  于是撞守卫键变成**确定性可复现**而不是碰运气；并断言 `len(spoofed) == 1`——钩子没命中这条就是空跑。
+
+### 终态门禁实数（台账前复跑，逐条抄汇总行）
+
+- 后端全量 **`333 passed / 2 skipped / 2 deselected / 1 warning`**（46.78s）
+- 离线门 `-m "not live and not migration"` **`309 passed / 28 deselected / 1 warning`**（40.52s）
+- `-m live` **`24 passed / 2 skipped / 311 deselected / 1 warning`**（26.78s）
+- 聚焦 `tests/test_migrations.py` + `tests/test_user_models_db.py` **`35 passed`**（4.47s；逐文件收集数 30 + 5）
+- live 文件 `tests/test_live_database.py` **`24 passed`**（3.46s）
+- 对账：`323 + 6（迁移）+ 2（形状）+ 2（live）= 333`；离线 `301 + 8 = 309`，被 `not live` 挡掉的 `26 → 28` 正是新增两条 live；
+  既有判据一条没被打断（③④ 那两组的计数与口径原样）。
+- **前端未跑**：本轮 diff 只碰 `backend/` 五枚文件，前端一行未动 ⇒ `npm test` / `npm run build` 不重跑，
+  口径同 ①②③④，明示不省略。
+
+### 用户可见面
+
+- **界面行为不变**：名单、下拉、"设为默认"的可见结果都和改造前一样。变的是**再也不会出现两个默认**——
+  之前"并发插入留下两枚默认"是读侧按 id 升序取第一枚来兜的，用户看到的是"我设的默认偶尔不算数"，且没有任何线索指向原因；
+  现在第二次写会被引擎拒掉，`set_default_user_model` 那两条语句的窗口里输的一方**要么成功要么 500，不会留下脏数据**。
+- **开机多两条查询**：一次 `COUNT(*) AS dupes`、一次 `information_schema.COLUMNS` 的生成列问话；
+  零重复时那句 UPDATE 不发，列与索引都在位时两条 DDL 也不发（幂等由离线判据 + 真开机两头钉）。
+- **`user_models` 多了一枚没人读的列** `default_guard`：它是约束的载体，不是数据。ORM 里它 `nullable=True`、
+  应用侧一次都不写它——写它反而会被 MySQL 拒（生成列不可直接赋值）。这一格在 docstring 里解释了"为什么存在"。
+
+### Ruling
+
+1. **用生成列 + 唯一索引，不用应用级锁（`GET_LOCK` / 串行化事务）** —— 不变量落在引擎上才叫约束：
+   锁要求**每一个**写入方都自觉拿同一把，而本表的写入方已有三处（`add_user_model`、`set_default_user_model`、迁移的 `seed_default_llm`），
+   将来任何脚本化写入都是第四处 —— 代价：表上多一枚"没人读的列"，读代码的人必须先理解 NULL 不参与唯一比较这件事（已写进 ORM docstring），
+   且换 MySQL 版本 / 换存储引擎时 `STORED` 这条路要重跑整个 live 组。
+2. **严格口径（"是不是真的生成列"）只用在列那一步，索引那一步仍按名字问 `index_exists`** ——
+   两处补救手段不同：列那侧是可加的 `ALTER ADD COLUMN`，跳过才是错的；索引那侧若真出现"同名但是普通索引"，
+   正确修法是 `DROP INDEX`，而**启动期迁移不问自取地删东西**是比"约束没建上"更糟的先例 ——
+   代价：万一出现同名普通索引，守卫会静默不生效（本机不存在：`uq_` 前缀是本仓起的，`SHOW INDEX` 实测无冲突），此格挂账。
+3. **去重留 `MIN(id)` 那枚**，而不是"最近写入的那枚" —— 判据反了的话同一行每次开机都被改写，
+   而"谁当默认"要稳定可复现，用户第二次打开设置页看到的才是同一个模型 ——
+   代价：极端情况下用户"刚设的默认"在重启后被降回非默认（本机不可能：真库 `duplicates_cleared = 0`，从未有重复可清）。
+4. **撞守卫键后补插成非默认，而不是回 409** —— `add_user_model` 回 False 的口径是"名单里已经有了"，
+   名单里没有就必须让他那枚进去；把它挡在门外是 ⑤ 自己造出来的谎 ——
+   代价：重试里那层嵌套 `except IntegrityError`（同一名字被别的请求抢先加上，这次才是真的"已经有了"）
+   只有 3 行、且**没有专属判据**（要确定性地复现它得再 spoof 一层），挂账。
+5. **不把 `set_default_user_model` 合成一条 `SET is_default = (name = :t)`** —— 实测顺序依赖（目标 id 在现任之前回 1062），
+   "看着原子"的写法把不变量换成了一个更难复现的 bug —— 代价：并发输掉的一方仍以 1213（死锁）或 1062 冒成 500，
+   但**不变量仍然成立**（引擎在位），这条 500 面没有判据覆盖，挂账。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行**（无 implementer/reviewer 代理），**终审是自评** —— 交付时必须明示这一条。
+- **验证脚本自己写错一步，被引擎纠正**：scratch 表第 5 步想证"别人的默认插得进"，却复用了 `user 2`——
+  它在初始数据里**已经有一枚默认**，于是被守卫以 `1062` 拦下。错在脚本不在代码；换成全新的人（`user 5`）后通过。
+  教训：验证"边界外的人没事"要挑**没有默认的那个人**，别复用已有数据的 id。
+  第一次运行的失败只打到 stderr（脚本 stdout 是重定向到文件的），所以 `p5scratch.txt` 里那一格是**缺的**而不是错的——
+  这类"输出文件少一行"要当信号读，不能当"没测"糊过去。
+- **上一轮"日志没有 `迁移完成`"的根因这次才查对**：①②③④ 记的是"root logger 是 WARNING，`logger.info` 本来就不出"，
+  那半句没错，但按 `core.migrations` 配 INFO 也拿不到——真名是 `kb.migrations`（`core/migrations.py:22` 用的是 `logging.getLogger("kb.migrations")`）。
+  第一次开机白起了一次（`p5boot.log` 6 行、没有 summary）。⇒ 记这一条是为了下次**先 grep logger 的注册名**再配日志。
+- **一次 Edit 打错了目标文件**（想改 `p5scratch.py` 却指到输出 `p5scratch.txt`），因 `old_string` 无命中被拒，未产生任何状态。
+- **一次 Edit 误删了既有判据的 docstring**：给 `tests/test_live_database.py` 插入第二条 live 判据时，
+  `old_string` 跨过 `test_empty_profile_update_touches_nothing` 的 docstring 把它带走了；工具输出里当场看到，下一笔 Edit 补回。
+  确认方式与 ④ 相同：只看 `git diff` 里被删的那几行（`grep '^-'`），不拿 `--stat` 当证据。
+- **量行尾的一次脚本列写错**：`b.count(bytes(10))` 打的是十个 NUL 字节，`total_nl` 那列恒为 0、无意义；
+  真正要看的是 `crlf` 与 `lf_only` 两列（`b.count(b'\r\n')` 与其差），实测五枚文件形状与基线一致
+  （`database.py` 817 纯 CRLF / `migrations.py` 482 纯 LF / `test_migrations.py` 747 纯 LF / `test_live_database.py` 839 纯 CRLF / `test_user_models_db.py` 87 纯 LF）。
+- 一次 `Edit` 因 `old_string` 与当前 docstring 用词不符被拒（记成「补上的」、原文是「建了的」），重读原文后重发成功，未产生半截状态。
+- **两处"没牙"如实记下，不粉饰成已闭合**：① `ensure_single_default_guard` 必须早于 `seed_default_llm` 那句注释**没有判据**
+  （反向不会开机炸，只是 seed 那次插入不受引擎把关）；② 上面 Ruling 2/4/5 各自点名的三格（同名普通索引、重试嵌套分支、`set_default` 输家的 500）都没有判据。
+- 变异八轮**逐轮只红目标那一条**，且每轮还原后重新打 sha + `grep -c` 被替换的那一句回到原次数；
+  与 ④ 的 N6 相比 R7 只咬 1 条（④ 咬 4 条），这个差别记在上表里而不是略过。
+- 本轮**起了两次服务**（第一次为拿不到 summary 而白起），两次都由 `TaskStop` 收口，`netstat` 复确认 8000 无人 LISTEN；
+  全程只有一个 pytest 进程、没有并发跑 `-m migration`（那组是 Chroma 搬家校验，与本条无关，未跑）。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -425,7 +581,7 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 | ② | `AVATARS` 两份 / `PASSWORD_MIN` 三份没有单一出口 | **已闭合**（`ee117fd`：七枚镜像收进 `frontend/src/constants.js`，`backend/tests/test_frontend_constants.py` 五条判据两头钉，另消灭三处模板里写死的数字） |
 | ③ | 两枚同名 `FakeConfig`（`tests/fakes.py:1`、`tests/test_migrations.py:182`） | **已闭合**（`bcc0296` + 补正 `d89bb29`：预检证明迁移判据吃四键 ⇒ 不合并，迁移那枚改名 `MigrationConfig`；新增 `tests/test_test_doubles.py` 钉"模块顶层 `Fake*` 类名唯一"，六轮变异自证） |
 | ④ | `ChatHistory.user_id` / `documents.user_id` 的 FK 只在新建库存在 | **已闭合**（`423a26a`：`ensure_foreign_keys` 按 **(表, 列)** 问 `KEY_COLUMN_USAGE`、不写 `ON DELETE`（RESTRICT）、排在 `ensure_indexes` 之后；预检在真库量到 `chat_history` 43 行孤儿（旧默认账号 id=1 已不存在），经使用者拍板新增 `reclaim_orphaned_owners` **先归户再 ALTER**；单测 +7、live +1（RESTRICT 行为面）+1 格（外键与孤儿的第二遍白卷），十二轮变异自证，真库落库后实测各一枚 FK / 0 孤儿 / 各一枚索引） |
-| ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | 待开工 |
+| ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | **已闭合**（`e0ecfe1`：MySQL 无部分索引 ⇒ 守卫落在 `default_guard` 这枚 **STORED 生成列** + 只盖它一列的**唯一索引**上（NULL 不参与唯一比较 ⇒ 非默认随便多、默认每人至多一枚）；迁移四步各查各的：**数重复 → 降掉除 `MIN(id)` 之外 → 补列 → 建索引**，去重早于建索引是 scratch 表实测钉的（`ALTER` 在两枚默认上照样成功、`CREATE UNIQUE INDEX` 才回 1062，而 lifespan 不兜异常 ⇒ 反了就是后端起不来）；存在性用严格口径问 `GENERATION_EXPRESSION <> ''`（同名普通列的后果是静默的零约束）；顺带堵掉 ⑤ 自己会引入的谎——撞守卫键不再回 409「已在你的名单里」，改为补插成非默认。单测 +8（迁移 6、形状 2）、live +2（引擎本身拒第二枚默认 / 注入钩子把撞键窗口变成确定性可复现），八轮变异逐轮一条红；真库落库后直查列与索引形状、多默认人数 0、行数与默认数未变，另在 scratch 表上把"首次建守卫 + 去重 1 行"整条实测过，真开机一遍拿到 `kb.migrations` 的 summary 原文） |
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | 待开工（需要一个能临时改 `.env` 的受控窗口） |
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | 待开工 |
 | ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | 待开工（`puppeteer-core` 本轮已 `npm prune` 清掉，做它要重装） |

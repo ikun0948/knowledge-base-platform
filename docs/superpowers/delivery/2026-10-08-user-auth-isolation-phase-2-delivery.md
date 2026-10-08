@@ -94,8 +94,8 @@
 2. ~~前后端枚举清单没有单一出口：`AVATARS` 两份（`api/auth.py:27` / `SettingsModal.vue:19`）、`PASSWORD_MIN` 三份（`schemas/auth.py:13` / `AuthPanel.vue:14` / `SettingsModal.vue:25`）~~ ⇒ **已闭合（2026-10-08，`ee117fd`）**：走的是"前端集中 constants + 判据钉住"那条路（否决 options 端点——它要进认证白名单、要给同步表单加异步态、首屏仍需一份兜底副本，那正是本条要消灭的东西）。七枚镜像字面量收进 `frontend/src/constants.js`（第 7 枚是此前只以 `maxlength="100"` 形态存在的模型名上界），新增 `backend/tests/test_frontend_constants.py` 直读两端源码钉四件事：只许一枚模块声明、镜像值与后端权威值逐字相同、头像与标签同枚覆盖、模板属性里不许写死数字（顺带消灭 `AuthPanel.vue:119`「至少 6 位」与两处 `maxlength`）。判据放 pytest 而非 vitest：改后端不改镜像、或改镜像不改后端，都在**同一道后端门**上红。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 3. ~~两枚同名 `FakeConfig`（`tests/fakes.py:1` 与 `tests/test_migrations.py:182`）~~ ⇒ **已闭合（2026-10-08，`bcc0296` + 补正 `d89bb29`）**：本条要求的前置检查实测**答案是"依赖成立"**——`core/migrations.py:252-256` 要读四格（默认口令 + `.env` 三键），而 `fakes.py` 那枚只有 `CHROMA_PERSIST_DIR`，所以**合并这条路被实测否掉**（合了要么缺一格，要么把阶段二 Task 7 刚删掉的"写了没人读"三键塞回交付面）。缺陷随之收窄成"重名"这一件事：迁移那枚改名 `MigrationConfig`，并新增 `backend/tests/test_test_doubles.py` 用 AST 钉住**模块顶层 `Fake*` 类名唯一**（口径边界如实记：函数体内的局部同名不在射程内——那种合法同名实测存在，是 `test_llm_factory.py` 35/50/66 行的三枚 `Recorder`，作用域互不重叠；判据的扫描面因此从 `ast.walk` 收窄为 `tree.body`，正反两轮实测确认该抓的一条没漏、不该抓的一条没误伤）。台账见 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
 4. ~~`ChatHistory.user_id` / `documents.user_id` 的外键**只存在于新建库** ⇒ 做任何「注销账号」功能之前必须先补 FK 或显式级联删行，否则老库留孤儿~~ ⇒ **已闭合（2026-10-08，`423a26a`）**：补了 FK，且**刻意不做级联**。三条设计都钉成了判据——① `ensure_foreign_keys` 按 **(表, 列)** 问 `information_schema.KEY_COLUMN_USAGE`，不按约束名问（`create_all` 建的那枚叫 `documents_ibfk_1`，按名字查会在每个新库上再叠一枚重复外键，InnoDB 对不同名不拦且安静收下）；② 排在 `ensure_indexes` **之后**（列上没有可用索引时 InnoDB 会自建一枚、名字就是约束名，我们那枚再补一次 ⇒ 同列两枚，没人报错只多付写放大）；③ **不写 `ON DELETE`**（MySQL 默认 RESTRICT）——级联删得掉 MySQL 行、删不掉 Chroma 里的向量，"行没了、向量还能被召回"正是本仓一路在防的脏数据面；要删就走应用层两头删。原条目给的"或显式级联删行"这条路**被否决并写进判据**（`test_ensure_foreign_keys_never_cascades_at_the_mysql_level`）。「注销账号」从此被 MySQL 拦在 errno 1451 上，孤儿行产生不了。**预检量到计划外的一面并改了真数据**：`chat_history` 43 行的 `user_id` 全是 **1**，而 `users` 只剩 30（`default@local`）与 338——默认账号被重铸过、id 从 1 漂到 30，`backfill_chat_history` 只捡 `IS NULL` 的行，这 43 行从此读不到也删不掉；带着孤儿去 `ADD CONSTRAINT`，MySQL 回 **errno 1452**，而 `run_migrations` 挂在 lifespan 且不兜异常 ⇒ 症状是"整台后端起不来"。经使用者拍板走「先归户再建 FK」：新增 `reclaim_orphaned_owners`（先 `COUNT` 再 `UPDATE`，不拿 rowcount 当证据——本仓方言硬带 `CLIENT_FOUND_ROWS`，同值重写照样回 1），排在 `ensure_foreign_keys` 之前。**真实数据改动：43 行 `chat_history.user_id` 由 1 改为 30**（回滚 SQL 记在台账）。落库后实测：两张表各**一枚**外键、**0** 孤儿、`user_id` 列上各**只一枚**索引。判据：单测 +7、live +1（RESTRICT 行为面：探针账号自己造自己删，`default@local` 一次都不出现在 DELETE 里）+ live 那格「第二遍零 ALTER」扩到外键与孤儿（纪律：**先读 `information_schema` 确认 lifespan 已建好，才敢调那两步验幂等**——测试不许在共享库上发 ALTER/UPDATE）。十二轮变异自证、逐轮条数与还原 sha 见台账 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
-5. `user_models`「至多一枚默认」靠应用层两步（判空 + 清场）⇒ 并发插入可留两枚默认；要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）。
-6. 迁移的「缺 key 半态」分支（`llm_seeded: False`）从未在真 `.env` 上跑过 ⇒ 闭合需要一个能临时改 `.env` 的受控窗口。
+5. ~~`user_models`「至多一枚默认」靠应用层两步（判空 + 清场）⇒ 并发插入可留两枚默认；要堵得加唯一约束（MySQL 无部分索引，需生成列或应用级锁）~~ ⇒ **已闭合（2026-10-08，`e0ecfe1`）**：堵在**引擎**上，不选应用级锁。MySQL 没有部分索引，所以守卫落在一枚生成列上——`default_guard INT GENERATED ALWAYS AS (CASE WHEN is_default THEN user_id ELSE NULL END) STORED` + `CREATE UNIQUE INDEX uq_user_models_single_default ON user_models (default_guard)`；唯一索引**不管 NULL**，于是"同一人任意多枚非默认"与"每人至多一枚默认"同时成立。新库由 `create_all` 按 ORM 声明建（`Computed(..., persisted=True)`），已部署库由 `ensure_single_default_guard` 补，四步各查各的、重跑交白卷：**数重复 → 降掉除 `MIN(id)` 之外 → 补生成列 → 建唯一索引**。两处顺序是 scratch 表实测钉出来的，反了不是报错而是**整台后端起不来**（`run_migrations` 挂在 lifespan 且不兜异常，`main.py:59`）：① `ALTER … ADD COLUMN … STORED` 在**已经带着两枚默认**的数据上照样成功（两行都算出同一个 guard，此刻还没有索引管它），紧接着的 `CREATE UNIQUE INDEX` 才回 1062 ⇒ 去重必须早于建索引；② 列必须早于索引。存在性用**严格口径**问（`information_schema.COLUMNS` 带 `GENERATION_EXPRESSION <> ''`）——同名**普通列**被当成"守卫已建好"的后果是**静默的零约束**（那列由应用自己写，不写就整列 NULL，索引正好不管 NULL），比没有索引更糟；表达式全文不能逐字比（MySQL 存成小写 + 反引号），那半由 `SINGLE_DEFAULT_GUARD_EXPR` 与 ORM 声明**同源**钉住（`core/database.py` 从 `core/migrations.py` 导入）。清单给的"应用级锁"这条路**被否决**：本表写入方已有三处（`add_user_model` / `set_default_user_model` / 迁移的 `seed_default_llm`），锁要求每个写入方都自觉拿同一把。另外看着更"原子"的那条捷径 `SET is_default = (name = :t)` **实测否决**——同一份数据，目标 id 排在现任之前回 1062、之后成功，顺序依赖的约束不是约束。**顺带堵掉 ⑤ 自己会引入的谎**：`add_user_model` 原先把所有 `IntegrityError` 都回 False，端点据此回 409「该模型已在你的名单里」；守卫键一进来，"名单里根本没这个名字"也会撞键（另一事务刚立默认、这里 `is_first` 读旧快照），那句话就变成没人能查下去的假话——现在回滚后再查一次名字分流：真在名单里 ⇒ 409，不在 ⇒ 补插成非默认 ⇒ 收下。**真库 `mydb` 已落库**（`default_guard` 实测 `STORED GENERATED`、唯一索引只盖它一列、多默认用户 0、行数与默认数未变，`duplicates_cleared: 0` ⇒ **本条不改任何用户数据**，没有 ④ 那样的归户）。判据：单测 +8（迁移 6 + 形状 2）、live +2（一条问**引擎本身**收不收第二枚默认——INSERT 与 UPDATE 提升都回 1062 且消息里带着索引名；一条用 `_StaleSnapshot` 按 SQL 文本只 spoof 判空那次查询，把撞守卫键的窗口变成确定性可复现，并断言钩子恰好命中一次否则算空跑）。八轮变异逐轮一条红，真开机一遍拿到 `kb.migrations` 的 summary 原文（`single_default_guard` 三格全白卷）；逐轮条数、五条 Ruling 与挂账（索引侧的严格口径、重试嵌套分支、`set_default` 输家的 500）见台账 `.superpowers/sdd/2026-10-08-user-auth-isolation-phase-3/progress.md`。
+6. 迁移的「缺 key 半态」分支（`llm_seeded: False`）从未在真 `.env` 上跑过 ⇒ 闭合需要一个能临时改 `.env` 的受控窗口。**⑤ 那轮真开机（2026-10-08）拿到的 `llm_seeded: False` 不算这条的进展**：`seed_default_llm` 有两条早退（`.env` 缺 key / 默认账号已有 key），两条回的是**同一个值**，日志与返回值都分不出来——那次开机走的是第二条。所以这条要闭合，先得让这两格**可分辨**（各回一个键），再谈受控窗口。
 7. 422 的 `detail[*].input` 回显，前端只靠 `client.js:32` 那条 fallback 挡着 ⇒ 要闭合就在 fallback 里剥掉 `input` 键（代价：削弱「原文是唯一的排错线索」，属产品取舍）。
 8. 视口/交互的真浏览器回归是**一次性脚本**（探针全文附在阶段二台账下方留档；`puppeteer-core` 等 25 枚 `--no-save` 装进来的包已于 2026-10-08 `npm prune` 清掉，复验 `154 passed` + build 绿、产物 hash 未变 ⇒ 它们不是真依赖，做这条要重新装）⇒ 没有常驻测试，下次改布局要重新造轮子。
 
@@ -120,23 +120,26 @@
 ```bash
 # 后端（同一时刻只跑一个 pytest 进程；不要起第二个 uvicorn，Chroma 是单实例锁）
 cd backend
-python -m pytest -q                                    # 期望 323 passed / 2 skipped / 2 deselected
-python -m pytest -q -m "not live and not migration"     # 期望 301 passed / 26 deselected
+python -m pytest -q                                    # 期望 333 passed / 2 skipped / 2 deselected
+python -m pytest -q -m "not live and not migration"     # 期望 309 passed / 28 deselected
 
 # 前端
 cd frontend
 npm test                                               # 期望 Test Files 14 / Tests 154
 npm run build                                          # 期望 exit 0
 
-# live 组需要真服务：先起 uvicorn（只起一份），再
-python -m pytest -q tests/test_live_database.py         # 期望 22 passed（阶段三 ④ 实跑数）
-python -m pytest -q -m live                            # 整组含流式测，阶段二收口那轮实跑 23 passed 且无 skip；
-                                                       # ④ 之后新增一条 RESTRICT 判据，整组未重跑，不填没量过的数
+# live 组需要真库（MySQL），流式那两条还需要真服务：先起 uvicorn（只起一份），再
+python -m pytest -q tests/test_live_database.py         # 期望 24 passed（阶段三 ⑤ 实跑数）
+python -m pytest -q -m live                            # 本轮实跑 24 passed / 2 skipped / 311 deselected；
+                                                       # 那 2 条 skip 是 `test_live_stream.py` 的流式判据——
+                                                       # 跑这一组时 :8000 上没有服务，按"没服务就 skip"的既有
+                                                       # 惯例跳过而不是假绿；本轮起过两次服务只为拿迁移 summary，
+                                                       # 没有重跑流式组，不填没量过的数
 ```
 
-上两行后端期望是**阶段三 ④（`423a26a`）**之后的实数；阶段二收口那轮跑在 `25bf2e2`，同两条命令的实数是
+上两行后端期望是**阶段三 ⑤（`e0ecfe1`）**之后的实数；阶段二收口那轮跑在 `25bf2e2`，同两条命令的实数是
 `306 passed / 2 skipped / 2 deselected` 与 `285 passed / 25 deselected`（见第二节表格，历史值不追改）。
-增项逐条记在阶段三台账里：① +3、② +5、③ +1、④ +7 单测 +1 live。
+增项逐条记在阶段三台账里：① +3、② +5、③ +1、④ +7 单测 +1 live、⑤ +8 单测（迁移 6 + 形状 2）+2 live。
 
 **验收隔离数据时不要改库**：造「未配 key」「名单为空」两档只能走设置端点（清 `api_key` / 逐条删模型），改库会同时破坏 Task 3 的补戳证据与库内基线（活文档 4 / 父块 4 / 子块 10、`chat_history` 43 行）。探针账号一律挂自己的 `probe_user`，用完即删。
 
