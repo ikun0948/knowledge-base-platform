@@ -108,6 +108,15 @@ class PasswordIn(BaseModel):
     new_password: str = Field(min_length=PASSWORD_MIN, max_length=64)
 
 
+class DeactivateIn(BaseModel):
+    """注销账号的口令确认。界面上还要手打一遍确认词，那一格属于交互，不进契约。
+
+    `1~64` 与 `PasswordIn.old_password` 逐字相同：这是传输层的宽松门（空串那一格必须在
+    算 PBKDF2 之前拦住），真正的强度在 `verify_password`。别在这里发明第三种宽度。
+    """
+    old_password: str = Field(min_length=1, max_length=64)
+
+
 class LlmIn(BaseModel):
     # 两格都不写 min_length/max_length：那两个数在 pydantic 里量的是**贴进来的原文**，
     # 而两侧的空白不是 key 的一部分。写在 Field 上的后果是双向的——

@@ -10,11 +10,12 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 
+from core.migrations import DEFAULT_IDENTIFIER
 from core.security import (ALGORITHM, PBKDF2_ITERATIONS, hash_password, hash_token,
                            new_token, verify_password)
-from deps import bearer_token, get_config, get_current_user, get_db
-from schemas.auth import (AuthOut, LlmIn, LoginIn, MeOut, MODEL_NOT_IN_LIST, ModelIn,
-                          ModelsOut, PasswordIn, ProfileIn, RegisterIn, UserOut,
+from deps import bearer_token, get_config, get_current_user, get_db, get_vector_store
+from schemas.auth import (AuthOut, DeactivateIn, LlmIn, LoginIn, MeOut, MODEL_NOT_IN_LIST,
+                          ModelIn, ModelsOut, PasswordIn, ProfileIn, RegisterIn, UserOut,
                           default_model_of, mask_api_key)
 
 router = APIRouter(prefix="/api/auth")
@@ -22,6 +23,8 @@ logger = logging.getLogger("kb.api.auth")
 
 LOGIN_FAILED = "账号或密码不正确"
 ACCOUNT_TAKEN = "该账号已注册"
+# 过了令牌门之后那一句"你证明不了是你"：改密码与注销说的是同一件事，写两遍迟早分叉
+PASSWORD_WRONG = "原密码不正确"
 
 # 预设头像（决策 5：不做图片上传，项目里没有文件存储层）。'auto' = 昵称首字母。
 AVATARS = ("auto", "😀", "🤖", "🦊", "🐼", "🚀")
@@ -127,6 +130,31 @@ def logout(request: Request, db=Depends(get_db), user=Depends(get_current_user))
     return None
 
 
+@router.post("/deactivate", status_code=204)
+def deactivate(payload: DeactivateIn, db=Depends(get_db), user=Depends(get_current_user),
+               vector_store=Depends(get_vector_store)):
+    """注销账号：硬删，MySQL 与 Chroma 两头一起抹，不可恢复。
+
+    三道门的排序有讲究。令牌门由 `get_current_user` 挡在前面；**口令门排在默认账号门之前**——
+    口令错的时候该说的是"你证明不了是你"，回"这个账号删不掉"等于替对方确认了口令是对的。
+    默认账号（`migrations.DEFAULT_IDENTIFIER`，与铸号那一步同源）不放行：`ensure_default_user`
+    下次开机按 identifier 重铸一枚**新 id**，而演示数据全在它名下，删它的表象是"应用自己重置了"。
+
+    两头删的先后：先在一个事务里删净行（`delete_user_cascade` 交出各表计数并写日志），
+    **提交之后**再按主人戳清扫向量。反过来一旦 MySQL 回滚，就留下"账号还活着、向量已经没了"
+    这种界面正常而召回池空了的状态。清扫本身尽力而为（`VectorStore.delete_by_user_id` 内部
+    try/except + 记日志）：行没了就是没了，这时把 204 报成 500 是谎，而残留的向量不可达
+    （读侧一律按 user_id 收窄），是占盘的垃圾不是泄露。
+    """
+    if not verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(status_code=401, detail=PASSWORD_WRONG)
+    if user.identifier == DEFAULT_IDENTIFIER:
+        raise HTTPException(status_code=409, detail="默认账号不能注销")
+    db.delete_user_cascade(user.id)
+    vector_store.delete_by_user_id(user.id)
+    return None
+
+
 @router.get("/me", response_model=MeOut)
 def me(db=Depends(get_db), user=Depends(get_current_user)):
     return MeOut(user=_user_out(db, user))
@@ -149,7 +177,7 @@ def update_me(payload: ProfileIn, db=Depends(get_db), user=Depends(get_current_u
 def update_password(payload: PasswordIn, db=Depends(get_db), user=Depends(get_current_user)):
     # 已经过 get_current_user 的门，这里回"原密码不正确"不泄露账号存在性，只防"捡到一枚还没过期的令牌"的人改密码
     if not verify_password(payload.old_password, user.password_hash):
-        raise HTTPException(status_code=401, detail="原密码不正确")
+        raise HTTPException(status_code=401, detail=PASSWORD_WRONG)
     db.update_user_password(user.id, hash_password(payload.new_password))
     return None
 

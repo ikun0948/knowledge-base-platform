@@ -49,6 +49,7 @@ class FakeVectorStore:
         self.counts = counts or {"parent": 2, "child": 7}
         self.deleted = []
         self.deleted_by_doc = []
+        self.deleted_by_user = []
 
     def collection_counts(self):
         return dict(self.counts)
@@ -58,6 +59,14 @@ class FakeVectorStore:
 
     def delete_by_document_id(self, document_id):
         self.deleted_by_doc.append(document_id)
+
+    def delete_by_user_id(self, user_id):
+        """注销账号的清扫入口替身：只记"被叫了几次、带的是哪枚 id"。
+
+        `where={"user_id": str(uid)}` 那格的真假由 `test_vector_store.py` 用 StubCollection 钉，
+        这里重复钉一遍就是两处判据一起改的开端。
+        """
+        self.deleted_by_user.append(user_id)
 
     def add_documents(self, parent_docs, child_docs, document_id, *, user_id=None):
         # user_id 给默认值 None 是为同时服务新旧两组判据：test_api_documents.py 那 20 条不传，

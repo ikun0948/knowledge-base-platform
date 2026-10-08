@@ -66,6 +66,38 @@ def test_delete_by_document_id_is_best_effort_and_never_raises(store, caplog):
     assert "按 document_id 清扫父集合失败" in caplog.text
 
 
+def test_delete_by_user_id_sweeps_both_collections_with_the_owner_stamp(store):
+    """注销账号找不回 `document_id`：`users` 那一行已经删了，"他名下有哪几篇文档"从此无从问起。
+    还剩下的钥匙只有 `add_documents` 盖上的主人戳，所以这里必须按 `user_id` 整片扫。
+
+    `str(user_id)` 与写入侧逐字同形不是洁癖：Chroma 的 where 是标量相等、不做隐式转换，
+    传裸 int 不报错，只是**永远匹配不上**——表征是"注销成功但向量还在占盘"，没人会去查。
+    """
+    store.delete_by_user_id(42)
+    assert store.parent_vectorstore.wheres == [{"user_id": "42"}]
+    assert store.child_vectorstore.wheres == [{"user_id": "42"}]
+    assert (store.parent_vectorstore.calls, store.child_vectorstore.calls) == (1, 1)
+
+
+def test_delete_by_user_id_is_best_effort_and_never_raises(store, caplog):
+    """行已经删干净了，这个账号没法"再注销一次"：这里外抛只会把 204 变成一条谎报的 500。
+
+    父集合炸了也不许截断子集合那一枪（与 `delete_by_document_id` 同一条规矩）——两个集合
+    各自独立，漏扫一半比整片没扫更难查。
+    """
+
+    class DownCollection(StubCollection):
+        def delete(self, ids=None, **kwargs):
+            self.calls += 1
+            raise RuntimeError("chroma 不可用")
+
+    store.parent_vectorstore = DownCollection()
+    with caplog.at_level(logging.ERROR):
+        store.delete_by_user_id(7)
+    assert store.child_vectorstore.calls == 1
+    assert "按 user_id 清扫父集合失败" in caplog.text
+
+
 def test_add_documents_stamps_the_owner_as_a_string(store):
     """`doc.metadata['user_id'] = str(user_id)` 的本体判据（Task 4 唯一没被任何判据读到的生产语句）。
 

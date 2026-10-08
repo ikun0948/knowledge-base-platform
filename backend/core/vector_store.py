@@ -53,6 +53,25 @@ class VectorStore:
         except Exception:
             logger.exception("按 document_id 清扫子集合失败: %s", document_id)
 
+    def delete_by_user_id(self, user_id):
+        """注销账号的向量侧：按主人戳整片清扫两个集合，尽力而为、不外抛。
+
+        为什么只能按 `user_id`：`users` 那一行是这次操作自己删掉的，之后再想知道"他名下有哪几篇
+        文档"已经没有地方问；而 `stamp_vector_owner` 只补得到**行还在**的那些向量，指望按
+        document_id 逐篇找回，等于把删掉的行当索引。
+        `str(user_id)` 与 `add_documents` 写入侧逐字同形：Chroma 的 where 是标量相等、不做隐式
+        转换，裸 int 传进去不报错，只是永远匹配不上。
+        两个集合各自 try/except：漏扫一半比整片没扫更难查，而第一步炸了不该截断第二步。
+        """
+        try:
+            self.parent_vectorstore.delete(where={"user_id": str(user_id)})
+        except Exception:
+            logger.exception("按 user_id 清扫父集合失败: %s", user_id)
+        try:
+            self.child_vectorstore.delete(where={"user_id": str(user_id)})
+        except Exception:
+            logger.exception("按 user_id 清扫子集合失败: %s", user_id)
+
     def delete_by_ids(self, parent_ids, child_ids):
         """回滚入口：按向量 id 删除刚写入的块（spec 第七节 坑 3 的补偿动作）。"""
         if parent_ids:

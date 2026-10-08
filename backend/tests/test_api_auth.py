@@ -13,8 +13,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from api.auth import _DUMMY_HASH
-from core.security import ALGORITHM, PBKDF2_ITERATIONS, hash_password, verify_password
-from deps import get_config, get_db
+from core.migrations import DEFAULT_IDENTIFIER
+from core.security import ALGORITHM, PBKDF2_ITERATIONS, hash_password, hash_token, verify_password
+from deps import get_config, get_db, get_vector_store
+from fakes import FakeVectorStore
 from main import create_app
 from schemas.auth import normalize_identifier
 
@@ -26,6 +28,7 @@ class FakeAuthDB:
         self.users = []          # SimpleNamespace 列表，字段与 ORM 行同名
         self.tokens = {}         # token_hash -> (user_id, expires_at)
         self.models = {}         # user_id -> [(name, is_default)]，与 list_user_models 同形状
+        self.cascaded = []       # delete_user_cascade 收到过哪几枚 id（端点判据读这一格）
         self._next_id = 1
 
     def create_user(self, identifier, identifier_type, nickname, password_hash, avatar="auto"):
@@ -112,12 +115,31 @@ class FakeAuthDB:
         self.models[user_id] = [(n, n == name) for n, _ in rows]
         return True
 
+    def delete_user_cascade(self, user_id):
+        """与 `DatabaseManager.delete_user_cascade` 同名同返回形状（五键计数）。
 
-def make_client(db=None):
+        "五张表真被删干净"是 live 那条判据的活儿，fake 里没有第二张表；这里能给的证据只有
+        "端点到底调没调、带的是哪一枚 id"，所以额外记一笔 `self.cascaded`。
+        """
+        self.cascaded.append(user_id)
+        dead_tokens = [h for h, (uid, _) in self.tokens.items() if uid == user_id]
+        for h in dead_tokens:
+            self.tokens.pop(h)
+        models = self.models.pop(user_id, [])
+        before = len(self.users)
+        self.users = [u for u in self.users if u.id != user_id]
+        return {"auth_tokens": len(dead_tokens), "user_models": len(models),
+                "chat_history": 0, "documents": 0, "users": before - len(self.users)}
+
+
+def make_client(db=None, vector_store=None):
     db = db or FakeAuthDB()
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_config] = lambda: SimpleNamespace(AUTH_TOKEN_TTL_DAYS=30)
+    # 注销端点比其它设置类端点多吃一格 vector_store 依赖：本文件的 client 不走 lifespan，
+    # app.state.vector_store 根本不存在，不覆盖这一格请求会炸成 500 而不是被测的那一格。
+    app.dependency_overrides[get_vector_store] = lambda: vector_store or FakeVectorStore()
     return TestClient(app), db
 
 
@@ -464,7 +486,8 @@ def test_settings_endpoints_are_all_behind_the_login_gate():
     client, _ = make_client()
     for method, path in [("PUT", "/api/auth/me"), ("PUT", "/api/auth/me/password"),
                          ("PUT", "/api/auth/me/llm"), ("POST", "/api/auth/me/models"),
-                         ("DELETE", "/api/auth/me/models/x"), ("PUT", "/api/auth/me/models/default")]:
+                         ("DELETE", "/api/auth/me/models/x"), ("PUT", "/api/auth/me/models/default"),
+                         ("POST", "/api/auth/deactivate")]:
         res = client.request(method, path, json={})
         assert res.status_code == 401, f"{method} {path} 没上门：{res.status_code}"
 
@@ -590,3 +613,115 @@ def test_base_url_padding_does_not_push_it_over_the_column_bound():
                      headers=headers)
     assert res.status_code == 200, f"500 位的路由因为两侧空白被拒：{res.status_code} {res.text[:120]}"
     assert db.users[0].base_url == url, "入库的不是 strip 之后的整串"
+
+
+# ---------- 注销账号：POST /api/auth/deactivate（硬删，MySQL + 向量两头）----------
+
+
+def _deactivate_client(identifier="a@b.com", db=None, vector_store=None):
+    """注册 + 登录，交出 (client, db, headers, store)。
+
+    注销端点同时吃 `get_db` 与 `get_vector_store` 两格依赖，所以这条助手要把替身原样交回去——
+    判据读的是"两个出口各自被叫了没有"。
+    """
+    store = vector_store or FakeVectorStore()
+    client, the_db = make_client(db=db, vector_store=store)
+    register(client, identifier=identifier)
+    token = client.post("/api/auth/login", json={
+        "identifier": identifier, "password": "hunter2-pass"}).json()["token"]
+    return client, the_db, {"Authorization": f"Bearer {token}"}, store
+
+
+def _login_as(db, identifier, password="hunter2-pass"):
+    """把账号行与令牌直接写进替身，交出 Bearer 头。
+
+    为什么默认账号那一档不能走 `register`：`default@local` 没有点分顶级域，
+    `normalize_identifier` 会先把它 422 掉，请求根本走不到"注销该不该放行"那一步。
+    库里存哈希、头上带原文，与 `/login` 交出去的那一枚同形（core/security.hash_token）。
+    """
+    user = db.create_user(identifier=identifier, identifier_type="email",
+                          nickname="默认用户", password_hash=hash_password(password))
+    ticket = f"probe-ticket-{user.id}"
+    db.create_token(user.id, hash_token(ticket), datetime.now() + timedelta(days=1))
+    return {"Authorization": f"Bearer {ticket}"}
+
+
+def test_deactivate_erases_the_account_and_sweeps_both_stores():
+    client, db, headers, store = _deactivate_client()
+    res = client.post("/api/auth/deactivate", json={"old_password": "hunter2-pass"}, headers=headers)
+    assert res.status_code == 204, res.text
+    assert res.content == b"", "204 还带正文：前端按 204 走的是「没回执」那条路"
+    assert db.cascaded == [1], "行侧那五张表根本没被清"
+    assert store.deleted_by_user == [1], "向量侧没被清扫：注销完 Chroma 里还留着他的块"
+    assert db.users == [] and db.tokens == {}, "账号行或令牌没删干净"
+    # 令牌跟着行一起没 = 这一枚票当场换不回任何东西，界面据此落回登录页
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_deactivate_with_the_wrong_password_deletes_nothing():
+    """这一格是"捡到一枚还没过期的令牌"唯一的拦网：证明不了是你，就不许动任何一行。
+
+    detail 与 `PUT /me/password` 逐字同一句、状态码同一个 401——两扇门对外说的话说一样的，
+    才不会出现"改密码时告诉你口令错、注销时告诉你服务器忙"那种口径漂移。
+    """
+    client, db, headers, store = _deactivate_client()
+    res = client.post("/api/auth/deactivate", json={"old_password": "wrong-pass"}, headers=headers)
+    assert res.status_code == 401
+    assert res.json() == {"detail": "原密码不正确"}
+    assert db.cascaded == [] and store.deleted_by_user == []
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+
+def test_deactivate_rejects_an_empty_old_password_without_touching_anything():
+    """`verify_password("")` 是会真算一遍 PBKDF2 的合法输入，门只能设在 schema 的 min_length 上
+    （login 那条路上有同型判据，见 `test_empty_password_is_rejected_before_any_hash_comparison`）。"""
+    client, db, headers, store = _deactivate_client()
+    res = client.post("/api/auth/deactivate", json={"old_password": ""}, headers=headers)
+    assert res.status_code == 422
+    assert db.cascaded == [] and store.deleted_by_user == []
+
+
+def test_default_account_cannot_be_deactivated():
+    """删掉 `default@local` 不是"少一个账号"：`ensure_default_user` 下次开机按 identifier
+    重铸一枚**新 id**，而演示数据（13 篇文档 / 43 条历史）全在它名下——用户看到的表象是
+    "应用自己重置了"，而且没有第二条路退回去。所以这里响亮地拒绝，不放行。
+    """
+    db, store = FakeAuthDB(), FakeVectorStore()
+    client, _ = make_client(db=db, vector_store=store)
+    headers = _login_as(db, DEFAULT_IDENTIFIER)
+    # 门的先后也是有牙齿的一格：口令门排在默认账号门之前。口令错的时候该说的是
+    # "你证明不了是你"，回"这个账号删不掉"是替对方确认了"口令对"。
+    assert client.post("/api/auth/deactivate", json={"old_password": "nope"},
+                       headers=headers).status_code == 401
+    res = client.post("/api/auth/deactivate", json={"old_password": "hunter2-pass"}, headers=headers)
+    assert res.status_code == 409
+    assert res.json() == {"detail": "默认账号不能注销"}
+    assert db.cascaded == [] and store.deleted_by_user == []
+    assert len(db.users) == 1
+
+
+def test_deactivate_deletes_the_rows_before_sweeping_the_vectors():
+    """两头删的先后：先删行、提交之后才扫向量。
+
+    反过来（先扫向量）一旦 MySQL 回滚，留下的是"账号还活着、向量已经没了"——界面上一切正常、
+    召回池空了，是最难复现的那种脏。两个替身各记各的列表看不见顺序，所以让它们写同一条时间线。
+    """
+    events = []
+
+    class TimelineDB(FakeAuthDB):
+        def delete_user_cascade(self, user_id):
+            events.append("rows")
+            return super().delete_user_cascade(user_id)
+
+    class TimelineVectors(FakeVectorStore):
+        def delete_by_user_id(self, user_id):
+            events.append("vectors")
+
+    client, _ = make_client(db=TimelineDB(), vector_store=TimelineVectors())
+    register(client, identifier="order@b.com")
+    token = client.post("/api/auth/login", json={"identifier": "order@b.com",
+                                                 "password": "hunter2-pass"}).json()["token"]
+    res = client.post("/api/auth/deactivate", json={"old_password": "hunter2-pass"},
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 204
+    assert events == ["rows", "vectors"]
