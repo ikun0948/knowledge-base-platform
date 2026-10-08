@@ -1,12 +1,14 @@
-"""启动期一次性改造：建表之后补列、补索引、补外键、造默认用户、旧数据归户（既捡 `user_id IS NULL`
-的行，也把指向不存在账号的孤儿行交还默认用户——后者是补外键的前置）、把 `.env` 的三键抄给
-默认用户、旧向量补戳。
+"""启动期一次性改造：建表之后补列、补索引、补外键、补"一人至多一枚默认"的生成列与唯一索引、
+造默认用户、旧数据归户（既捡 `user_id IS NULL` 的行，也把指向不存在账号的孤儿行交还默认用户——
+后者是补外键的前置）、把 `.env` 的三键抄给默认用户、旧向量补戳。
 
 三句写在这里的话不能丢：
 ① 每一步都必须幂等——lifespan 每次开机都跑，开发者本地库和部署库进度不齐是常态；
 ② MySQL 没有 `ADD COLUMN IF NOT EXISTS`（`CREATE INDEX` 同样没有，外键的
    `ADD CONSTRAINT` 也没有 IF NOT EXISTS），所以"先查 information_schema 再 ALTER"不是洁癖，
    是唯一写法——列查 COLUMNS、索引查 STATISTICS、外键查 KEY_COLUMN_USAGE；
+   ⑤ 的守卫列查的也是 COLUMNS，但要多带一句 `GENERATION_EXPRESSION <> ''`：
+   同名**普通列**不能被当成生成列（理由见 generated_column_exists）；
    `Base.metadata.create_all` 对已存在的表整表跳过，补不出列也补不出索引（core/database.py 的 init_database）。
 ③ 补向量戳**只改 metadata，绝不重新嵌入**：重嵌一遍全库子块（2026-10-07 重钉的基线是
    10 条）要再加载一次 0.6B 模型，而且会改变已经验过的向量，把迁移变成一次重新灌库。
@@ -52,6 +54,23 @@ MIGRATED_INDEXES = [
 MIGRATED_FOREIGN_KEYS = [
     ("documents", "user_id", "fk_documents_user_id", "users"),
     ("chat_history", "user_id", "fk_chat_history_user_id", "users"),
+]
+
+# ⑤：「一个用户至多一枚 `is_default`」此前只靠应用层两步（`add_user_model` 判空 +
+# `set_default_user_model` 清场），并发下两个请求各自"以为自己是第一个"就能留下两枚默认
+# （live 判据 `test_add_user_model_retries_as_non_default_when_the_guard_race_wins` 在 RED 轮
+# 就在真库上复现过：[(anchor, True), (race, True)]）。
+# MySQL **没有部分索引**（`CREATE UNIQUE INDEX … WHERE is_default` 那种写法建不出来），
+# 所以口径换成生成列：默认行算出 `user_id`，非默认行算出 NULL，而唯一索引**不管 NULL**——
+# "非默认行任意多"与"每人至多一枚默认"因此同时成立，并且这两件事由引擎兜着，不靠应用自觉。
+SINGLE_DEFAULT_GUARD_EXPR = "CASE WHEN is_default THEN user_id ELSE NULL END"
+
+# (表, 守卫列, 唯一索引名)。与 MIGRATED_COLUMNS 同一族两条腿：新库由 `create_all` 按
+# core/database.py 的 ORM 声明建，已部署库由 ensure_single_default_guard 发 ALTER。
+# 两侧的表达式必须同源——`core/database.py` 直接 import 上面这个常量，
+# tests/test_user_models_db.py 再拿 ORM 的 `sqltext` 与它逐字对撞兜住"改了 import 那侧"的路。
+MIGRATED_UNIQUE_INDEXES = [
+    ("user_models", "default_guard", "uq_user_models_single_default"),
 ]
 
 
@@ -107,6 +126,104 @@ def ensure_indexes(conn) -> list:
             created.append((table, index))
     conn.commit()
     return created
+
+
+def generated_column_exists(conn, table: str, column: str) -> bool:
+    """问的是"**这一列是不是生成列**"，不是"有没有这一列"。
+
+    同名普通列在真库上完全可能出现（有人手建过、或上一版迁移只发了裸 `ADD COLUMN`），
+    把它当成"守卫已建好"的后果是**静默的零约束**：那一列由应用自己写，应用不写就整列 NULL，
+    而唯一索引正好不管 NULL——它安安静静管着一列空值，两枚默认照样并存，
+    比没有索引更糟，因为校验会以为已经堵上了。所以这里必须带上 `GENERATION_EXPRESSION <> ''`。
+
+    只能问"非空"、不能比全文：MySQL 把表达式存成**小写 + 反引号**的串
+    （`` ``is_default`` `` 这种），逐字比 `CASE WHEN is_default THEN user_id …` 必然假红。
+    表达式的全文那半由上面的常量与 ORM 声明同源钉住。
+    """
+    rows = conn.execute(
+        text("SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table "
+             "AND COLUMN_NAME = :column AND GENERATION_EXPRESSION <> ''"),
+        {"table": table, "column": column},
+    ).fetchall()
+    return bool(rows)
+
+
+def add_generated_column(conn, table: str, column: str) -> None:
+    # 与 add_column/add_index 同一条理由：DDL 不接受绑定参数，两个名字与表达式只可能来自模块常量。
+    # `STORED` 是实测选的：这一列要被唯一索引盖住，只写 `GENERATED ALWAYS AS (…)`（默认 VIRTUAL）
+    # 走的是另一套索引实现，本仓没在那上面验过，换口径就要重跑整个 live 组。
+    conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` INT "
+                      f"GENERATED ALWAYS AS ({SINGLE_DEFAULT_GUARD_EXPR}) STORED"))
+
+
+def duplicate_default_count(conn, table: str) -> int:
+    """有几枚"多出来的"默认：每人留下 id 最小那枚，其余都算重复。
+
+    先数再改、不拿 UPDATE 的 rowcount（同 `orphaned_owner_count` 那条备忘：本仓的 MySQL 方言
+    硬带了 CLIENT_FOUND_ROWS，同值重写也回 1，那个数当"改了几行"不可信）。
+    """
+    rows = conn.execute(
+        text(f"SELECT COUNT(*) AS dupes FROM `{table}` m "
+             f"JOIN (SELECT user_id, MIN(id) AS keep FROM `{table}` "
+             "WHERE is_default = 1 GROUP BY user_id) k ON m.user_id = k.user_id "
+             "WHERE m.is_default = 1 AND m.id > k.keep")).fetchall()
+    return rows[0][0]
+
+
+def clear_duplicate_defaults(conn, table: str) -> None:
+    """把每人名下**除 id 最小那枚之外**的默认降成非默认。
+
+    派生表（`JOIN (SELECT …) k`）不是风格：MySQL 1093 不允许在被 UPDATE 的表上做引用同表
+    的子查询，绕开它的标准写法就是把那份结果先 JOIN 进来。
+    留最小 id 而不是留"最后写入的那枚"：判据反了的话同一行每次开机都被改写，
+    而且"谁当默认"要稳定可复现，用户第二次打开设置页看到的才是同一个模型。
+    """
+    conn.execute(text(
+        f"UPDATE `{table}` d JOIN (SELECT user_id, MIN(id) AS keep FROM `{table}` "
+        "WHERE is_default = 1 GROUP BY user_id) k ON d.user_id = k.user_id "
+        "SET d.is_default = 0 WHERE d.is_default = 1 AND d.id > k.keep"))
+    conn.commit()
+
+
+def add_unique_index(conn, table: str, column: str, index: str) -> None:
+    conn.execute(text(f"CREATE UNIQUE INDEX `{index}` ON `{table}` (`{column}`)"))
+
+
+def ensure_single_default_guard(conn, table: str = "user_models", column: str = "default_guard",
+                                index: str = "uq_user_models_single_default") -> dict:
+    """⑤ 的引擎守卫：清重复 → 补生成列 → 建唯一索引，三件事各查各的，重跑交白卷。
+
+    返回值三格都可数（判据不吃日志）：`duplicates_cleared` 是这次降掉几行，
+    另两格是这次真发了哪两条 DDL。
+
+    顺序里有两处实测钉出来的坑，反了不是"报错"而是"后端起不来"
+    （`run_migrations` 挂在 lifespan 且不兜异常，main.py:59）：
+    ① 去重必须早于建索引。本机 scratch 表实测：`ALTER … ADD COLUMN … STORED` 在**已经带着
+       两枚默认**的数据上照样成功（两行都算出 guard=1，此时还没有索引管着它），紧接着的
+       `CREATE UNIQUE INDEX` 才在同一份数据上回 `1062 Duplicate entry '1'`。
+    ② 生成列必须早于索引（列都不存在，索引无从盖起）——这一条假连接也当场断言。
+
+    Ruling：严格口径（"是不是真的那件事"）只用在**列**那一步，索引那一步仍按名字问 `index_exists`。
+    不是漏掉——两处的补救手段不同：列那侧的修法是可加的 `ALTER ADD COLUMN`，跳过才是错的；
+    索引那侧如果真出现"同名但是普通索引"，正确的修法是 `DROP INDEX`，而启动期迁移不问自取地
+    删东西是比"约束没建上"更糟的先例。这种情况在这台机器上不存在（索引名是本仓起的、
+    且 `uq_` 前缀撞不上谁），代价记在台账的挂账里。
+    """
+    duplicates = duplicate_default_count(conn, table)
+    if duplicates:
+        clear_duplicate_defaults(conn, table)
+    column_added = False
+    if not generated_column_exists(conn, table, column):
+        add_generated_column(conn, table, column)
+        column_added = True
+    index_added = False
+    if not index_exists(conn, table, index):
+        add_unique_index(conn, table, column, index)
+        index_added = True
+    conn.commit()
+    return {"column_added": column_added, "duplicates_cleared": duplicates,
+            "index_added": index_added}
 
 
 def foreign_key_exists(conn, table: str, column: str, ref_table: str) -> bool:
@@ -336,6 +453,9 @@ def run_migrations(engine, chroma_client, config) -> dict:
     with engine.connect() as conn:
         added = ensure_columns(conn)
         indexes = ensure_indexes(conn)   # 顺序硬要求：列还没加出来就建索引会当场炸
+        # ⑤ 的守卫列 + 唯一索引：与上一行同属"补 DDL"这一族，且必须早于 `seed_default_llm`——
+        # 那一步会按"名单为空"新插一枚 `is_default=1`，守卫要先在位，才有引擎替你把关。
+        guard = ensure_single_default_guard(conn)
         user_id = ensure_default_user(conn, config.DEFAULT_USER_PASSWORD)
         docs = backfill_documents(conn, user_id)
         chats = backfill_chat_history(conn, user_id)
@@ -351,6 +471,7 @@ def run_migrations(engine, chroma_client, config) -> dict:
     # 补戳放在连接之外：Chroma 那边可能是一次几秒的只读扫描，别把 MySQL 连接摁在它上面
     vectors = stamp_vector_owner(chroma_client, pending)
     summary = {"columns_added": added, "indexes_added": indexes,
+               "single_default_guard": guard,
                "orphan_rows_reclaimed": orphans,
                "foreign_keys_added": foreign_keys,
                "default_user_id": user_id, "documents_claimed": docs,

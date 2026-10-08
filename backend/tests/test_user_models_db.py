@@ -1,8 +1,10 @@
 """阶段二两张账号侧结构的离线钉。
 
 真库上的读写归 test_live_database.py（要 MySQL），这里只钉"形状本身"：
-列可不可空、列的长度上界、unique 键**盖住哪几列**——这三个都是**建表之后改不动**的事实，
-错了就得删表重来，所以值得一条不连库的判据。
+列可不可空、列的长度上界、unique 键**盖住哪几列**、⑤ 那枚生成列与唯一索引盖住哪一列——
+这些都是**建表之后改不动**的事实，错了就得删表重来，所以值得一条不连库的判据。
+最后一组尤其值得：那条缺陷的内容就是"至多一枚默认只靠应用层两步"，
+判据要盯的是**约束真的落在列上**，而不是代码里记得写那句 WHERE。
 `Base.metadata` 是纯声明，导入它不开连接。
 """
 from sqlalchemy import UniqueConstraint
@@ -46,3 +48,40 @@ def test_column_names_match_what_endpoints_read():
     assert User.__tablename__ == "users"
     assert UserModel.__tablename__ == "user_models"
     assert [c.name for c in UserModel.__table__.primary_key.columns] == ["id"]
+
+
+def test_user_models_guard_column_is_a_stored_generated_one():
+    """「至多一枚默认」从这一条起由**引擎**兜着（阶段三 ⑤），不再只靠应用层两步。
+
+    MySQL 没有部分索引（`WHERE is_default` 那种写法建不出来），所以口径换成生成列：
+    `default_guard` 只在 `is_default` 为真时等于 `user_id`，否则是 NULL——唯一索引**不管 NULL**，
+    于是"同一用户可以有任意多枚非默认行"与"每人至多一枚默认"这两件事同时成立。
+
+    为什么判据要问"是不是生成列"：普通列由应用自己写，写不写全凭自觉，
+    给它加唯一索引等于把不变量交回给同一份应用层代码——也就是这条缺陷的本体。
+    """
+    col = Base.metadata.tables["user_models"].columns["default_guard"]
+    assert col.computed is not None, "default_guard 必须是生成列；普通列上的唯一索引拦不住写 NULL 的人"
+    assert col.computed.persisted is True, (
+        "STORED 才是本机实测过的那条路（VIRTUAL 也能建索引，但换口径要重跑 live 组）")
+    # 可空是硬要求：非默认行拿到的是 NULL，NOT NULL 会让"第二枚模型"根本插不进去
+    assert col.nullable is True
+    # 同源两条腿：新库由 create_all 按 ORM 建、老库由迁移发 ALTER。
+    # 两处各写一句表达式就会分叉，而分叉的后果是"索引管的是另一件事"——这里逐字比。
+    assert str(col.computed.sqltext) == migrations.SINGLE_DEFAULT_GUARD_EXPR, (
+        "ORM 的生成表达式与 core/migrations.py 的常量不是同一句话")
+
+
+def test_user_models_guard_index_covers_only_the_generated_column():
+    """索引**盖住哪几列**才是判据，"存在一枚唯一索引"不是。
+
+    写成 `unique(default_guard, user_id)` 照样建得出来、照样绿，但它管的是
+    "(user_id, 默认位) 组合"——每个用户仍能有任意多枚默认，因为那些行的 guard 是 NULL。
+    多盖一列就等于没有约束，与 `test_user_model_table_shape` 那条同一个口径。
+    """
+    table = Base.metadata.tables["user_models"]
+    _table, column, index = migrations.MIGRATED_UNIQUE_INDEXES[0]
+    guard = {ix.name: ix for ix in table.indexes}[index]
+    assert guard.unique is True, f"{index} 建成了普通索引：两枚默认照样并存"
+    assert [c.name for c in guard.columns] == [column], (
+        f"唯一索引盖住了 {[c.name for c in guard.columns]}，只该盖 {column} 这一列")

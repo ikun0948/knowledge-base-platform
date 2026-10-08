@@ -1,6 +1,7 @@
 """迁移的纪律：缺列才 ALTER、缺外键才 ADD CONSTRAINT（且问的是"这一列有没有外键"，
 不是"有没有那个名字"）、已戳不再写、重复跑零副作用、口令空则账号不可登录，
-步骤 4 抄 `.env` 三键时一人至多立一枚默认。
+步骤 4 抄 `.env` 三键时一人至多立一枚默认；⑤ 补的是"这枚默认由引擎管"：
+`user_models.default_guard` 必须是**生成列**才算数，去重必须赶在 `CREATE UNIQUE INDEX` 之前。
 
 这里用假 Connection 记录发出去的 SQL，为的是把"先查再改"这个决策本身钉死——
 真 MySQL 上的 ALTER 语义归 live 组，那是另一条判据。外键也一样：它在真库上建成没有、
@@ -21,8 +22,14 @@ class FakeConn:
 
     def __init__(self, existing_columns=(), user_rows=(), owned_doc_ids=(),
                  existing_indexes=(), user_models=(), chat_unowned=3, existing_fks=(),
-                 existing_orphans=()):
+                 existing_orphans=(), existing_generated=(), dupes=0):
         self.columns = set(existing_columns)          # {("documents", "user_id")}
+        # ⑤ 的守卫列必须是**生成列**才算数，所以和 `columns` 分开存：一份同名的普通列
+        # （有人手建过、或上一版迁移只发了裸 ADD COLUMN）在真库上完全可能出现，
+        # 把它当成"守卫已建好"会让唯一索引静默管着一列没人写的 NULL——等于没有约束。
+        self.generated = set(existing_generated)      # {("user_models", "default_guard")}
+        # 生成列首先也是一列：下面 CREATE INDEX 的顺序判据问的是"列在不在"，不分生成与否。
+        self.columns |= self.generated
         self.indexes = {(t, i) for (t, i) in existing_indexes}   # {("documents", "idx_documents_user_id")}
         # 外键按 **(表, 列)** 存，约束名只是带着的注脚：真库上 create_all 建出来的叫
         # `documents_ibfk_1`，迁移建出来的叫 `fk_documents_user_id`，生产码问的是"这一列有没有外键"，
@@ -31,6 +38,9 @@ class FakeConn:
         # "有几行的 user_id 指向已经不存在的账号"在这里是个**给定值**：假连接不会去 join users 算，
         # 这条判据要钉的是"数出来了会去归户、且赶在 ALTER 之前"，孤儿判定本身的 SQL 语义归 live 组。
         self.orphans = dict(existing_orphans)         # {"chat_history": 43}
+        # 同一族的做法用在 ⑤ 上：有几枚"多出来的默认"也是给定值。判据钉的是
+        # "数出来会先清、且赶在 CREATE UNIQUE INDEX 之前"，去重 SQL 本身的语义归 live 组。
+        self.dupes = dupes                            # 每人只留 id 最小那枚之后还要清掉的行数
         self.users = list(user_rows)                  # [(id, identifier)]
         self.owned_docs = set(owned_doc_ids)          # 已有 user_id 的文档 id
         self.inserted = []                            # INSERT INTO users 的参数，用来验写了哪个哈希
@@ -40,11 +50,18 @@ class FakeConn:
         self.indexed_columns = set()                  # CREATE INDEX 覆盖到的 (表, 列)，顺序判据用它
         self.executed = []                            # 记 DDL/DML，SELECT 不记
         self.reclaims = []                             # [(表, uid)]：孤儿行归户打给了谁，绑定参数不在 SQL 文本里
+        self.dedupes = []                             # 去过几次重：幂等判据数的是语句条数，不是返回值
 
     def execute(self, sql, params=None):
         text = str(sql)
         head = text.strip().upper()
         params = params or {}
+        if head.startswith("SELECT COLUMN_NAME") and "GENERATION_EXPRESSION" in head:
+            # 必须排在下面那条按列名查的分支**之前**：那条只看列名，会把同名普通列也答成"有了"，
+            # 于是"严格口径"这条判据会假绿——而严格口径的全部内容就是"名字对了还不算，得真是生成列"。
+            table = params["table"]
+            rows = [(c,) for (t, c) in self.generated if t == table and c == params["column"]]
+            return _Result(rows)
         if head.startswith("SELECT COLUMN_NAME"):
             table = params["table"]
             rows = [(c,) for (t, c) in self.columns if t == table and c == params["column"]]
@@ -72,6 +89,22 @@ class FakeConn:
             table = text.split()[2].strip("`")
             column = text.split("ADD COLUMN")[1].strip().split()[0].strip("`")
             self.columns.add((table, column))
+            if "GENERATED ALWAYS AS" in head:
+                # 同一句 ALTER 发的两件事：列有了（下面建索引的顺序判据用它），**而且它是生成列**
+                # （第二遍的严格口径查的就是这个集合，不记就会每次都重发一遍 ALTER）。
+                self.generated.add((table, column))
+            return _Result([])
+        if head.startswith("CREATE UNIQUE INDEX"):
+            # 与上面 CREATE INDEX 同一条纪律：列还不存在就建索引，MySQL 当场报错，
+            # 假连接也把它断在这里——"先发 ALTER 再建唯一索引"这条顺序就不只是注释里的规矩。
+            table = text.split("ON")[1].strip().split()[0].strip("`")
+            column = text.split("(")[1].strip().split(")")[0].strip("`")
+            if (table, column) not in self.columns:
+                raise AssertionError(f"列 {table}.{column} 还不存在就建了唯一索引：{text[:120]}")
+            self.executed.append(text)
+            index = text.split()[3].strip("`")        # CREATE UNIQUE INDEX `名字` ON …
+            self.indexes.add((table, index))
+            self.indexed_columns.add((table, column))
             return _Result([])
         if head.startswith("CREATE INDEX"):
             # 先列后索引的真语义钉在这里：列还不存在就建索引，MySQL 会直接报错，
@@ -103,6 +136,18 @@ class FakeConn:
         if head.startswith("UPDATE CHAT_HISTORY"):
             self.executed.append(text)
             self.chat_unowned = 0                   # 归户之后不再有 NULL 行：重跑零副作用
+            return _Result([])
+        if head.startswith("SELECT COUNT(*) AS DUPES"):
+            # 与上面那条 ORPHANS 同一种安排：必须抢在通用 `SELECT COUNT`（数 users）之前，
+            # 否则去重数会拿到账号数。表名在 FROM 之后的第一段。
+            return _Result([(self.dupes,)])
+        if head.startswith("UPDATE") and head.split()[1].strip("`") == "USER_MODELS":
+            # ⑤ 的去重句。按主语表名认（生产码的 DDL 一律给表名加反引号，`startswith`
+            # 拼不带反引号的串会永远匹配不上）；其它 UPDATE 分支都按具体表名匹配，所以这里
+            # 放哪都不会撞车。记进 executed 是让"重跑交白卷"能数语句条数。
+            self.executed.append(text)
+            self.dupes = 0
+            self.dedupes.append(text)
             return _Result([])
         if head.startswith("SELECT COUNT"):
             return _Result([(len(self.users),)])
@@ -389,6 +434,112 @@ def test_run_migrations_reports_foreign_keys_and_goes_quiet_on_the_second_pass()
     assert sum(1 for s in conn.executed if "ADD CONSTRAINT" in s) == 2, "第二遍又发了 ALTER：幂等破了"
 
 
+def test_single_default_guard_alters_the_column_before_indexing_it():
+    """⑤：把「一人至多一枚默认」从应用层两步（判空 + 清场）换成引擎级守卫——
+    STORED 生成列 `default_guard = CASE WHEN is_default THEN user_id ELSE NULL END` + 其上唯一索引。
+
+    这条判据吃两道牙：假连接的 `CREATE UNIQUE INDEX` 分支会在列还不存在时当场断言
+    （与 `CREATE INDEX` 那一支同一族规矩），所以"先发 ALTER 再建唯一索引"不是注释里的约定；
+    而 `STORED` 那一格是真库上量的：虚拟（VIRTUAL）生成列**不能**被索引，MySQL 回 3106，
+    只写 `GENERATED ALWAYS AS …` 的写法会在这里红。
+    """
+    conn = FakeConn()
+    assert migrations.ensure_single_default_guard(conn) == {
+        "column_added": True, "duplicates_cleared": 0, "index_added": True}
+
+    ddl = [s.upper() for s in conn.executed]
+    alter_at = min(i for i, s in enumerate(ddl) if "GENERATED ALWAYS AS" in s)
+    index_at = min(i for i, s in enumerate(ddl) if s.startswith("CREATE UNIQUE INDEX"))
+    assert alter_at < index_at, (
+        f"唯一索引在第 {index_at} 条、ALTER 在第 {alter_at} 条：真库上这条顺序 MySQL 直接报错")
+    assert "STORED" in ddl[alter_at], f"生成列没写 STORED，唯一索引建不上去：{ddl[alter_at][:160]}"
+    assert "UQ_USER_MODELS_SINGLE_DEFAULT" in ddl[index_at]
+    assert "DEFAULT_GUARD" in ddl[index_at], f"唯一索引盖的不是守卫列：{ddl[index_at][:160]}"
+
+
+def test_guard_exists_only_if_that_column_is_really_a_generated_one():
+    """同名的**普通列**不算数：唯一索引会安安静静管着一列没人往里写的 NULL，等于没有约束。
+
+    与外键那条「按列问、不按约束名问」相反方向的一族坑——这里问名字还不够，必须问
+    `GENERATION_EXPRESSION <> ''`。但 MySQL 把表达式存成**小写带反引号**的串，逐字比串必然假红，
+    所以这里只钉"非空"这一格，表达式全文由 ORM 那张逐字 pin 负责（`test_user_models_db.py`）。
+    """
+    conn = FakeConn(existing_columns=[("user_models", "default_guard")])
+    out = migrations.ensure_single_default_guard(conn)
+    assert out["column_added"] is True, (
+        "把同名普通列当成守卫建好了：ALTER 被跳过，唯一索引管着一列空值——静默的零约束")
+    assert any("GENERATED ALWAYS AS" in s.upper() for s in conn.executed)
+
+    ready = FakeConn(existing_generated=[("user_models", "default_guard")],
+                     existing_indexes=[("user_models", "uq_user_models_single_default")])
+    assert migrations.ensure_single_default_guard(ready) == {
+        "column_added": False, "duplicates_cleared": 0, "index_added": False}
+    assert ready.executed == [], "已经有生成列和唯一索引还发 DDL：重跑交白卷破了"
+
+
+def test_duplicate_defaults_are_cleaned_before_the_unique_index_is_built():
+    """实测（本机 MySQL 8.0.39，scratch 表）：`ALTER … ADD COLUMN … STORED` 在**已有两枚默认**的
+    数据上照样成功（两行都算出 guard=1），紧接着的 `CREATE UNIQUE INDEX` 才在同一份数据上回
+    `1062 Duplicate entry '1'`。所以顺序只能是「数重复 → 清 → 建索引」。
+
+    晚一步的代价不是报错而是开不了机：`run_migrations` 挂在 lifespan 且没有 try/except
+    （main.py:59），和 ④ 的 errno 1452 同族。
+    """
+    conn = FakeConn(dupes=3)
+    assert migrations.ensure_single_default_guard(conn)["duplicates_cleared"] == 3
+
+    ddl = conn.executed
+    dedupe_at = min(i for i, s in enumerate(ddl)
+                    if s.upper().startswith("UPDATE") and "USER_MODELS" in s.upper())
+    index_at = min(i for i, s in enumerate(ddl) if s.upper().startswith("CREATE UNIQUE INDEX"))
+    assert dedupe_at < index_at, (
+        f"去重在第 {dedupe_at} 条、CREATE UNIQUE INDEX 在第 {index_at} 条："
+        "顺序一反，真库上 1062 打在 lifespan 身上")
+
+    sql = " ".join(ddl[dedupe_at].upper().split())
+    assert "MIN(ID)" in sql and "GROUP BY USER_ID" in sql, (
+        "去重不是**按用户各留一枚**：一把清零会把所有人都只剩零枚默认，比两枚更糟")
+    assert "D.ID > K.KEEP" in sql, (
+        "留下的必须是 id 最小那枚；判据反了同一行每次重启都被改写，"
+        "而且 MySQL 1093（不能在子查询里引用被更新的表）也是靠这层的派生表绕开的")
+    assert "IS_DEFAULT" in sql
+
+
+def test_guard_migration_cleans_nothing_when_there_is_nothing_to_clean():
+    """先去数、数到零就一条 UPDATE 都不发。
+
+    `UPDATE … WHERE d.id > k.keep` 在没有重复时本来就是零行，但语句照样会进 `executed`，
+    于是"重跑交白卷"数语句条数就数不出差别——幂等判据会退化成"数了个永远不变的数"。
+    """
+    conn = FakeConn(dupes=0)
+    assert migrations.ensure_single_default_guard(conn)["duplicates_cleared"] == 0
+    assert [s for s in conn.executed if s.upper().startswith("UPDATE")] == []
+
+
+def test_single_default_guard_is_quiet_on_the_second_pass():
+    conn = FakeConn(dupes=1)
+    migrations.ensure_single_default_guard(conn)
+
+    second = migrations.ensure_single_default_guard(conn)
+    assert second == {"column_added": False, "duplicates_cleared": 0, "index_added": False}
+    for fragment, expect in (("ALTER TABLE", 1), ("CREATE UNIQUE INDEX", 1), ("UPDATE", 1)):
+        assert sum(1 for s in conn.executed if s.upper().startswith(fragment)) == expect, (
+            f"第二遍又发了 {fragment}：幂等破了")
+
+
+def test_run_migrations_reports_the_guard_and_goes_quiet_on_reboot():
+    """`single_default_guard` 进 summary：判据不吃日志，重启必须交白卷。"""
+    conn = FakeConn()
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    first = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    assert first["single_default_guard"] == {"column_added": True, "duplicates_cleared": 0,
+                                             "index_added": True}
+
+    second = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    assert second["single_default_guard"] == {"column_added": False, "duplicates_cleared": 0,
+                                              "index_added": False}
+
+
 def test_ensure_default_user_is_idempotent_and_tolerates_empty_password():
     conn = FakeConn()
     first = migrations.ensure_default_user(conn, password="secret-pass")
@@ -585,3 +736,12 @@ def test_default_identifier_is_the_one_the_spec_names():
         ("documents", "user_id", "fk_documents_user_id", "users"),
         ("chat_history", "user_id", "fk_chat_history_user_id", "users"),
     ]
+    # 第四组：⑤ 的引擎级守卫（表, 守卫列, 唯一索引名）。多一枚、少一枚、换名都要过这条评审。
+    assert migrations.MIGRATED_UNIQUE_INDEXES == [
+        ("user_models", "default_guard", "uq_user_models_single_default"),
+    ]
+    # 表达式的**全文**只能钉在常量上：MySQL 把它存成小写 + 反引号的串（`information_schema`
+    # 里逐字比必然假红），所以真库侧只问"非空"（上面 `test_guard_exists_only_if_…`），
+    # 而 ORM 那张 `test_user_models_guard_column_is_a_stored_generated_one` 拿 `sqltext`
+    # 与这同一个常量对撞——两侧同源，改一处就红。
+    assert migrations.SINGLE_DEFAULT_GUARD_EXPR == "CASE WHEN is_default THEN user_id ELSE NULL END"

@@ -648,6 +648,155 @@ def test_user_settings_round_trip(db, probe_user):
     assert db.delete_user_model(probe_user.id, "probe-mini") == 0      # 幂等：第二次是 0 不是异常
 
 
+def test_engine_itself_rejects_a_second_default_for_the_same_user(db, probe_user):
+    """阶段三 ⑤ 的真库面：「一人至多一枚默认」由 STORED 生成列 + 唯一索引兜，两类写入口都要被拒。
+
+    离线那组（`test_migrations.py`）钉的是"先查再改"这个决策，这里钉它在真 MySQL 上成立。
+    本机 scratch 表实测的四格，逐格搬到这里：INSERT 第二枚默认 → 1062；
+    **UPDATE 把非默认那枚提升成默认**也 → 1062（只测 INSERT 会漏掉 `set_default` 那条路径，
+    而那才是应用层天天在走的一条）；别人的默认不受影响（guard 里带的是 user_id，不是常量 1）；
+    非默认行想有几枚有几枚（唯一索引不理 NULL）。
+
+    第一条断言是前置闸门：守卫列没在真库上建起来就在这里红，而不是把"压根没有索引"
+    误报成"引擎不管"。真库的 ALTER 由 lifespan 那次 `run_migrations` 发（本机已就位）。
+    """
+    from sqlalchemy import exc, text
+
+    from core.security import hash_password
+
+    with db.engine.connect() as conn:
+        guard = conn.execute(text(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_models' "
+            "AND COLUMN_NAME = 'default_guard' AND GENERATION_EXPRESSION <> ''"
+        )).fetchone()
+    assert guard, ("真库上 default_guard 不是生成列（或压根没这列）：迁移那一步没落，"
+                   "下面三条只是在没有约束的表上自说自话")
+
+    assert db.add_user_model(probe_user.id, "p5-keep") is True
+    # 上一轮 round_trip 把默认那枚删掉了，这里**显式**立一枚：不靠测试执行顺序造前置态
+    assert db.set_default_user_model(probe_user.id, "p5-keep") is True
+    # 这一枚是**非默认**行（名单已有人是默认），它既是"非默认行随便加"的证据，
+    # 也是下面那次 UPDATE 提升的对象——先插后提升，反过来那句 UPDATE 匹配 0 行、
+    # `pytest.raises` 会红在夹具身上而不是引擎身上。
+    assert db.add_user_model(probe_user.id, "p5-keep-other") is True
+    before = db.list_user_models(probe_user.id)
+
+    other = db.create_user(identifier=f"live-p5b-{new_tag()}@local", identifier_type="email",
+                           nickname="探针账号乙", password_hash=hash_password("p-unusable"))
+    try:
+        with db.engine.connect() as conn:
+            with pytest.raises(exc.IntegrityError) as by_insert:
+                conn.execute(text("INSERT INTO user_models (user_id, name, is_default) "
+                                  "VALUES (:u, :n, 1)"),
+                             {"u": probe_user.id, "n": "p5-second-default"})
+            conn.rollback()
+        # 只盯错误号会漏掉"被别的约束拦下"（比如 unique(user_id,name) 撞名），所以名字也要对
+        assert "1062" in str(by_insert.value)
+        assert "uq_user_models_single_default" in str(by_insert.value)
+
+        with db.engine.connect() as conn:
+            with pytest.raises(exc.IntegrityError) as by_update:
+                conn.execute(text("UPDATE user_models SET is_default = 1 "
+                                  "WHERE user_id = :u AND name = :n"),
+                             {"u": probe_user.id, "n": "p5-keep-other"})
+            conn.rollback()
+        assert "1062" in str(by_update.value)
+
+        # 另一个人立默认是**该允许的**：guard 值 = user_id，两人各一枚时是两枚不同的键
+        with db.engine.connect() as conn:
+            conn.execute(text("INSERT INTO user_models (user_id, name, is_default) "
+                              "VALUES (:u, :n, 1)"), {"u": other.id, "n": "p5-b-default"})
+            conn.commit()
+
+        # 同一人再加一枚非默认：唯一索引不管 NULL，写成 `unique(user_id, is_default)`
+        # 会把这一句直接拦死（那条路实测建得出来，但语义错了）
+        assert db.add_user_model(probe_user.id, "p5-third") is True
+
+        models = db.list_user_models(probe_user.id)
+        assert [n for n, d in models if d] == ["p5-keep"], f"名单里冒出多枚默认：{models}"
+        # 相对增长而不是绝对条数：probe_user 是 module 级共享账号，别的判据在它名下
+        # 加过几行数不出一个稳定的常数，写死就等于把这条判据绑在测试执行顺序上。
+        assert len(models) == len(before) + 1, f"第三枚非默认没进去：{before} → {models}"
+    finally:
+        _drop_probe_account(db, other.id)
+        with db.engine.connect() as conn:          # 万一守卫没生效，那次"该失败"的 INSERT 会留下行
+            conn.execute(text("DELETE FROM user_models WHERE name = 'p5-second-default'"))
+            conn.commit()
+
+
+def test_add_user_model_retries_as_non_default_when_the_guard_race_wins(db, probe_user,
+                                                                        monkeypatch):
+    """⑤ 的新分支要有牙：并发下「判空读到旧快照 → 插入撞守卫键」不能把用户挡在门外。
+
+    不用真线程复现竞态（要稳定赢很难），改成把 `get_session` 包一层：只把
+    `add_user_model` 里**判空那一次**查询的 `first()` 钉成 None，等价于"这个事务的快照里
+    名单是空的"，而真表里已经有一枚默认。于是 INSERT 带着 `is_default=1` 出门，
+    被 `uq_user_models_single_default` 当场 1062。
+
+    没有那个分支（`except IntegrityError` 直接 `return False`）时这里红在返回值上：
+    端点会对一个**名单里根本没有的**名字回 409「该模型已在你的名单里」——那是 ⑤ 自己带来的谎，
+    而且是双击两次"添加"就能撞到的那种（两个不同名字，第二个也以为自己是第一个）。
+    """
+    real_factory = db.get_session
+    spoofed = []                        # 命中钩子的那次查询的 SQL，同时当"只 spoof 一次"的开关
+
+    class _StaleSnapshot:
+        """把「只按 user_id 过滤」那一次 first() 改成 None，其余逐字转给真会话。
+
+        认领条件是 SQL 文本而不是调用次数：`add_user_model` 里查重那次带 `user_models.name`、
+        判空那次只带 `user_models.user_id`。按次数认领会被将来的一次查询重排无声改掉，
+        按行号认领会更早就失效。
+        """
+
+        def __init__(self, real):
+            self._real = real
+
+        def query(self, *args, **kwargs):
+            inner = self._real.query(*args, **kwargs)
+
+            class _Q:
+                def filter(self, *fa, **fk):
+                    q = inner.filter(*fa, **fk)
+
+                    class _F:
+                        def first(_self):
+                            sql = str(q).lower()
+                            if (not spoofed and "user_models.user_id" in sql
+                                    and "user_models.name" not in sql):
+                                spoofed.append(sql)
+                                return None
+                            return q.first()
+
+                        def __getattr__(self, n):
+                            return getattr(q, n)
+
+                    return _F()
+
+                def __getattr__(self, n):
+                    return getattr(inner, n)
+
+            return _Q()
+
+        def __getattr__(self, n):
+            return getattr(self._real, n)
+
+    assert db.add_user_model(probe_user.id, "p5-race-anchor") is True
+    assert db.set_default_user_model(probe_user.id, "p5-race-anchor") is True
+    monkeypatch.setattr(db, "get_session", lambda: _StaleSnapshot(real_factory()))
+    try:
+        assert db.add_user_model(probe_user.id, "p5-race") is True, (
+            f"撞守卫键之后没把这一枚加成非默认（钩子命中：{spoofed}）")
+    finally:
+        monkeypatch.undo()
+
+    assert len(spoofed) == 1, f"判空那次查询没被改成旧快照，这条判据是空跑的：{spoofed}"
+    models = db.list_user_models(probe_user.id)
+    assert "p5-race" in [n for n, _d in models], models
+    # 输掉竞争的那一方**不该**抢走默认位：现任默认还是 anchor
+    assert [n for n, d in models if d] == ["p5-race-anchor"], f"重试把默认位抢走了：{models}"
+
+
 def test_empty_profile_update_touches_nothing(db, probe_user):
     """两个字段都没传就该零副作用，而不是把昵称写成 NULL。"""
     before = db.get_user_by_id(probe_user.id).nickname

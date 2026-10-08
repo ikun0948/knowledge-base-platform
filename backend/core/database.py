@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy import create_engine, func, Column, Integer, String, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint, Computed
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
@@ -7,6 +7,9 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 
 from exceptions import StorageError
+# 方向是 database → migrations：生成列的表达式归迁移那侧（已部署库的 ALTER 由它发），
+# ORM 声明只是新库那一腿。`core/migrations.py` 只依赖标准库与 sqlalchemy，不成环。
+from core.migrations import SINGLE_DEFAULT_GUARD_EXPR
 
 logger = logging.getLogger("kb.database")
 
@@ -162,10 +165,21 @@ class UserModel(Base):
     # 三个地方三种上界，早晚有一个会把用户的输入切掉半截。
     name = Column(String(100), nullable=False)
     is_default = Column(Boolean, nullable=False, default=False)
+    # ⑤ 的引擎守卫列：没人写它、也不该有人写它——MySQL 按表达式算，默认行算出 `user_id`、
+    # 非默认行算出 NULL，而下面那枚唯一索引**不管 NULL**。于是"同一人可以有几枚非默认行"
+    # 与"每人至多一枚默认"这两件事同时成立，都由引擎兜着，不再靠应用层记得写那句 WHERE。
+    # 表达式从 core/migrations.py import，不是在这里再敲一遍：新库走 create_all、
+    # 已部署库走 ALTER，两处各写一份迟早分叉（同源判据在 tests/test_user_models_db.py）。
+    default_guard = Column(Integer, Computed(SINGLE_DEFAULT_GUARD_EXPR, persisted=True),
+                           nullable=True)
 
     __table_args__ = (
         UniqueConstraint('user_id', 'name', name='uq_user_models_user_name'),
         Index('idx_user_models_user_id', 'user_id'),
+        # 只盖 `default_guard` 这一列。多盖一列（`unique(default_guard, user_id)`）照样建得出来、
+        # 照样绿，但它管的是"组合"，每个用户仍能有任意多枚默认。这里的名字与列都是字面量，
+        # 与 core/migrations.py 的 MIGRATED_UNIQUE_INDEXES 对撞由 tests/test_user_models_db.py 钉住。
+        Index('uq_user_models_single_default', 'default_guard', unique=True),
     )
 
 
@@ -700,7 +714,11 @@ class DatabaseManager:
             session.close()
 
     def add_user_model(self, user_id, name) -> bool:
-        """True = 新增；False = 名单里已经有了（端点据此回 409）。
+        """True = 新增；False = 名单里**已经有了这个名字**（端点据此回 409）。
+
+        ⑤ 之后这句 False 的口径是钉死的：另一枚键（`uq_user_models_single_default`）撞了
+        **不**算 False，会补插成非默认再回 True。否则端点会对一个名单里根本没有的名字
+        回「该模型已在你的名单里」——那是一句没人能查下去的谎。
 
         **名单原本为空时这一枚自动成为默认**（计划级补全，spec 未写）：只配了一个模型的
         用户从来不会去点"设为默认"，没有这一步他的名单就是"有一个人、一个默认都没有"，
@@ -724,7 +742,24 @@ class DatabaseManager:
         except IntegrityError:
             # 上面那次预查挡不住并发：两个请求同时"查不到"就同时插，unique 键才是唯一真相
             session.rollback()
-            return False
+            # ⑤ 之后"撞键"分成两回事，回滚之后再查一次名字就把它们分开了：
+            # ① 名字真在名单里 ⇒ False，端点回 409「该模型已在你的名单里」说的是真话；
+            # ② 名字不在名单里 ⇒ 只可能撞在 `uq_user_models_single_default` 上：另一个事务
+            #    刚立了默认，而这里的 `is_first` 读的是旧快照（还以为名单是空的）。
+            #    这一枚必须补插成**非默认**——NULL 不参与唯一比较，所以这一次不可能再撞守卫键。
+            # 不分开就是 ⑤ 自己引入的谎：用户拿到 409「已在你的名单里」，可他名单里根本没有，
+            # 而且他要的那枚也没进去。双击两次"添加"（两个不同名字）就能撞到这个窗口。
+            if session.query(UserModel.id).filter(UserModel.user_id == user_id,
+                                                  UserModel.name == name).first():
+                return False
+            try:
+                session.add(UserModel(user_id=user_id, name=name, is_default=False))
+                session.commit()
+            except IntegrityError:
+                # 窗口里同一名字被别的请求抢先加上了：这一次才是"名单里已经有了"
+                session.rollback()
+                return False
+            return True
         finally:
             session.close()
 
@@ -751,6 +786,15 @@ class DatabaseManager:
 
         分两次调用（先全清再立）会在两次之间留下"零个默认"或"两个默认"的中间态，
         而问答链正好读这个值决定用哪个模型。
+
+        Ruling（⑤ 之后）：**不**把这两句合成一条 `SET is_default = (name = :t)`。
+        看着更原子，实测却顺序依赖——目标那枚的 id 排在现任默认**之前**时，MySQL 按主键序
+        逐行改写，会先撞上 `uq_user_models_single_default` 回 1062；id 排在之后才成功。
+        现在这个两句形状（先清别人、再立目标）在两个方向上都实测通过。
+
+        输掉并发的窗口（另一个事务在同一时刻立了默认）：这一句会以 1213（死锁）或 1062
+        冒成 500，但**不变量仍然成立**（库里还是只有一枚默认）。写一段没测过的重试比 500
+        更贵，所以留原样、代价记进台账的挂账。
         """
         session = self.get_session()
         try:
