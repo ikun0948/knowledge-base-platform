@@ -2,18 +2,13 @@
 import { computed, reactive, ref, watch } from 'vue'
 
 import { useAuth } from '../composables/useAuth.js'
+import { EMAIL_RE, NICKNAME_MAX, PASSWORD_MAX, PASSWORD_MIN, PHONE_RE } from '../constants.js'
 
-// 与后端 schemas/auth.py 同一套口径（那边才是权威；改动要两边一起改）。
 // 这里不是防线，只是让人少跑一趟网络：绕过界面直接打 /api/auth/register 照样 422。
 // **只有注册分支用这两条正则**：后端 LoginIn 对账号形状完全不验（只 strip，含 @ 才归一小写），
 // 所以登录 tab 也不验——本地一加校验就比后端严，而 core/migrations.py 的 DEFAULT_IDENTIFIER
 // 是启动期迁移直接 INSERT 进 users 的 `default@local`，域名没有点、过不了 EMAIL_RE，
 // 那正是界面上唯一的旧数据入口。新增登录入口（阶段二的用户名登录）时不要顺手在这里补校验。
-const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
-const PHONE_RE = /^1[3-9]\d{9}$/
-const PASSWORD_MIN = 6
-const PASSWORD_MAX = 64
-const NICKNAME_MAX = 50 // 对齐 users.nickname 的 String(50)
 
 const emit = defineEmits(['submit'])
 // authBusy/authError 是模块级 ref：谁发起登录都是同一份忙态与文案，
@@ -121,7 +116,7 @@ function submit() {
           class="picker-input"
           type="password"
           :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-          placeholder="至少 6 位"
+          :placeholder="`至少 ${PASSWORD_MIN} 位`"
         />
       </label>
 

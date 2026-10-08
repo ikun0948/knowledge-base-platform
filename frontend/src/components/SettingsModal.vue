@@ -5,6 +5,7 @@ import {
   addModel, removeModel, setDefaultModel, updateLlmConfig, updatePassword, updateProfile,
 } from '../api/auth.js'
 import { useAuth } from '../composables/useAuth.js'
+import { AVATARS, AVATAR_LABELS, MODEL_NAME_MAX, NICKNAME_MAX, PASSWORD_MIN } from '../constants.js'
 
 const emit = defineEmits(['close'])
 
@@ -13,16 +14,6 @@ const emit = defineEmits(['close'])
 // 这个项目不引 Pinia（spec 5.1），代价就是组件要么自己 import composable，要么当纯展示件。
 // 本弹窗有写动作，所以走 import。
 const { user, patchMe } = useAuth()
-
-// 预设头像：与 backend/api/auth.py:27 的 AVATARS 同源（Task 2）。改动必须两处一起，
-// 漏一处的表征是"界面能选出一个后端必拒 422 的值"。'auto' 不是图片，是"用昵称首字母"的编码。
-const AVATARS = ['auto', '😀', '🤖', '🦊', '🐼', '🚀']
-const AVATAR_LABELS = { auto: '昵称首字母', '😀': '笑脸', '🤖': '机器人', '🦊': '狐狸', '🐼': '熊猫', '🚀': '火箭' }
-
-// 口令长度门槛：`backend/schemas/auth.py:13` 是 PASSWORD_MIN = 6，
-// `AuthPanel.vue:14` 早已本地写死 6。这里是第三处副本——项目没有跨端共享常量层，
-// 改后端下限必须三处一起改，漏一处的表征是"注册能过、改密码被本地拦"或反过来。数值不许自创。
-const PASSWORD_MIN = 6
 
 // 回填只发生在 setup 这一次：弹窗每次都是 v-if 新挂载的（见 App.vue），
 // 所以"打开时看到的就是当前值"由挂载时机保证，不需要 watch user。
@@ -150,7 +141,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <div class="settings-body">
         <section class="settings-section">
           <h4 class="settings-heading">昵称与头像</h4>
-          <input class="settings-input settings-nickname-input" type="text" maxlength="50"
+          <input class="settings-input settings-nickname-input" type="text" :maxlength="NICKNAME_MAX"
                  aria-label="昵称" v-model="profile.nickname" />
           <div class="settings-avatars">
             <button v-for="item in AVATARS" :key="item" type="button" class="settings-avatar"
@@ -202,7 +193,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           </ul>
           <p v-else class="settings-hint">名单是空的——没有模型可选，问答会直接返回 409。</p>
           <form class="settings-add-model" @submit.prevent="submitModel">
-            <input class="settings-input settings-model-input" type="text" maxlength="100"
+            <input class="settings-input settings-model-input" type="text" :maxlength="MODEL_NAME_MAX"
                    aria-label="新模型名" placeholder="例如 qwen-max" v-model="modelDraft" />
             <button class="btn btn-small settings-model-add" type="submit"
                     :disabled="busy !== ''">添加</button>
