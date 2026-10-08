@@ -100,8 +100,10 @@ class ChatHistory(Base):
     document_ids = Column(String(500))  # 存储使用的文档ID，逗号分隔
     used_chunks = Column(Text)  # JSON格式存储使用的文档块信息
     created_at = Column(DateTime, default=datetime.now)
-    # 阶段二才有的归属列。裸 DDL（migrations.add_column）不会加出外键约束，
-    # 这里的 ForeignKey 只为 create_all 与关系可读服务——documents.user_id 从阶段一起就是同一状态。
+    # 阶段二才有的归属列。外键有两处出口：create_all 建的新库上叫 chat_history_ibfk_1，
+    # 已部署库上由 core/migrations.py 的 ensure_foreign_keys 补成 fk_chat_history_user_id。
+    # 名字不同、事实相同（所以迁移按"这一列有没有外键"查，不按名字查），两处都不带
+    # ON DELETE：删账号会被 MySQL 拦下，向量和行要两头删。
     user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
 
     # 索引

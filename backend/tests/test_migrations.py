@@ -1,8 +1,10 @@
-"""迁移的纪律：缺列才 ALTER、已戳不再写、重复跑零副作用、口令空则账号不可登录，
+"""迁移的纪律：缺列才 ALTER、缺外键才 ADD CONSTRAINT（且问的是"这一列有没有外键"，
+不是"有没有那个名字"）、已戳不再写、重复跑零副作用、口令空则账号不可登录，
 步骤 4 抄 `.env` 三键时一人至多立一枚默认。
 
 这里用假 Connection 记录发出去的 SQL，为的是把"先查再改"这个决策本身钉死——
-真 MySQL 上的 ALTER 语义归 live 组，那是另一条判据。
+真 MySQL 上的 ALTER 语义归 live 组，那是另一条判据。外键也一样：它在真库上建成没有、
+RESTRICT 拦不拦得住删账号，都在 live 组。
 """
 
 from core import migrations
@@ -18,16 +20,26 @@ class FakeConn:
     """只实现 migrations 用到的那几件事：查 information_schema、执行 DDL、跑 SELECT/UPDATE。"""
 
     def __init__(self, existing_columns=(), user_rows=(), owned_doc_ids=(),
-                 existing_indexes=(), user_models=(), chat_unowned=3):
+                 existing_indexes=(), user_models=(), chat_unowned=3, existing_fks=(),
+                 existing_orphans=()):
         self.columns = set(existing_columns)          # {("documents", "user_id")}
         self.indexes = {(t, i) for (t, i) in existing_indexes}   # {("documents", "idx_documents_user_id")}
+        # 外键按 **(表, 列)** 存，约束名只是带着的注脚：真库上 create_all 建出来的叫
+        # `documents_ibfk_1`，迁移建出来的叫 `fk_documents_user_id`，生产码问的是"这一列有没有外键"，
+        # 问名字就会在新库上再叠一枚重复外键（InnoDB 不拦）。
+        self.fks = {(t, c): n for (t, c, n) in existing_fks}
+        # "有几行的 user_id 指向已经不存在的账号"在这里是个**给定值**：假连接不会去 join users 算，
+        # 这条判据要钉的是"数出来了会去归户、且赶在 ALTER 之前"，孤儿判定本身的 SQL 语义归 live 组。
+        self.orphans = dict(existing_orphans)         # {"chat_history": 43}
         self.users = list(user_rows)                  # [(id, identifier)]
         self.owned_docs = set(owned_doc_ids)          # 已有 user_id 的文档 id
         self.inserted = []                            # INSERT INTO users 的参数，用来验写了哪个哈希
         self.llm = {}                                 # 默认用户手上的 api_key/base_url（步骤 4 写它）
         self.user_models = list(user_models)          # [(user_id, name, is_default)]
         self.chat_unowned = chat_unowned              # user_id IS NULL 的历史行数
+        self.indexed_columns = set()                  # CREATE INDEX 覆盖到的 (表, 列)，顺序判据用它
         self.executed = []                            # 记 DDL/DML，SELECT 不记
+        self.reclaims = []                             # [(表, uid)]：孤儿行归户打给了谁，绑定参数不在 SQL 文本里
 
     def execute(self, sql, params=None):
         text = str(sql)
@@ -41,6 +53,20 @@ class FakeConn:
             table, index = params["table"], params["index"]
             rows = [(i,) for (t, i) in self.indexes if t == table and i == index]
             return _Result(rows)
+        if head.startswith("SELECT CONSTRAINT_NAME"):
+            table, column = params["table"], params["column"]
+            return _Result([(name,) for (t, c), name in self.fks.items()
+                            if t == table and c == column])
+        if head.startswith("ALTER TABLE") and "ADD CONSTRAINT" in head:
+            # 必须排在下面那条 `ALTER TABLE`（ADD COLUMN）之前：那条要按 ADD COLUMN 切串，
+            # 撞上来只会切出 IndexError，把"外键这件事"的错报成"列这件事"的错。
+            self.executed.append(text)
+            table = text.split()[2].strip("`")
+            # 与上面 CREATE INDEX 分支同一种切法：只按 "(" 切会留着 ") REFERENCES `users`"，
+            # 键存错了第二遍就查不到，"重跑交白卷"会红在夹具身上而不是生产码身上。
+            column = text.split("FOREIGN KEY")[1].split("(")[1].split(")")[0].strip().strip("`")
+            self.fks[(table, column)] = text.split("CONSTRAINT")[1].split()[0].strip("`")
+            return _Result([])
         if head.startswith("ALTER TABLE"):
             self.executed.append(text)
             table = text.split()[2].strip("`")
@@ -57,9 +83,23 @@ class FakeConn:
             self.executed.append(text)
             index = text.split()[2].strip("`")
             self.indexes.add((table, index))
+            self.indexed_columns.add((table, column))
             return _Result([])
         if head.startswith("SELECT COUNT(*) FROM CHAT_HISTORY"):
             return _Result([(self.chat_unowned,)])
+        if head.startswith("SELECT COUNT(*) AS ORPHANS"):
+            # 必须排在下面那条通用 `SELECT COUNT`（数 users）之前：那条按前缀认领，
+            # 撞上来只会把孤儿数报成账号数。表名取 FROM 之后的第一段。
+            table = text.split("FROM")[1].split()[0].strip("`")
+            return _Result([(self.orphans.get(table, 0),)])
+        if head.startswith("UPDATE") and "NOT IN (SELECT ID FROM USERS)" in head:
+            # 这一句也以 `UPDATE DOCUMENTS` / `UPDATE CHAT_HISTORY` 开头，所以必须抢在那两条之前：
+            # 那两条把这次改动记成"NULL 归户"，孤儿数就永远不清零，第二遍的白卷判据会假红。
+            self.executed.append(text)
+            table = text.split()[1].strip("`")
+            self.orphans[table] = 0
+            self.reclaims.append((table, params["uid"]))
+            return _Result([])
         if head.startswith("UPDATE CHAT_HISTORY"):
             self.executed.append(text)
             self.chat_unowned = 0                   # 归户之后不再有 NULL 行：重跑零副作用
@@ -221,6 +261,132 @@ def test_ensure_indexes_creates_only_when_missing():
                                        ("chat_history", "idx_chat_history_user_id")])
     assert migrations.ensure_indexes(conn2) == []
     assert conn2.executed == []
+
+
+def test_ensure_foreign_keys_alters_only_when_missing():
+    """老库上的 `documents.user_id` / `chat_history.user_id` 是**裸列**：裸 DDL 的 ADD COLUMN
+    加不出外键约束（阶段三 ④ 的全部内容）。不补的后果不是读错，是将来做「注销账号」时
+    用户名下的行谁都不删、静静变成孤儿。
+    """
+    conn = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")])
+    assert migrations.ensure_foreign_keys(conn) == [
+        ("documents", "fk_documents_user_id"),
+        ("chat_history", "fk_chat_history_user_id"),
+    ]
+    assert len(conn.executed) == 2
+    assert "ADD CONSTRAINT" in conn.executed[0] and "FOREIGN KEY" in conn.executed[0]
+
+    stamped = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")],
+                       existing_fks=[("documents", "user_id", "fk_documents_user_id"),
+                                     ("chat_history", "user_id", "fk_chat_history_user_id")])
+    assert migrations.ensure_foreign_keys(stamped) == []
+    assert stamped.executed == [], "已经有外键还发 ALTER：MySQL 会回 1826（约束名撞车）"
+
+
+def test_ensure_foreign_keys_asks_about_the_column_not_the_constraint_name():
+    """`create_all` 建出来的新库带着 `documents_ibfk_1`，与迁移建的那套**名字不同**，
+    但"这一列已经有外键"是同一个事实。按名字问就会在每个新库上再叠一枚重复外键
+    （InnoDB 不拦同名之外的重复，它会安静收下）。
+    """
+    conn = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")],
+                    existing_fks=[("documents", "user_id", "documents_ibfk_1"),
+                                  ("chat_history", "user_id", "chat_history_ibfk_1")])
+    assert migrations.ensure_foreign_keys(conn) == []
+    assert conn.executed == [], "按约束名查的写法会在这里红：新库不该被补第二枚"
+
+
+def test_ensure_foreign_keys_never_cascades_at_the_mysql_level():
+    """RESTRICT（不写 ON DELETE 就是它）是刻意的：文档行在 MySQL，向量在 Chroma，
+    MySQL 的级联**带不走向量**。写 ON DELETE CASCADE 等于把"行没了、向量还在"变成默认行为，
+    而那正是本仓一路在防的召回脏数据。要删就得走应用层两头删。
+    """
+    conn = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")])
+    migrations.ensure_foreign_keys(conn)
+    assert len(conn.executed) == 2
+    for ddl in conn.executed:
+        assert "ON DELETE" not in ddl.upper(), f"外键带了级联：{ddl[:120]}"
+        assert "REFERENCES `users` (`id`)" in ddl, f"外键没指到 users(id)：{ddl[:120]}"
+
+
+def test_reclaim_orphaned_owners_sends_dead_rows_back_to_the_default_user():
+    """补 FK 之前必须先清孤儿——这一步不是洁癖，是"后端起得来起不来"。
+
+    2026-10-08 直查真库量到的现状：`chat_history` 43 行的 user_id **全是 1**，而 users 表里
+    只剩 30（default@local）和 338 两行。默认账号被重铸过、id 从 1 漂到 30，而这 43 行当年
+    写进去时就带着值（非 NULL），`backfill_chat_history` 只捡 `IS NULL` 的行 ⇒ 它们从此
+    谁也读不到（历史按 user_id 收窄）、谁也删不掉。带着孤儿去 `ADD CONSTRAINT`，MySQL 当场回
+    errno 1452；而 `run_migrations` 挂在 lifespan 且没有 try/except（main.py）⇒ 整台后端起不来。
+    """
+    conn = FakeConn(existing_columns=[("documents", "user_id"), ("chat_history", "user_id")],
+                    existing_orphans={"documents": 0, "chat_history": 43})
+    assert migrations.reclaim_orphaned_owners(conn, user_id=30) == [("chat_history", 43)]
+    assert len(conn.executed) == 1
+    assert "NOT IN (SELECT id FROM users)" in conn.executed[0]
+    assert conn.reclaims == [("chat_history", 30)], (
+        "归户归错了人：这批行要交给**默认用户**（改造前那一个人在用），不是随便一个 id"
+    )
+
+    assert migrations.reclaim_orphaned_owners(conn, user_id=30) == []
+    assert len(conn.executed) == 1, "第二遍又发 UPDATE：幂等破了"
+
+
+def test_reclaim_orphaned_owners_runs_before_the_foreign_keys():
+    """顺序判据：孤儿行赶在 `ADD CONSTRAINT` 之前清掉，并且归户数要进 summary（可数、重跑交白卷）。"""
+    conn = FakeConn(existing_orphans={"chat_history": 43})
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    first = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    ddl = conn.executed
+
+    reclaim_at = min(i for i, s in enumerate(ddl) if "NOT IN (SELECT id FROM users)" in s)
+    fk_at = min(i for i, s in enumerate(ddl) if "ADD CONSTRAINT" in s)
+    assert reclaim_at < fk_at, (
+        f"孤儿归户口在第 {reclaim_at} 条、ADD CONSTRAINT 在第 {fk_at} 条：顺序一反，"
+        "真库上 ALTER 回 1452，lifespan 没兜异常 ⇒ 后端开不了机"
+    )
+    assert first["orphan_rows_reclaimed"] == [("chat_history", 43)]
+
+    second = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    assert second["orphan_rows_reclaimed"] == []
+    assert sum(1 for s in conn.executed if "NOT IN (SELECT id FROM users)" in s) == 1, (
+        "第二遍又去归户：孤儿已经清了，这一步该交白卷"
+    )
+
+
+def test_run_migrations_adds_the_keys_after_the_indexes():
+    """索引必须早于外键。InnoDB 建外键时如果列上没有可用索引，会**自己**补一枚
+    （名字就是约束名），之后 `ensure_indexes` 再按我们的名字补一枚 ⇒ 同一列两枚索引，
+    白付一半的写放大，而且没人会报错。
+    """
+    conn = FakeConn()
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+
+    ddl = conn.executed
+    fk_at = min(i for i, s in enumerate(ddl) if "ADD CONSTRAINT" in s)
+    index_at = max(i for i, s in enumerate(ddl) if s.startswith("CREATE INDEX"))
+    assert fk_at > index_at, (
+        f"第 {fk_at} 条就是 ADD CONSTRAINT，最后一条 CREATE INDEX 在第 {index_at} 条："
+        "外键跑到了索引前面，同列会长出两枚索引"
+    )
+    assert conn.indexed_columns >= {("documents", "user_id"), ("chat_history", "user_id")}, (
+        "补外键时这两列还没有索引：ensure_indexes 没在 ensure_foreign_keys 之前跑"
+    )
+
+
+def test_run_migrations_reports_foreign_keys_and_goes_quiet_on_the_second_pass():
+    """`foreign_keys_added` 是可数的：判据不吃日志，重跑必须交白卷。"""
+    conn = FakeConn()
+    client = FakeChroma({"parent_document": FakeCollection({}), "child_document": FakeCollection({})})
+    first = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    assert first["foreign_keys_added"] == [("documents", "fk_documents_user_id"),
+                                           ("chat_history", "fk_chat_history_user_id")]
+
+    second = migrations.run_migrations(FakeEngine(conn), client, MigrationConfig())
+    assert second["foreign_keys_added"] == []
+    assert second["columns_added"] == [] and second["indexes_added"] == []
+    # 数的是"含 ADD CONSTRAINT 的那几条"：executed 存整句 SQL，`.count("ADD CONSTRAINT")`
+    # 比的是整元素相等，只会永远数到 0，把幂等判据变成假绿。
+    assert sum(1 for s in conn.executed if "ADD CONSTRAINT" in s) == 2, "第二遍又发了 ALTER：幂等破了"
 
 
 def test_ensure_default_user_is_idempotent_and_tolerates_empty_password():
@@ -413,4 +579,9 @@ def test_default_identifier_is_the_one_the_spec_names():
     assert migrations.MIGRATED_INDEXES == [
         ("documents", "user_id", "idx_documents_user_id"),
         ("chat_history", "user_id", "idx_chat_history_user_id"),
+    ]
+    # 第三组：外键。(表, 列, 约束名, 引用表)。多一枚、少一枚、或者把约束名换掉，都要过这条评审。
+    assert migrations.MIGRATED_FOREIGN_KEYS == [
+        ("documents", "user_id", "fk_documents_user_id", "users"),
+        ("chat_history", "user_id", "fk_chat_history_user_id", "users"),
     ]

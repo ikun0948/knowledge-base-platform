@@ -1,11 +1,13 @@
-"""启动期一次性改造：建表之后补列、补索引、造默认用户、旧数据归户、把 `.env` 的三键抄给
+"""启动期一次性改造：建表之后补列、补索引、补外键、造默认用户、旧数据归户（既捡 `user_id IS NULL`
+的行，也把指向不存在账号的孤儿行交还默认用户——后者是补外键的前置）、把 `.env` 的三键抄给
 默认用户、旧向量补戳。
 
 三句写在这里的话不能丢：
 ① 每一步都必须幂等——lifespan 每次开机都跑，开发者本地库和部署库进度不齐是常态；
-② MySQL 没有 `ADD COLUMN IF NOT EXISTS`（`CREATE INDEX` 同样没有 IF NOT EXISTS），所以
-   "先查 information_schema 再 ALTER"不是洁癖，是唯一写法；`Base.metadata.create_all`
-   对已存在的表整表跳过，补不出列也补不出索引（core/database.py 的 init_database）。
+② MySQL 没有 `ADD COLUMN IF NOT EXISTS`（`CREATE INDEX` 同样没有，外键的
+   `ADD CONSTRAINT` 也没有 IF NOT EXISTS），所以"先查 information_schema 再 ALTER"不是洁癖，
+   是唯一写法——列查 COLUMNS、索引查 STATISTICS、外键查 KEY_COLUMN_USAGE；
+   `Base.metadata.create_all` 对已存在的表整表跳过，补不出列也补不出索引（core/database.py 的 init_database）。
 ③ 补向量戳**只改 metadata，绝不重新嵌入**：重嵌一遍全库子块（2026-10-07 重钉的基线是
    10 条）要再加载一次 0.6B 模型，而且会改变已经验过的向量，把迁移变成一次重新灌库。
 """
@@ -41,6 +43,15 @@ MIGRATED_COLUMNS = [
 MIGRATED_INDEXES = [
     ("documents", "user_id", "idx_documents_user_id"),
     ("chat_history", "user_id", "idx_chat_history_user_id"),
+]
+
+# (表, 列, 约束名, 引用表)。阶段一/二给这两列发的是裸 `ALTER TABLE ... ADD COLUMN`，
+# 那句 DDL 加不出外键；`create_all` 又对已存在的表整表跳过 ⇒ 已部署库上"documents.user_id
+# 引用 users.id"只活在 core/database.py 的 Column 声明里，MySQL 并不知道。缺了它不会读错数据，
+# 但将来做「注销账号」时没有任何东西拦着孤儿行——那笔账要到删数据那天才结。
+MIGRATED_FOREIGN_KEYS = [
+    ("documents", "user_id", "fk_documents_user_id", "users"),
+    ("chat_history", "user_id", "fk_chat_history_user_id", "users"),
 ]
 
 
@@ -96,6 +107,82 @@ def ensure_indexes(conn) -> list:
             created.append((table, index))
     conn.commit()
     return created
+
+
+def foreign_key_exists(conn, table: str, column: str, ref_table: str) -> bool:
+    """问的是"**这一列**有没有指向 users 的外键"，不是"有没有 `fk_documents_user_id` 那个名字"。
+
+    名字会因库而异：`create_all` 建出来的外键叫 `documents_ibfk_1`，本迁移建出来的叫
+    `fk_documents_user_id`。按名字查的写法会在每一个新建库上再叠一枚同列外键——InnoDB
+    对不同的约束名不拦，它会安静收下，然后每次校验做两遍。
+    """
+    rows = conn.execute(
+        text("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table "
+             "AND COLUMN_NAME = :column AND REFERENCED_TABLE_NAME = :ref_table"),
+        {"table": table, "column": column, "ref_table": ref_table},
+    ).fetchall()
+    return bool(rows)
+
+
+def add_foreign_key(conn, table: str, column: str, constraint: str, ref_table: str) -> None:
+    # 与 add_column/add_index 同一条理由：DDL 不接受绑定参数，四个值只可能来自 MIGRATED_FOREIGN_KEYS。
+    # 故意不写 ON DELETE：MySQL 的默认是 RESTRICT，而级联删除在这里是**要避免**的行为——文档正文在
+    # MySQL、向量在 Chroma，MySQL 的级联带不走向量，写 CASCADE 等于把"行没了、向量还能被召回"
+    # 变成开机即定的默认行为。要删就走应用层两头删（core/database.py 的删除路径）。
+    conn.execute(text(f"ALTER TABLE `{table}` ADD CONSTRAINT `{constraint}` "
+                      f"FOREIGN KEY (`{column}`) REFERENCES `{ref_table}` (`id`)"))
+
+
+def ensure_foreign_keys(conn) -> list:
+    """返回这次真的补上的 (表, 约束名)。必须排在 ensure_indexes 之后：列上没有可用索引时
+    InnoDB 会自己补一枚（名字就是约束名），随后 ensure_indexes 再按我们的名字补一枚，
+    同一列两枚索引没人报错，只是每次写多付一半的开销。
+    """
+    added = []
+    for table, column, constraint, ref_table in MIGRATED_FOREIGN_KEYS:
+        if not foreign_key_exists(conn, table, column, ref_table):
+            add_foreign_key(conn, table, column, constraint, ref_table)
+            added.append((table, constraint))
+    conn.commit()
+    return added
+
+
+def orphaned_owner_count(conn, table: str, column: str) -> int:
+    """有几行的归属列"**有值但那个账号已经不在了**"。
+
+    先数再改、不拿 `UPDATE` 的 rowcount：本仓的 MySQL 方言硬带了 CLIENT_FOUND_ROWS，
+    同值重写照样回 1（见 project knowledge 里那条 rowcount 备忘），拿它当"改了几行"不可信。
+    """
+    rows = conn.execute(
+        text(f"SELECT COUNT(*) AS orphans FROM `{table}` "
+             f"WHERE `{column}` IS NOT NULL AND `{column}` NOT IN (SELECT id FROM users)")).fetchall()
+    return rows[0][0]
+
+
+def reclaim_orphaned_owners(conn, user_id: int) -> list:
+    """把指向不存在账号的行交还给默认用户，返回 [(表, 行数)]。
+
+    孤儿是怎么来的（2026-10-08 真库实测：chat_history 43 行全指 user_id=1，users 里只剩 30/338）：
+    默认账号被重铸过一次、id 从 1 漂到 30，而那 43 行当年写入时就带着值，`backfill_chat_history`
+    只捡 `IS NULL` 的行 ⇒ 从此读不到（历史按 user_id 收窄）也删不掉。
+
+    为什么归默认用户而不是删：与 backfill_* 同一个前提——改造前只有那一个人在用，行里没有
+    任何别的归属线索；归户是把数据交还唯一的失主，删是替用户做决定。
+    为什么必须赶在 `ADD CONSTRAINT` 之前：带着孤儿建外键，MySQL 回 errno 1452，而 lifespan 里的
+    `run_migrations` 不兜异常（main.py）——顺序一反，症状是"后端开不了机"。
+    FK 建好之后 RESTRICT 会让新孤儿产生不了（本仓也没有删账号的入口），这一步就只剩一次 COUNT。
+    """
+    reclaimed = []
+    for table, column, _constraint, _ref_table in MIGRATED_FOREIGN_KEYS:
+        count = orphaned_owner_count(conn, table, column)
+        if count:
+            conn.execute(text(f"UPDATE `{table}` SET `{column}` = :uid "
+                              f"WHERE `{column}` IS NOT NULL AND `{column}` NOT IN (SELECT id FROM users)"),
+                         {"uid": user_id})
+            reclaimed.append((table, count))
+    conn.commit()
+    return reclaimed
 
 
 def ensure_default_user(conn, password: str) -> int:
@@ -252,6 +339,11 @@ def run_migrations(engine, chroma_client, config) -> dict:
         user_id = ensure_default_user(conn, config.DEFAULT_USER_PASSWORD)
         docs = backfill_documents(conn, user_id)
         chats = backfill_chat_history(conn, user_id)
+        # 索引 → 归户 → 外键，这三步的相对位置是钉死的：
+        # ① 外键晚于索引，否则 InnoDB 替缺索引的列自建一枚（名字就是约束名），我们那枚再补一次；
+        # ② 外键晚于孤儿归户，否则 ALTER 回 errno 1452，而 lifespan 不兜异常 ⇒ 后端起不来。
+        orphans = reclaim_orphaned_owners(conn, user_id)
+        foreign_keys = ensure_foreign_keys(conn)
         seed = seed_default_llm(conn, user_id, config.OPENAI_API_KEY,
                                 config.OPENAI_BASE_URL, config.LLM_MODEL)
         # 补戳清单现在读的是"有主人的向量"，必须在归户之后：顺序一反，第一次开机就拿到空集
@@ -259,6 +351,8 @@ def run_migrations(engine, chroma_client, config) -> dict:
     # 补戳放在连接之外：Chroma 那边可能是一次几秒的只读扫描，别把 MySQL 连接摁在它上面
     vectors = stamp_vector_owner(chroma_client, pending)
     summary = {"columns_added": added, "indexes_added": indexes,
+               "orphan_rows_reclaimed": orphans,
+               "foreign_keys_added": foreign_keys,
                "default_user_id": user_id, "documents_claimed": docs,
                "chat_rows_claimed": chats,
                "llm_seeded": seed["llm_written"], "model_seeded": seed["model_added"],

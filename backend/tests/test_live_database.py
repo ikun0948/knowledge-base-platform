@@ -385,6 +385,10 @@ def _drop_probe_account(db, user_id):
     生产代码里没有 delete_user——Task 2 用不上，为一条测试加一个只给测试用的删除口是 YAGNI，
     所以清理留在测试侧：这三张表没有基线计数钉着，但探针名带 uuid，不清就每轮长一对
     永远没人再查的孤儿行，共享库里攒的是垃圾而不是证据。
+
+    阶段三 ④ 之后 `documents` / `chat_history` 也带上了对 users 的外键（RESTRICT）：探针名下
+    漏删的行不再只是垃圾，会让这次 `DELETE FROM users` 当场抛 IntegrityError。这是想要的方向——
+    漏删从静默变响亮。（也正是这个原因，本文件每条 live 判据都在自己的 finally 里删掉探针行。）
     """
     from core.database import AuthToken, User, UserModel
 
@@ -454,6 +458,11 @@ def test_migration_columns_are_present_and_the_second_pass_is_quiet(db):
     证据——它只可能由 lifespan 那次 run_migrations 补出来。索引同理：spec 2.2 要的
     `idx_documents_user_id` 只有迁移会去建，`SHOW INDEX` 的行数在两次 ensure_indexes
     前后相等是它幂等的证据，也是全计划里唯一直接查已部署 schema（而非 ORM 元数据）的索引判据。
+
+    外键与孤儿行走同一条纪律：先读 `information_schema` 确认 lifespan 已经建好、且库里没有
+    指向不存在账号的行，然后才敢拿 `ensure_foreign_keys` / `reclaim_orphaned_owners` 验幂等
+    （这两步在没迁移过的库上会真的发 ALTER / UPDATE）。`KEY_COLUMN_USAGE` 里必须是**一枚**：
+    两枚说明补外键的写法按约束名问，那会在每个新库上叠一枚重复外键。
     """
     from sqlalchemy import text
 
@@ -476,8 +485,35 @@ def test_migration_columns_are_present_and_the_second_pass_is_quiet(db):
         assert migrations.ensure_indexes(conn) == []
         assert migrations.ensure_indexes(conn) == []
         index_after = len(conn.execute(text("SHOW INDEX FROM documents")).fetchall())
+
+        # 外键与孤儿行（阶段三 ④）。这两格**先 assert 再调用**，顺序是有讲究的：
+        # `ensure_foreign_keys` / `reclaim_orphaned_owners` 在没迁移过的库上会真发
+        # ALTER / UPDATE——共享库的结构与数据归 lifespan 管，测试只许读。
+        # 所以先读 information_schema 确认"lifespan 那次已经建好了"，再拿这两步验幂等（零副作用）。
+        for table in ("documents", "chat_history"):
+            assert migrations.foreign_key_exists(conn, table, "user_id", "users"), (
+                f"{table}.user_id 上没有外键：服务没重启过，迁移的 ensure_foreign_keys 没跑起来"
+            )
+            assert migrations.orphaned_owner_count(conn, table, "user_id") == 0, (
+                f"{table} 上还有指向不存在账号的行：ADD CONSTRAINT 会被 MySQL 回 1452 拒收"
+            )
+        fk_rows_before = len(conn.execute(text(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'documents' "
+            "AND COLUMN_NAME = 'user_id' AND REFERENCED_TABLE_NAME = 'users'")).fetchall())
+        assert migrations.ensure_foreign_keys(conn) == []
+        assert migrations.ensure_foreign_keys(conn) == []
+        assert migrations.reclaim_orphaned_owners(conn, default_user_id(db)) == []
+        fk_rows_after = len(conn.execute(text(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'documents' "
+            "AND COLUMN_NAME = 'user_id' AND REFERENCED_TABLE_NAME = 'users'")).fetchall())
     assert after == before, "两次 ensure_columns 之间列数变了：幂等破了"
     assert index_after == index_before, "两次 ensure_indexes 之间索引行数变了：幂等破了"
+    assert (fk_rows_before, fk_rows_after) == (1, 1), (
+        f"documents.user_id 上的外键数 {fk_rows_before}→{fk_rows_after}：不是 1 枚（按约束名查的写法"
+        "会在每个新库上叠一枚重复外键，InnoDB 不拦）"
+    )
 
 
 @pytest.mark.live
@@ -504,6 +540,50 @@ def test_default_user_exists_and_owns_the_baseline_documents(db):
             "SELECT COUNT(*) FROM documents WHERE user_id IS NULL")).fetchone()[0]
     assert unowned == 0, f"还有 {unowned} 篇文档无主，归户那步没做完"
     assert owned == 13, f"基线 13 行应全归 default，实得 {owned}"
+
+
+@pytest.mark.live
+def test_foreign_key_restricts_deleting_a_user_who_still_owns_rows(db):
+    """RESTRICT 的行为面只有真库能证：假连接不会拦，MySQL 回 errno 1451。
+
+    为什么不写 `ON DELETE CASCADE`（见 core/migrations.py 的 add_foreign_key）：级联删得掉
+    `documents` 行，删不掉 Chroma 里的向量——"行没了、向量还能被召回"正是本仓一路在防的
+    脏数据面。拦下来、逼调用方两头删，才是这里想要的默认。
+    探针账号自己造、自己删（不复用 `probe_user`）：这条要**删**账号，删成功的那一路也必须
+    只删到自己；`default@local` 一次都不许出现在 DELETE 里。
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from core.security import hash_password
+
+    tag = f"live-fk-{new_tag()}"
+    user = db.create_user(identifier=f"{tag}@local", identifier_type="email",
+                          nickname="外键探针", password_hash=hash_password(f"p-{tag}"))
+    doc_id = db.save_document(filename=f"{tag}.txt", file_path="", content="x",
+                              chunk_count=0, user_id=user.id)
+    try:
+        with db.engine.connect() as conn:
+            try:
+                conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user.id})
+                conn.commit()
+            except IntegrityError:
+                conn.rollback()
+            else:
+                pytest.fail(f"删掉了仍持有文档的账号 id={user.id}：外键没起作用，RESTRICT 没生效")
+        assert db.get_document(doc_id, user_id=user.id) is not None, (
+            "DELETE 被拦下了却把文档也带走了：那不是 1451，是别的动静"
+        )
+
+        # 反证的另一半：行没了就删得掉——拦的是"还有主人名下有东西"，不是"这个账号删不掉"。
+        db.delete_document(doc_id)
+        with db.engine.connect() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user.id})
+            conn.commit()
+        assert db.get_user_by_id(user.id) is None
+    finally:
+        db.delete_document(doc_id)          # 幂等：已删则 0
+        _drop_probe_account(db, user.id)    # 同上：已删则删不到行
 
 
 # 假 key／假路由（计划指定的探针串，不是任何真凭证）。提成模块级常量是为了**单独成句比对**：
