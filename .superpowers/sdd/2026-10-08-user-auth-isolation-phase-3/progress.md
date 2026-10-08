@@ -787,6 +787,156 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 - **后端一行未动**：diff 只落在 `frontend/` 两枚文件 ⇒ 后端只跑全量那一门做冲击确认（336/2/2/1 与 ⑥ 逐字相同），
   离线门与 live 组本轮**未重跑**，口径同 ①③，明示而非省略。
 
+## 第 ⑧ 条 — 视口/交互探针常驻化：一套数据无关的浏览器几何判据，装成 devDependency
+
+提交：`e4f572f`（6 枚文件 +813/-1：`package-lock.json` 341、`package.json` 4、`tests-browser/_browser-probe.js` 150、
+`tests-browser/layout.test.js` 300、`tests/chunk-selection.test.js` 3、`vitest.browser.config.js` 16）。
+**生产码 0 改动**（build 产物 hash 逐字未变，见门禁表）。
+
+### 预检
+
+- **起点**：阶段二 Task 12 的那次视口验证是 `--no-save` 装的 puppeteer-core + 一次性脚本，验完即删 ⇒
+  交付文档第八节第 8 条写下的事实是「下次改布局要重新造轮子」。
+- **使用者裁定**：「**装成 devDependency + 常驻判据**」⇒ 本轮 `npm install -D puppeteer-core`（实测 `^25.12.0`），
+  依赖进 `package.json` 与 lockfile，下一个人 `npm ci` 就能跑到。
+- **目录口径**：`vitest.config.js` 的 include 是 `tests/**/*.test.js`，所以新目录刻意叫 **`tests-browser/`**
+  —— 单位门永远不会顺手拉起一个浏览器；配套独立的 `vitest.browser.config.js`
+  （`environment: 'node'`、`fileParallelism: false`〔两个 Edge 进程抢同一个 `userDataDir` 会直接起不来〕、
+  `testTimeout 60s`、`hookTimeout 180s`），入口 `npm run test:browser`。
+- **前置条件失败要响亮报错、不许 skip**：`requireStack()` 分得出两种坏法——「dev server 连不上」与
+  「dev 在、后端不在」，后者靠 **Vite 代理把不可达上游翻成 502 + HTML 体** 这一本机已记录的怪癖识别，
+  不是靠网络层异常。
+- **数据无关前提**（本条最要紧的一条约束）：判据不吃文档条数、不吃模型名单长度、不发问答请求 ⇒
+  不烧配额、不写业务数据。登录走页内 `POST /api/auth/login` + `localStorage.setItem('auth_token', …)` + reload，
+  收口走 API 登出（实测 **204**）—— 不点 `.rail-signout`，因为窄屏下那个点击会被浮层遮罩吃掉（探针怪癖 6）。
+- **口令来源**：`KB_LOGIN_IDENTIFIER/PASSWORD` 环境变量优先，否则剥引号读 `backend/.env` 的
+  `DEFAULT_USER_*`（阶段二那次把"解析漏了引号"误读成"配置缺键"，本轮按教训处理）；
+  **值永不外印**——不进断言消息、不进日志、不进台账。写死口令会把默认口令第二次推进 git 历史
+  （`0b22116` 之前进去过一次，那条"轮换口令"仍是使用者自己的待办）。
+
+### 首跑（本条的 RED 角色）
+
+首跑 **`1 failed | 11 passed (12)`**，红的不是产品而是**判据自己写错**：
+`TypeError: Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'`。
+核对组件源码——`.picker-results` 是 `v-else-if="chunks.length"`，busy（「搜索中…」）与零命中两档都不渲染这个节点，
+于是"量它退成一列没有意义"这件事**在这台机器上必然发生**（探针账号本来就没有可选块）。
+修法是**两条口径都留证据**：`waitForFunction` 等请求落地，真实列表在就量真实列表；不在就往 `.picker-modal` 里挂一枚
+**同类名临时节点**量样式规则、量完立即 `remove()`，并把 `source` 一起回报（实测两支都交出 `309px` / 1 track；
+临时节点那一支用"搜一个必定零命中的关键词"真跑过一遍，不是只写在代码里）。
+配套把**类名本身**钉进 jsdom：`frontend/tests/chunk-selection.test.js` 加一句
+`expect(wrapper.find('.picker-results').exists()).toBe(true)`（条数不变，仍 158）——改名就是两边同时量不到东西。
+
+### 判据加宽（12 → 17 → 18 → 21，已跑过的变异轮在新判据集上全部重跑）
+
+- 「整页不滚」从只钉宽屏扩到**三档共判**（实测 docScroll/bodyScroll = 900/900、800/800、900/900）。
+- 新增「`.chat-messages` 高度下界」（实测 594 / 469 / 569，下界取半屏）——
+  它是旧那次「窄屏浮层塌成 2px」的常驻防线。
+- 新增「**内容长过可用高度时，撑开的是消息区而不是页面**」三档 —— 由变异 M5 逼出来的：
+  DOM 合成 3000px 占位块，**第一版没给 `flex: '0 0 auto'`，被 `.chat-messages` 自己的
+  `display:flex; flex-direction:column` 收缩回去**（实测 `scrollHeight 469 == clientHeight 469`），
+  "内容溢出"这个前提根本没发生；靠实测数字发现，不是推理。补上后实测
+  pageOverflow 0、`scrollHeight` 3239/3242/3223、`clampedScrollTop` 2645/2773/2654。
+- 新增「≤768 控件行的**计算样式**」一条 —— 由 M1/M2 逼出来：那两行 CSS 各自删掉都全绿
+  （名单里只有一枚短名字 ⇒ 几何判据没有牙齿）。
+
+### 门禁实数（只抄当轮汇总行）
+
+| 门 | 本轮 | 口径 |
+|---|---|---|
+| `npm run test:browser` | **21 passed (21) / Test Files 1 passed** | 首跑 12 条（1 红），加宽到 21；需两份服务在跑 |
+| 前端全量 `npm test` | **158 passed / Test Files 14 passed** | 与 ⑦ 收口时逐字相同（`chunk-selection.test.js` 只多一句断言，条数不变） |
+| 前端 `npm run build` | exit 0，`index-CWg0-YgN.js` 101.39 kB / `index-CUrklGmJ.css` 13.49 kB | **两枚 hash 与 ⑦ 相同 ⇒ 生产码零改动**，这是本条最硬的一道自查 |
+| 后端全量 / 离线 / `-m live` | **本轮未重跑** | diff 只在 `frontend/`，口径同 ①③⑦；另：Chroma 单实例锁那轮由 uvicorn 持有，这是不并行跑 pytest 的第二个理由 |
+| 库内行数（跑前 == 跑后） | `auth_tokens 1 / users 2 / documents 13 / parent_chunks 4 / chat_history 43` | 只读查询；登出实测 204，判据不写业务数据 |
+
+### 变异自证（十四格，全部手工 Edit + `cp` 还原 + sha256 双向确认）
+
+基准：`frontend/src/styles/layout.css` sha `03705068a7e9…`（纯 CRLF 422/422、18468 字节）。
+**十四格还原后 sha 全部回到基准**，每轮动手前后各用一次 `git diff --stat` 确认改动面只有那一处意图。
+分母逐轮如实记：判据集在轮中加宽过，同一处破坏在不同分母下跑过两次，**不是笔误**。
+
+| 格 | 变异 | 分母 | 结果 |
+|---|---|---|---|
+| M1a | 删 ≤768 `.chat-controls{flex-wrap:wrap}` | 17 | **全绿** ⇒ 几何判据没牙齿 |
+| M2a | 删 ≤768 `.model-select{flex:1;min-width:0;max-width:none}` | 17 | **全绿**（同上）|
+| — | 补「控件行计算样式」判据后的基准 | 18 | `18 passed` |
+| M1b | 同 M1a | 18 | `1 failed`（正是新那条）|
+| M2b | 同 M2a | 18 | `1 failed`（FAIL 名逐字对上新那条）|
+| M3a | `.picker-modal` 宽度 `min(92vw,560px)` → `120vw` | 18 | **全绿** ⇒ 宽度上界那一格**无判据**，见挂账① |
+| M3b | 高度不受视口约束（`height:120vh` + `max-height:none`，一枚意图两行） | 18 | **`4 failed`（余 14 绿）**：宽屏那条命中断言原文（`top=-90 / bottom=990` 超出视口），另 3 条是级联——关不掉的浮层吃掉后续点击。复跑一次同果 |
+| M4 | 删 ≤768 `.picker-results{grid-template-columns:minmax(0,1fr)}` | 18 | `1 failed`，正是目标那条 |
+| M5 | 删宽屏 `.app-shell{grid-template-rows:minmax(0,1fr)}` | 18 | **全绿** ⇒ 逼出「高内容」那一组（+3 → 21）|
+| M5′ | 同一处破坏，加宽后重跑 | 21 | **全绿** —— 因为 `.chat-main{min-height:0}` 还在 |
+| M5b | 只删 `.chat-main{min-height:0}` | 21 | **全绿**（反向同理）⇒ **两行互为兜底、缺一不红** |
+| M5c | 整块删（两行一起） | 21 | **`1 failed`（余 20 绿）**：`页面被顶开 2629px`（1280 那档）——历史 L-1 那个坏法现在有常驻防线 |
+| M6 | `.settings-add-model .settings-input` 的 `min-width:0` → `400px` | 21 | **`2 failed`（余 19 绿）**（目标那条 `expected 440 to be 311` 加级联一条）|
+| M7 | 删 ≤768 `.app-shell{height:100dvh}` | 21 | **全绿**：桌面 headless 上 `100dvh` 与继承来的 100% 是同一个数（800），见挂账② |
+| M8 | **对照组**：`.panel-hint` 13px → 12px | 21 | **全绿** ⇒ 这套判据不是"怎么动都红" |
+
+（M3b 的复跑与 M1/M2 的"两轮"合起来是十五次运行；表格按意图列十四格。）
+
+### 用户可见面
+
+- **产品行为一字未变**：build 产物 hash 与 ⑦ 逐字相同，`layout.css` 净改动为零。
+- 使用者得到的是一条命令（`npm run test:browser`）与 **21 条常驻视口判据**：三档几何（1280×900 / 375×800 / 500×900）
+  ——整页不滚、消息区是有界滚动容器、高内容撑开的是消息区、发送按钮在视口内且不溢出、
+  两层浮层既不与发送键重叠也整块在视口内、≤768 的控件行与候选池口径、全程新增 console/page error 为 0。
+- 副作用面：`npm ci` 多装 puppeteer-core 一族依赖（使用者明示批准进 devDependency）。
+
+### Ruling
+
+1. **常驻判据只钉数据无关的几何不变式**（不依赖文档条数、名单长度，不发问答请求）——
+   代价：M1/M2/M5/M6 这类"内容撑破"必须靠 DOM 合成或计算样式才量得出，三处已如实写进判据与注释；
+   真机才有的条件（地址栏收放）本机造不出，只能挂账。
+2. **单独一套 config + 单独一个目录，不进 `npm test`** —— 单位门必须任何机器（没起服务、没 Edge）都能跑；
+   代价：这一套不会被随手跑到，红项要靠人记得跑 `test:browser`（**仓库没有 CI，所以这不是新增问题**）。
+3. **前置条件失败响亮报错，不 skip** —— skip 会被下一个人读成"布局验过了"；
+   代价：没起服务时这条命令是红的，必须靠文档说明"先起两份服务"。
+4. **puppeteer-core 装成 devDependency**（不再 `--no-save`）—— 使用者选的这条路，常驻判据要能被下一个人跑到就得进 lockfile；
+   代价：依赖面变大，且 `package-lock.json` 多了 341 行 diff。
+5. **组件在空态不渲染目标节点时，判据挂计算样式 + 临时同类名节点**，并把类名另钉一道结构判据 ——
+   代价：这两条量的是**样式规则**而不是"用户看得见的内容"，所以配套要求回报走的是哪一支口径。
+6. **控件行的牙齿来自计算样式，几何判据留作结果面（两者并存）** ——
+   代价：改 CSS 写法（例如 `flex-wrap: wrap` 换成 `flex-flow: row wrap`）会红在计算样式那条，
+   得判"等价重构"还是"口径变更"，不能顺手改绿。
+
+### 挂账（本条 knowingly 没堵的三面）
+
+1. `.picker-modal` 的**宽度上界 560px 没有判据**（M3a 全绿）：它是 backdrop 这个 flex 容器的唯一孩子，
+   `flex-shrink` 把它压回 100vw，而它与发送按钮纵向本就不相邻 ⇒ 在桌面 headless 上写不出一个既真实又有牙齿的断言。
+2. ≤768 的 `height:100dvh` 与继承来的 `100%` 在桌面 headless 上是同一个数（M7 全绿）：
+   `dvh` 的意义只在真机地址栏收放时出现，本机没有那个条件。
+3. `.settings-model-row{flex-wrap:wrap}` 没钉：它的牙齿取决于名单里的名字长度，是**数据相关**判据，
+   与本条第 1 条裁定相冲。真要堵得先把"长名字"变成可控夹具。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行**（无实施代理、无评审代理），**终审是自评** —— 交付时必须明示。
+- **判据集在轮中两次加宽（12 → 17 → 18 → 21），已跑过的变异轮在新判据集上全部重跑**：
+  M1/M2 各有两轮、M5 有三轮（18 分母一次、21 分母两次），上表逐格标了分母。
+- **首跑那条红是判据自身错**（`v-else-if` 节点在 busy/空态不渲染），产品零改动 ——
+  按「跑红先分产品缺陷 / 判据写错」的既有纪律处理，没有为了变绿去改判据的口径。
+- **一次性取数脚本 `tests-browser/_evidence.mjs` 跑完即删**（本台账里的实数来自它，共 4 次运行）；
+  它**没有进提交**，所以"常驻"的部分只有判据与 helper。
+- **本轮起的两份服务已按 `CommandLine` 核对后停掉**：uvicorn :8000（PID 6892，
+  `D:\python\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000`）与 vite :5173（PID 6904）
+  连同其 `npm run dev` 父链（27072 cmd → 27696 node）；停完复量 8000/5173 两个端口**都不再监听**。
+- 行尾如实记（本轮直测）：新增三枚 `vitest.browser.config.js` / `tests-browser/_browser-probe.js` /
+  `tests-browser/layout.test.js` 均**纯 LF**（0/16、0/150、0/300 行，696 / 7085 / 14776 字节），
+  `tests/chunk-selection.test.js` 纯 LF（0/255，12019 字节）；`package.json` **纯 CRLF**（24/24，549 字节）、
+  `package-lock.json` 纯 CRLF（2443/2443，85215 字节）—— npm 写盘的行尾由 npm 决定，本轮未做转换；
+  变异面 `layout.css` 纯 CRLF（422/422，18468 字节）。测量用字节计数，未用 `grep -c $'\r$'`
+  （[[project-crlf-mutation-hazards]]）。
+- **`git add` 台账的退码 1**（`.superpowers/` 被 gitignore，文件却已 staged）：与 ⑥⑦ 同一现象，
+  add 与 commit 分成两次调用（[[ref-sdd-scripts-need-bash]]）。
+- **一次 grep 截断把 vitest 汇总行吃掉了**：`head -8` 那种截断法不可靠，改成一轮把输出写进
+  `/tmp/kb-m*.log` 再无截断地 grep；有一轮因此重跑过一次。
+- **台账正文的数字来自转录回读 + 当场直查双证**：本轮上下文被压缩过，变异表先按会话转录（jsonl）恢复，
+  再用可当场复核的量重新确认（commit stat 逐文件行数、`layout.css` sha/行尾/字节、build hash、`git diff --quiet`）——
+  只凭回忆的数字一律不写（[[feedback-subagent-report-verify]] 同一条纪律，这次对象是我自己的早期记录）。
+- 本轮**未跑 `-m migration`**、未起第二份 uvicorn、未跑后端门（理由见表）；
+  `backend/` 一行未动。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -798,4 +948,4 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 | ⑤ | `user_models` 至多一枚默认靠应用层两步，并发可留两枚 | **已闭合**（`e0ecfe1`：MySQL 无部分索引 ⇒ 守卫落在 `default_guard` 这枚 **STORED 生成列** + 只盖它一列的**唯一索引**上（NULL 不参与唯一比较 ⇒ 非默认随便多、默认每人至多一枚）；迁移四步各查各的：**数重复 → 降掉除 `MIN(id)` 之外 → 补列 → 建索引**，去重早于建索引是 scratch 表实测钉的（`ALTER` 在两枚默认上照样成功、`CREATE UNIQUE INDEX` 才回 1062，而 lifespan 不兜异常 ⇒ 反了就是后端起不来）；存在性用严格口径问 `GENERATION_EXPRESSION <> ''`（同名普通列的后果是静默的零约束）；顺带堵掉 ⑤ 自己会引入的谎——撞守卫键不再回 409「已在你的名单里」，改为补插成非默认。单测 +8（迁移 6、形状 2）、live +2（引擎本身拒第二枚默认 / 注入钩子把撞键窗口变成确定性可复现），八轮变异逐轮一条红；真库落库后直查列与索引形状、多默认人数 0、行数与默认数未变，另在 scratch 表上把"首次建守卫 + 去重 1 行"整条实测过，真开机一遍拿到 `kb.migrations` 的 summary 原文） |
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | **已闭合**（`6a327ca`，按使用者裁定**不动 `.env`、改判据**：`seed_default_llm` 的三条出口各带一枚常量 `reason`（`env_incomplete` / `already_configured` / `seeded`），`run_migrations` 的 summary 新增 `seed_reason` 把它带进开机日志——原先两条早退回同一个字典，`llm_seeded: False` 分不清是"`.env` 缺键"还是"默认账号已有 key"；「缺 key 半态」由注入的 `IncompleteEnvConfig` 在**离线门**上证两件事（那遍一行没写 + 报得出走了哪条）。判据 +3（`test_migrations.py` 30→33，含 caplog 钉"两遍 no-seed 布尔逐格相同、只有 reason 分开"与"日志里不许出现 key"），另**有意改写**四处整字典相等断言。七轮变异 M1–M6 各红 3–4 条、M7 是对照组（只换字典键序 ⇒ 33 全绿，判据钉值不钉形状）；真开机一遍拿到 `'seed_reason': 'already_configured'`（⑤ 那轮只能推断的这一格现在是日志里读出的事实）。**边界如实记**：真 `.env` 上"缺键"那半本机仍未跑过，证据换成离线判据；"写了 key 但没加模型"的两支因没有各自报名 |
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | **已闭合**（`74d11b8`，按使用者裁定的这条路「前端 fallback 剥掉 input」：新增模块级 `validationItemText`，数组 detail 的每一项只准 **msg（且只认非空字符串）、type、loc** 上屏，兜底改成**白名单挑键**而不是整枚 stringify ⇒ `input`（FastAPI 原样回显的请求值，`PUT /api/auth/me/llm` 那一枚里就是明文 api_key）与 `ctx`（pydantic 允许塞任意值）都到不了界面。键序按 FastAPI 自己的 `type`、`loc` ⇒ 阶段二那条"缺 msg 降级为 JSON 文本"判据**期望值一字未改仍绿**；三条网络出口共用 `httpError` 这一构造点，故 fetch / SSE / 上传 XHR 一起受保护。判据 +4（`client.test.js` 26→30，含 `httpError` 直接构造那条、`null` 项那条、ctx 载荷故意与 secret 不同那条），九轮变异 M1–M8 逐轮只红目标面（M3 只红 1 条证明 input/ctx 两面分开计量）、M9 对照组全绿。前端全量 **158 passed/14 files**、build 产物换 `index-CWg0-YgN.js`；后端一行未动（全量 336/2/2/1 逐字不变，跨端那 5 条单跑绿）。**边界如实记**：只管"上界面"，422 响应体里 `input` 依然在（devtools / 代理日志 / 直连 API 仍可见），要连那一面一起堵得在后端挂 `RequestValidationError` 处理器，不在本条范围；"值写进 msg"的绕路今天不成立（两处 validator 实测只写长度），挂账 |
-| ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | 待开工（`puppeteer-core` 本轮已 `npm prune` 清掉，做它要重装） |
+| ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | **已闭合**（`e4f572f`，按使用者裁定的这条路「装成 devDependency + 常驻判据」：`puppeteer-core@^25.12.0` 进 `package.json`/lockfile，判据放**独立目录 + 独立 config**（`frontend/tests-browser/` + `vitest.browser.config.js`，`fileParallelism:false`）⇒ `npm test` 那套单位门仍然任何机器都能跑，浏览器门走 `npm run test:browser`；前置条件失败**响亮报错不 skip**（`requireStack` 分得清"dev 连不上"与"dev 在、后端不在=代理 502"）。判据口径钉**数据无关的几何不变式**：三档视口（1280×900 / 375×800 / 500×900）共判整页不滚、消息区是有界滚动容器、高内容（DOM 合成 3000px，必须 `flex:0 0 auto`）撑开的是消息区不是页面，宽屏发送键在视口内且不溢出、两层浮层不重叠且整块在视口内，≤768 控件行与候选池、全程新增 console/page error 为 0；登录/登出全走 API（点 `.rail-signout` 在窄屏会被遮罩吃掉），跑前跑后库内行数逐格相同（`auth_tokens 1 / users 2 / documents 13 / parent_chunks 4 / chat_history 43`，登出实测 204）⇒ **不烧配额、不写业务数据**。首跑 12 条有 1 条红且红在**判据自己**（`.picker-results` 是 `v-else-if`，busy/空态不渲染）⇒ 改成"真实列表优先、否则挂同类名临时节点"两口径并报，并把类名另钉进 `chunk-selection.test.js`；判据分两轮加宽到 21，已跑过的变异轮在新集上全部重跑。十四格变异（基准 `layout.css` sha `03705068a7e9`，每轮 sha 回基准）：M1a/M2a 各全绿**逼出计算样式判据**、M1b/M2b 各 `1 failed`、M3a 宽度上界全绿（挂账①）、M3b 高度脱约束 `4 failed`、M4 `1 failed`、M5/M5b 两行互为兜底各全绿、M5c 一起删 `1 failed「页面被顶开 2629px」`、M6 `2 failed`、M7 `100dvh` 与继承 100% 分不出（挂账②）、M8 对照组全绿。门禁：浏览器门 **21 passed/1 file**、`npm test` **158/14** 逐字不变、build 产物 hash **两枚都未变**（生产码 0 改动）、后端三门未重跑（diff 只在 `frontend/`，口径同 ①③⑦）。**挂账三面**：弹窗宽度上界 560 无判据、`100dvh` 桌面 headless 不可分辨、`.settings-model-row{flex-wrap:wrap}` 的牙齿是数据相关 |
