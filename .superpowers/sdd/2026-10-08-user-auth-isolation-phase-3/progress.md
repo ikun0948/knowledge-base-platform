@@ -1181,6 +1181,82 @@ F7 封装字段名翻错成 camelCase → **2 failed** | 17 passed（封装与 A
 - **`Glob`/`grep` 在中文路径与 cp936 控制台上仍有假空**（`grep -n` 对明明存在的符号返回空）：
   关键计数一律换 `Read`/`ls`/字节计数复核，不以一次 grep 为空为证据。
 
+## 追加运维：轮换 `DEFAULT_USER_PASSWORD`（2026-10-09，零代码改动）
+
+注销账号收口时留给使用者的那一格（交付文档第四节第 10 条）由本人下令执行。语义：**换掉
+`default@local` 的口令**，旧值因在脱敏提交 `0b22116` 之前进过 git history 而作废。
+**本轮没有改一行代码、没有加一条判据**，所以没有 RED/GREEN，只有"改之前量一次、改之后量一次"。
+
+### 为什么必须两头一起做（这条是本节的根，不是背景知识）
+
+- `core/migrations.py:305-314`：`ensure_default_user` 查到 `identifier='default@local'` 已有行就
+  **直接 return**，不重写哈希 ⇒ **只改 `.env` 是空转**，旧口令照样登录。
+- 反过来只改库：`backend/tests/test_live_stream.py:46-50` 与 `frontend/tests-browser/_browser-probe.js:44`
+  都从 `.env` 那枚键取口令去登录，两边不一致就是这两道门一起 401。
+- 应用写法选 `db.update_user_password(user_id, hash_password(new))`（端点 `api/auth.py:181` 用的就是它），
+  不写裸 SQL、不起第二份服务，也就绕开 Chroma 单实例锁（[[env-chroma-single-instance-lock]]）。
+
+### 预检（改之前）
+
+`.env` 655 B、**纯 LF**（`\r\n` 计数 0 / `\n` 计数 16 / 17 段）、`^DEFAULT_USER_PASSWORD=` 恰一枚、
+键名清单 14 枚；旧值长度 **15**；`users` 里那枚 id=**30**；`verify_password(旧值, 库里哈希)` = **True**
+（两头本来一致，所以这不是"修一处坏一处"的现场）；默认账号名下 `auth_tokens` = **0**。
+备份先落 `D:\tmp\backup-backend_env-before-rotate`（**按完整路径命名**，见 [[project-crlf-mutation-hazards]] 第四族），
+`cp` 后 sha 对拍相同。**验证通过后这份备份已删除**——它装的是已作废的口令，留着只多一个副本。
+
+### 做法与顺序（先库后文件，每一步都有回验）
+
+1. `secrets.token_urlsafe(24)` ⇒ 新值长度 **32**（在 `schemas/auth.py:36` 的 `6~64` 界内，这条先判过再写）。
+2. 写库：`update_user_password(30, …)` 回 **1**；重读那行 `verify_password(新)=True`、
+   `verify_password(旧)=False` **两半都过**才动文件（任一半不过就用内存里的旧值回滚库并退出）。
+3. 改文件：只替换那一行，**其余 16 段逐段比对未变**（`assert`）；长度增量 **17** = 32−15；
+   写后 672 B、键行仍唯一、`\r\n` 仍 0；`.env` sha256 前 `bc2f5dce1357` → 后 `c4c9c5bbcc7d`。
+4. 全程**没有任何一处打印过键值**（脚本只打印长度、计数、sha 前 12 位与布尔）。
+
+### 一条假警报，机制值得记（别按"读不到新值"去查 .env）
+
+脚本内用 `subprocess` 起"全新解释器"读 `Config.DEFAULT_USER_PASSWORD`，回 **15**（旧值）⇒ 看着像写失败。
+真相是 `load_dotenv` **默认不覆盖已存在的环境变量**，而父进程早已把旧值注入 `os.environ`，子进程继承了过去。
+换法：`env -u DEFAULT_USER_PASSWORD python -c …` 从干净环境起 ⇒ 读到 **32**（新值）。
+**口径**：验"`.env` 的新值被新进程读到"必须在**不继承该键**的子进程里量，别在父进程内 spawn。
+
+### 端到端与库内复核
+
+真 uvicorn（:8000，单实例，`Application startup complete` 后开测）：旧口令 `POST /api/auth/login` ⇒ **401**、
+新口令 ⇒ **200** 且拿到票、`GET /api/auth/me` ⇒ **200**。
+
+**我自己探针的两处错**（不是产品缺陷，但先记错处再记结论）：① 断 `me` 时读顶层 `identifier`，
+而 `MeOut` 把载荷包在 `{"user": …}` 里 ⇒ 假红 False（状态码 200 才是真信号）；
+② 登出打了 `DELETE /api/auth/logout`，端点是 **POST**（`api/auth.py:127`）⇒ 回 **405**，
+于是漏下一张票。收尾用端点同一枚 `db.delete_token(hash)` 清掉自己那张（回 1），再走一遍
+login → **POST** `/logout`（**204**）→ 用那张已花的票再打 `/me`（**401**）⇒ 默认账号名下 `auth_tokens` 归 **0**。
+
+改完复核共享库现状：`users 2 / documents 13 / parent_chunks 4 / child_chunks 10 / chat_history 43 / auth_tokens 1`。
+那唯一一枚票属 `users.id=338`（`3143958700@qq.com`，2026-11-06 过期），**不是本轮产生的**
+（⑧ 那轮记的基线就是 `auth_tokens 1`），没动它。
+
+### 门禁冲击（只抄当轮汇总行）
+
+| 门 | 实数 | 说明 |
+|---|---|---|
+| 后端全量 `python -m pytest -q` | **345 passed / 2 skipped / 2 deselected / 1 warning**（58.38s） | 与注销收口那一记档值**逐字相同**；那 2 skip 仍是 `test_live_stream`（需要真服务，本轮只在端到端那一小段起过） |
+| 浏览器门 `npm run test:browser` | **21 passed / 1 file**（两份服务自起自停） | 它是这枚口令的**真消费者**（`_browser-probe.js:44` 从 `.env` 读）⇒ 这条绿才是"轮换没打断验收门"的证据 |
+| 前端 jsdom | **未重跑** | 本轮一行生产码没改，且那套把 API 全 mock 了、不吃这枚口令 |
+| `-m live` 单文件 | **未重跑** | 全量那遍已含 live 组 |
+
+服务按 CommandLine 核对后停干净（uvicorn PID 11904、vite PID 23972），两端口 `netstat` 复核 0 枚 LISTENING。
+
+### 边界与偏离，如实记
+
+- **历史仍翻得开**：轮换让旧值失效，但没有重写 git 历史（本机无远端，重写属破坏性操作，未做）。
+- **不影响别的账号**：`users.id=338` 那枚账号的口令、它的 `auth_tokens` 一行都没动；
+  `users.api_key/base_url` 与 `user_models` 也未动（本轮只碰 `password_hash` 一列一行）。
+- **没走 `PUT /api/auth/password`**：那条路要填旧口令，而旧口令的值按纪律不进我的视野；
+  选应用层的 DB 方法是同等效果里少一次凭据暴露的做法。**代价**：没测到端点那一层的表单校验，
+  但界面上"改密码"那格仍归使用者自己用（他手上有 `.env` 里的新值）。
+- **流程偏离**：零代码改动、无判据改动，因此没有变异自证轮；预检/写库/改文件/复核全部由控制者一人执行，
+  结论是自评。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -1194,3 +1270,4 @@ F7 封装字段名翻错成 camelCase → **2 failed** | 17 passed（封装与 A
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | **已闭合**（`74d11b8`，按使用者裁定的这条路「前端 fallback 剥掉 input」：新增模块级 `validationItemText`，数组 detail 的每一项只准 **msg（且只认非空字符串）、type、loc** 上屏，兜底改成**白名单挑键**而不是整枚 stringify ⇒ `input`（FastAPI 原样回显的请求值，`PUT /api/auth/me/llm` 那一枚里就是明文 api_key）与 `ctx`（pydantic 允许塞任意值）都到不了界面。键序按 FastAPI 自己的 `type`、`loc` ⇒ 阶段二那条"缺 msg 降级为 JSON 文本"判据**期望值一字未改仍绿**；三条网络出口共用 `httpError` 这一构造点，故 fetch / SSE / 上传 XHR 一起受保护。判据 +4（`client.test.js` 26→30，含 `httpError` 直接构造那条、`null` 项那条、ctx 载荷故意与 secret 不同那条），九轮变异 M1–M8 逐轮只红目标面（M3 只红 1 条证明 input/ctx 两面分开计量）、M9 对照组全绿。前端全量 **158 passed/14 files**、build 产物换 `index-CWg0-YgN.js`；后端一行未动（全量 336/2/2/1 逐字不变，跨端那 5 条单跑绿）。**边界如实记**：只管"上界面"，422 响应体里 `input` 依然在（devtools / 代理日志 / 直连 API 仍可见），要连那一面一起堵得在后端挂 `RequestValidationError` 处理器，不在本条范围；"值写进 msg"的绕路今天不成立（两处 validator 实测只写长度），挂账 |
 | ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | **已闭合**（`e4f572f`，按使用者裁定的这条路「装成 devDependency + 常驻判据」：`puppeteer-core@^25.12.0` 进 `package.json`/lockfile，判据放**独立目录 + 独立 config**（`frontend/tests-browser/` + `vitest.browser.config.js`，`fileParallelism:false`）⇒ `npm test` 那套单位门仍然任何机器都能跑，浏览器门走 `npm run test:browser`；前置条件失败**响亮报错不 skip**（`requireStack` 分得清"dev 连不上"与"dev 在、后端不在=代理 502"）。判据口径钉**数据无关的几何不变式**：三档视口（1280×900 / 375×800 / 500×900）共判整页不滚、消息区是有界滚动容器、高内容（DOM 合成 3000px，必须 `flex:0 0 auto`）撑开的是消息区不是页面，宽屏发送键在视口内且不溢出、两层浮层不重叠且整块在视口内，≤768 控件行与候选池、全程新增 console/page error 为 0；登录/登出全走 API（点 `.rail-signout` 在窄屏会被遮罩吃掉），跑前跑后库内行数逐格相同（`auth_tokens 1 / users 2 / documents 13 / parent_chunks 4 / chat_history 43`，登出实测 204）⇒ **不烧配额、不写业务数据**。首跑 12 条有 1 条红且红在**判据自己**（`.picker-results` 是 `v-else-if`，busy/空态不渲染）⇒ 改成"真实列表优先、否则挂同类名临时节点"两口径并报，并把类名另钉进 `chunk-selection.test.js`；判据分两轮加宽到 21，已跑过的变异轮在新集上全部重跑。十四格变异（基准 `layout.css` sha `03705068a7e9`，每轮 sha 回基准）：M1a/M2a 各全绿**逼出计算样式判据**、M1b/M2b 各 `1 failed`、M3a 宽度上界全绿（挂账①）、M3b 高度脱约束 `4 failed`、M4 `1 failed`、M5/M5b 两行互为兜底各全绿、M5c 一起删 `1 failed「页面被顶开 2629px」`、M6 `2 failed`、M7 `100dvh` 与继承 100% 分不出（挂账②）、M8 对照组全绿。门禁：浏览器门 **21 passed/1 file**、`npm test` **158/14** 逐字不变、build 产物 hash **两枚都未变**（生产码 0 改动）、后端三门未重跑（diff 只在 `frontend/`，口径同 ①③⑦）。**挂账三面**：弹窗宽度上界 560 无判据、`100dvh` 桌面 headless 不可分辨、`.settings-model-row{flex-wrap:wrap}` 的牙齿是数据相关 |
 | 追加 | 注销账号（硬删，MySQL + Chroma 两头一起抹，不可恢复） | **已闭合**（三闭一提交：`b12c2c2` 级联删行 → `594458a` `deactivate` 端点 + 按主人戳清扫向量 → `35e9498` 前端危险区两道确认 + App 接线；三道门按「令牌 → 口令 → 默认账号」排序、两头删按「行先、向量后」，确认词留组件内不进镜像集，清理复用 `handleSessionLost` 不补发 logout。19 轮变异自证 + 浏览器侧 L1 一轮。六张门实数：后端 **345/2/2**、离线 **320/29**、live **25**、jsdom **162/14**、build 换 `index-CrrLaEBX.js` + `index-C4mVDwWj.css`、浏览器门 **21/1**。挂账四面见上节 |
+| 追加运维 | 轮换 `DEFAULT_USER_PASSWORD`（交付文档第四节第 10 条那一格） | **已完成**（2026-10-09，**零代码改动**：顺序是先用 `db.update_user_password` 写库并双向回验（新 True / 旧 False）再改 `.env` 那一行；真 HTTP 实测旧口令 401、新口令 200、`POST /logout` 204 后默认账号名下票归 0；冲击确认后端全量 **345/2/2** 与浏览器门 **21/1** 逐字不变，jsdom 与 `-m live` 未重跑（理由见上节）。新值只进 `backend/.env`，未落任何文本副本，含口令的备份文件验证后已删） |

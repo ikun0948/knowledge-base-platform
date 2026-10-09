@@ -63,7 +63,7 @@
 7. **未配置时是「事前禁发 + 紫横幅」**，两条路都堵（按钮 `:disabled` 与 `submit()` 门禁各一半）；真收到 409 时落红色横幅，且**前端不改写后端文案**（英文 detail 原文照抄在中文冠语之后）。
 8. **`PASSWORD_MIN` 是 6 不是 8**（`schemas/auth.py:13`）。前端原有两处各写一份，阶段三第 ② 条（`ee117fd`）起只有 `frontend/src/constants.js` 一枚，且由 `backend/tests/test_frontend_constants.py` 钉住与后端逐字相同——不再依赖"记得两边一起改"。**② 的补账（`e1f4d45`）后这枚文件共九枚镜像 / 六道判据**：问答契约 `parent_ids` 的两枚界（`MAX_ID_CHARS=100` / `MAX_SELECTED_CHUNKS=50`）与 `model_name` 的界也进了同一出口，前端不再留本地副本。
 9. **默认账号 `default@local` 的初始口令来自 `.env` 的 `DEFAULT_USER_PASSWORD`**；该键为空则这个账号只作归属锚点、不可登录。
-10. **建议轮换 `DEFAULT_USER_PASSWORD`**：它在脱敏提交 `0b22116` 之前进过 git history，仓库文件现在 0 命中但历史可翻。
+10. **`DEFAULT_USER_PASSWORD` 已于 2026-10-09 轮换（旧口令现在拿 401）**：旧值在脱敏提交 `0b22116` 之前进过 git history（仓库文件 0 命中但历史可翻），现在拿它登录实测 401、新口令 200。**轮换必须两头一起做**：`core/migrations.py:305-314` 的 `ensure_default_user` 见到已有行就 `return`，**只改 `.env` 不会重写库里那枚哈希**（旧口令照样能用）；反过来只改库，则吃 `.env` 的两道门（`tests/test_live_stream.py:46-50`、`frontend/tests-browser/_browser-probe.js:44`）会一起 401。新值**只写进 `backend/.env`**（git-ignored），没出现在终端、聊天、台账、提交信息或任何脚本输出里——要看它请用编辑器打开那一行；之后想再换一次，走设置弹窗里的「改密码」（那条路要填原密码，走的是应用层，不用碰库）。
 11. **注销是硬删，且界面上要过两格**：原密码 + 手打「确认注销」四个字，两格都过按钮才亮（少任何一格都是禁用态，不是点下去报错）。
     口令错 ⇒ 401「原密码不正确」，且**两头一次都没被调用**；默认账号 `default@local` ⇒ 409「默认账号不能注销」（口令门在它之前，
     所以错口令那次拿到的是 401 而不是 409——那句话不替你确认账号能不能删）。成功后整屏落回登录页、**不发** `/logout`
