@@ -378,6 +378,15 @@
 }
 .settings-add-model { display: flex; gap: 8px; }
 .settings-add-model .settings-input { flex: 1; min-width: 0; }
+/* 危险区（注销账号）：上面四段是"改了还能用"，这一段是"删了就回不去"，所以用一条上边框
+   把它从纵向流里切出来。颜色只借 --fail-* 那两枚已有 token（与 .btn-stop 同一套，G-4 口径：
+   本块不写一个颜色字面量）。 */
+.settings-danger { border-top: 1px solid var(--border); padding-top: 14px; }
+.settings-danger-heading { color: var(--fail-fg); }
+.settings-danger-submit {
+  align-self: flex-start;
+  background: var(--fail-bg); color: var(--fail-fg); border: 1px solid var(--fail-fg);
+}
 
 @media (max-width: 768px) {
   /* 窄屏上"名字 + 默认 + 设为默认 + 删除"一行四件，375px 必塌：让按钮组换行到第二行 */

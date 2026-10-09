@@ -60,3 +60,11 @@ export function removeModel(name) {
 export function setDefaultModel(name) {
   return request('/api/auth/me/models/default', { method: 'PUT', body: { name } })
 }
+
+export function deactivateAccount(oldPassword) {
+  // 注销账号：verb 用 POST 不用 DELETE——这一枪要带请求体（原密码），而 fetch 的 DELETE 带 body
+  // 在代理与上游那边是条少有人走的路；路径与 register/login/logout 同族，读起来是"认证生命周期的一步"。
+  // 只发这一格：界面上还要手打一遍确认词，那一格属于交互，不进契约（DeactivateIn 只有 old_password）。
+  // 204 没有回执可显示，调用方只能靠"没抛错"判成功（与 updatePassword 同形）。
+  return request('/api/auth/deactivate', { method: 'POST', body: { old_password: oldPassword } })
+}

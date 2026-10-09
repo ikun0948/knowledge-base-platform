@@ -1,12 +1,12 @@
 // SettingsModal 的四段各自把三件事钉死：发出去的字段名、成功之后 user 怎么变、
 // api_key 原文在界面上出现过没有。第三件是全局铁律（决策 5 + spec 3.1），所以它有独立判据。
 //
-// 为什么八条都放在组件层而不是挂在 App 上：本弹窗**直接吃 useAuth() 的模块级单例**，
+// 为什么十条都放在组件层而不是挂在 App 上：本弹窗**直接吃 useAuth() 的模块级单例**，
 // 它写的是"当前这个人"。App 层的 ⚙ 开合与头像渲染归 App.auth-gate.test.js（Step 5 那两条），
 // 这里只测弹窗自己的行为。
 //
 // 环境事实（都写死在本文件里）：
-//   - vi.mock 的 factory 是**整体替换模块**：Task 8 的规矩，六个封装必须列全，
+//   - vi.mock 的 factory 是**整体替换模块**：Task 8 的规矩，七个封装必须列全，
 //     少列一个拿到的是 undefined，红的理由是 mock 落后而不是行为坏了。
 //   - user 是 useAuth 的模块级 ref，测试直接写它（mountModal 的 overrides 也走这条路）：
 //     这是本仓唯一能"以已登录身份挂载弹窗"的做法——App 层那条 vm/setupState 通道在这里不适用，
@@ -20,10 +20,11 @@ import { flushPromises, mount } from '@vue/test-utils'
 vi.mock('../src/api/auth.js', () => ({
   updateProfile: vi.fn(), updatePassword: vi.fn(), updateLlmConfig: vi.fn(),
   addModel: vi.fn(), removeModel: vi.fn(), setDefaultModel: vi.fn(),
+  deactivateAccount: vi.fn(),
 }))
 
-import { addModel, removeModel, setDefaultModel, updateLlmConfig, updatePassword, updateProfile }
-  from '../src/api/auth.js'
+import { addModel, deactivateAccount, removeModel, setDefaultModel, updateLlmConfig,
+  updatePassword, updateProfile } from '../src/api/auth.js'
 
 import SettingsModal from '../src/components/SettingsModal.vue'
 import { ApiError } from '../src/api/client.js'
@@ -45,6 +46,9 @@ function mountModal(overrides = {}) {
 // 两个密码框在模板里只有 aria-label 可分辨（计划原文没给它们类名，也不该为一条测新增类名）
 const oldPw = (w) => w.find('input[aria-label="原密码"]')
 const newPw = (w) => w.find('input[aria-label="新密码"]')
+// 危险区的两个输入框同样按 aria-label 找：类名留给样式，可达性留给测，两者不该互相借道
+const dangerPw = (w) => w.find('input[aria-label="注销确认·原密码"]')
+const dangerWord = (w) => w.find('input[aria-label="注销确认·确认词"]')
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -52,6 +56,7 @@ beforeEach(() => {
   useAuth().clearAuth()
   updateProfile.mockResolvedValue({ user: { ...ME, nickname: '改名了' } })
   updatePassword.mockResolvedValue(null)                    // 204
+  deactivateAccount.mockResolvedValue(null)                 // 204，与改密码同形状：没有回执可显示
   updateLlmConfig.mockResolvedValue({ user: { ...ME, api_key_masked: 'sk-****9999' } })
   addModel.mockResolvedValue({ models: ['qwen-max', 'qwen-turbo'], default_model: 'qwen-max' })
   removeModel.mockResolvedValue({ models: ['qwen-max'], default_model: 'qwen-max' })
@@ -187,5 +192,54 @@ describe('SettingsModal：四段设置 + api_key 不上屏（阶段二 Task 9）
     expect(w.emitted('close')).toHaveLength(1)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(w.emitted('close')).toHaveLength(2)
+  })
+
+  it('危险区：原密码与确认词两个条件都齐才发得出去，成功只发一次并交出去', async () => {
+    // 这里**不用** window.confirm：headless 下原生 confirm 会被 click 自动 accept（本机量过），
+    // 那条门禁在这种环境里永远绿——它给不出任何牙齿。手打确认词把门禁落回 DOM，可测也可读。
+    const w = mountModal()
+    const submit = () => w.find('.settings-danger-submit')
+    // 提示里显示的那个词必须就是门禁比对的那个词：两处各写一份迟早分叉，
+    // 分叉的表征是"用户照着提示打完了，按钮还是灰的"
+    expect(w.find('.settings-danger-hint').text()).toContain('确认注销')
+    expect(submit().attributes('disabled')).toBeDefined()                 // 两个都空
+
+    await dangerPw(w).setValue('hunter2-pass')
+    expect(submit().attributes('disabled')).toBeDefined()                 // 只给密码不够
+
+    await dangerPw(w).setValue('')
+    await dangerWord(w).setValue('确认')                                   // 近词不够：要逐字等于
+    expect(submit().attributes('disabled')).toBeDefined()
+
+    await dangerWord(w).setValue('确认注销')
+    expect(submit().attributes('disabled')).toBeDefined()                 // 词对了但密码还空：另一半门禁
+
+    await dangerPw(w).setValue('hunter2-pass')
+    expect(submit().attributes('disabled')).toBeUndefined()               // 两个都齐才放行
+    await submit().trigger('click')
+    await flushPromises()
+    expect(deactivateAccount).toHaveBeenCalledTimes(1)
+    expect(deactivateAccount).toHaveBeenCalledWith('hunter2-pass')        // 原文送去，不 trim（与改密码同口径）
+    expect(w.emitted('deactivated')).toHaveLength(1)   // 整屏落回登录页是 App 的事，弹窗只交出去
+    // 204 没有回执可显示，成功路径把两个明文抹掉（与判据 #4 同一条理由：别留在那个人按 F12 就能看到的地方）
+    expect(dangerPw(w).element.value).toBe('')
+    expect(dangerWord(w).element.value).toBe('')
+  })
+
+  it('注销失败：后端那句原文只落在危险区，不交出去，表单留着让人改对重试', async () => {
+    deactivateAccount.mockRejectedValue(new ApiError('原密码不正确', 401))
+    const w = mountModal()
+    await dangerPw(w).setValue('wrong-pass')
+    await dangerWord(w).setValue('确认注销')
+    await w.find('.settings-danger-submit').trigger('click')
+    await flushPromises()
+    expect(w.find('.settings-danger-error').text()).toContain('原密码不正确')
+    // 段与段各一个错误位（判据 #3 的规矩）：`setKindError` 的 else 分支会把不认识的 kind
+    // 写进模型名单那一段——那一格红起来让人以为名单被注销动了。
+    expect(w.find('.settings-models-error').exists()).toBe(false)
+    expect(w.emitted('deactivated')).toBeFalsy()          // 失败不许长得像成功
+    // 失败**不清**表单：这一枪不可恢复，用户改对密码就该直接重试，不必再打一遍确认词
+    expect(dangerPw(w).element.value).toBe('wrong-pass')
+    expect(dangerWord(w).element.value).toBe('确认注销')
   })
 })

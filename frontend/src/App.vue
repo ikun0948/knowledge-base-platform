@@ -294,7 +294,8 @@ function dismissError() {
           />
           <!-- 与选块弹窗同位：两者都是 position: fixed 的浮层，挂到 .app-shell 直接子级
                会重新引入"多出一轨"的疑问（layout.css 的 L-1/L-2 注释就是为此写的） -->
-          <SettingsModal v-if="settingsOpen" @close="settingsOpen = false" />
+          <SettingsModal v-if="settingsOpen" @close="settingsOpen = false"
+                         @deactivated="handleSessionLost" />
         </div>
       </div>
     </main>

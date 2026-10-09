@@ -62,6 +62,7 @@ const HISTORY_ROWS = [
 // 拿原始 URL 断顺序会把判据绑在编码细节上——那一层由 documents-api.test.js 与 client.test.js 管。
 const ROUTES = [
   { prefix: '/api/documents/chunks', label: 'chunks', status: 200, body: [CHUNK] },
+  { prefix: '/api/auth/deactivate', label: 'deactivate', status: 204, body: null },
   { prefix: '/api/auth/logout', label: 'logout', status: 204, body: null },
   { prefix: '/api/history/', label: 'history', status: 200, body: HISTORY_ROWS },
   { prefix: '/api/auth/me', label: 'me', status: 200, body: ME },
@@ -261,6 +262,37 @@ describe('App：登录门禁 / 请求顺序 / 登出清键（Task 7 修正轮 1�
         route.body = body
       }
     }
+  })
+
+  it('注销成功：真发一枪 deactivate、补一枪都不发 logout，清理组与另两条一字不差', async () => {
+    // 这条测的是**接线**：弹窗自己只交出一个 'deactivated' 事件，"这台机器不再是你"那组动作
+    // 归 App。本文件口径是不 mock 任何 composable（见文件头 ①），所以整条链路走真实
+    // api/auth.js → client.js → 桩 fetch：注销那一枪真的发生了，才谈得上"没有补发 logout"。
+    seedLoggedIn()
+    const app = await mountApp()
+    await app.find('.rail-settings').trigger('click')
+    expect(app.find('.settings-panel').exists()).toBe(true)      // 前置：弹窗开着，注销入口在里面
+    await app.find('input[aria-label="注销确认·原密码"]').setValue('hunter2-pass')
+    await app.find('input[aria-label="注销确认·确认词"]').setValue('确认注销')
+    await app.find('.settings-danger-submit').trigger('click')
+    await flushPromises()
+
+    const deactivateCalls = calls.filter((c) => c.url.startsWith('/api/auth/deactivate'))
+    expect(deactivateCalls.map((c) => c.method)).toEqual(['POST'])   // 恰好一枪，且是 POST（这一枪带体）
+    expect(JSON.parse(deactivateCalls[0].body)).toEqual({ old_password: 'hunter2-pass' })
+    // 判据的另一半（与 advisory ② 同一条理由）：票是人家用手打密码换来的，注销之后它已经随
+    // auth_tokens 那一片行一起没了。补发 /logout 只会撞一次 401 ⇒ 回调 ⇒ 环。
+    expect(calls.filter((c) => c.url.startsWith('/api/auth/logout'))).toEqual([])
+
+    expect(app.find('.auth-screen').exists()).toBe(true)
+    expect(app.find('.user-rail').exists()).toBe(false)
+    expect(localStorage.getItem('auth_token')).toBe(null)
+    expect(localStorage.getItem('session_id')).toBe(null)
+    expect(localStorage.getItem('selected_parent_ids')).toBe('[]')
+    // vm 层：DOM 已整棵卸载，屏上没有残留可断（口径同上 :183 那段注释）
+    expect({ docs: app.vm.documents.length, msgs: app.vm.messages.length })
+      .toEqual({ docs: 0, msgs: 0 })
+    expect(app.vm.settingsOpen).toBe(false)         // 弹窗自己已经跟着整屏没了，但 ref 也得归位
   })
 
   it('⚙ 点得开、弹窗能关，且退出后不再留着上一个账号的表单', async () => {

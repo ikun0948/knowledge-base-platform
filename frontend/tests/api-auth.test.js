@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../src/api/client.js', () => ({ request: vi.fn() }))
 
 import {
-  addModel, register, removeModel, setDefaultModel,
+  addModel, deactivateAccount, register, removeModel, setDefaultModel,
   updateLlmConfig, updatePassword, updateProfile,
 } from '../src/api/auth.js'
 import { request } from '../src/api/client.js'
@@ -87,5 +87,20 @@ describe('api/auth.js 的六个设置封装（Task 8）', () => {
     await addModel('qwen-turbo')
     expect([request.mock.calls[2][0], request.mock.calls[2][1].method, request.mock.calls[2][1].body])
       .toEqual(['/api/auth/me/models', 'POST', { name: 'qwen-turbo' }])
+  })
+})
+
+// 注销账号：verb 用 POST 而不是 DELETE，因为这一枪要带请求体（原密码），
+// 而 fetch 的 DELETE 带 body 在代理与上游那边是条少有人走的路；路径与 register/login/logout
+// 同一族，读起来是"认证生命周期的一步"，不是"删掉 /me 这个资源"。
+describe('api/auth.js 的注销封装', () => {
+  it('deactivateAccount 只发 old_password 一格，POST 到 /api/auth/deactivate', async () => {
+    await deactivateAccount('old-pass')
+    const [path, opts] = request.mock.calls[0]
+    expect([path, opts.method]).toEqual(['/api/auth/deactivate', 'POST'])
+    // 逐字比对整个 body：界面上还要手打一遍确认词，那一格属于交互，
+    // 不进契约（backend/schemas/auth.py 的 DeactivateIn 只有 old_password）。
+    // 顺手把确认词塞进来的实现会红在这一句。
+    expect(opts.body).toEqual({ old_password: 'old-pass' })
   })
 })

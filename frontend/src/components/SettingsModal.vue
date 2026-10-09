@@ -1,13 +1,20 @@
 <script setup>
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 
 import {
-  addModel, removeModel, setDefaultModel, updateLlmConfig, updatePassword, updateProfile,
+  addModel, deactivateAccount, removeModel, setDefaultModel, updateLlmConfig, updatePassword,
+  updateProfile,
 } from '../api/auth.js'
 import { useAuth } from '../composables/useAuth.js'
 import { AVATARS, AVATAR_LABELS, MODEL_NAME_MAX, NICKNAME_MAX, PASSWORD_MIN } from '../constants.js'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'deactivated'])
+
+// 危险区要手打的那个确认词。写成组件里的单一常量、提示与门禁都读它：两处各写一份迟早分叉，
+// 分叉的表征是"用户照着提示打完了，按钮还是灰的"。它**不进** constants.js——
+// 那文件的口径是"后端契约的镜像"（backend/tests/test_frontend_constants.py 两头都钉），
+// 而这串词后端不认识，纯交互。
+const DEACTIVATE_CONFIRM = '确认注销'
 
 // 直接吃 useAuth() 的模块级单例，不从 App.vue 往下传 props：
 // 设置弹窗改的就是"当前这个人"，传一层会让 user 出现两份真相——
@@ -22,16 +29,24 @@ const password = reactive({ oldPassword: '', newPassword: '' })
 // baseUrl 回填（它是可明文显示的），apiKey **永远不回填**：库里那串不该回到输入框里。
 const llm = reactive({ apiKey: '', baseUrl: user.value?.llm_base_url ?? '' })
 const modelDraft = ref('')
+// 危险区（注销账号）：原密码 + 手打的确认词。两个都留在这份状态里，成功后立刻抹掉（下面 run 的
+// 密码段同一条理由：204 没有回执，明文留着就是等下一个人按 F12）。
+const danger = reactive({ oldPassword: '', confirmWord: '' })
 
-// 四段各一个错误位：改密码失败不该把模型名单也标红。全局那条 error 属于聊天链路
+// 五段各一个错误位：改密码失败不该把模型名单也标红。全局那条 error 属于聊天链路
 // （useChat 持有、挂在聊天框上方），借它会把设置错误显示到一个已经滚动看不见的地方。
 const profileError = ref('')
 const passwordError = ref('')
 const llmError = ref('')
 const modelsError = ref('')
+const dangerError = ref('')
 // 同时只让一个动作在飞：四个保存按钮共用它。连点两次「添加模型」会让后端先 409 再成功，
 // 名单顺序取决于两个请求谁先落地——那是最难复现的一种乱。
 const busy = ref('')
+
+// 两道确认都齐才允许发出去：原密码非空 + 确认词逐字相等（不 trim、不忽略大小写——
+// 提示里怎么写的就怎么打，宽松一点就等于把门禁松掉）。
+const dangerReady = computed(() => danger.oldPassword !== '' && danger.confirmWord === DEACTIVATE_CONFIRM)
 
 async function run(kind, action, onOk) {
   busy.value = kind
@@ -53,6 +68,7 @@ function setKindError(kind, text) {
   if (kind === 'profile') profileError.value = text
   else if (kind === 'password') passwordError.value = text
   else if (kind === 'llm') llmError.value = text
+  else if (kind === 'danger') dangerError.value = text
   else modelsError.value = text
 }
 
@@ -115,6 +131,20 @@ function dropModel(name) {
 
 function makeDefault(name) {
   return run(`model-default:${name}`, () => setDefaultModel(name), applyModels)
+}
+
+function deactivateNow() {
+  // `:disabled` 之外再挡一次：Enter 与程序化点击都能绕过禁用属性，而这一枪不可恢复
+  if (!dangerReady.value) return
+  return run('danger', () => deactivateAccount(danger.oldPassword), () => {
+    // 成功路径先抹明文再交出去：App 那边 clearAuth() 一执行，这棵子树就整棵卸载了，
+    // 顺序颠倒等于把原密码留在已经换人的界面状态里。
+    danger.oldPassword = ''
+    danger.confirmWord = ''
+    // 本组件不做登出那组动作，只交出去：清理组与"点退出""运行中撞 401"共用同一个函数，
+    // 三条路径的清理一字不差是 App.vue 的不变式。
+    emit('deactivated')
+  })
 }
 
 function onKeydown(event) {
@@ -199,6 +229,22 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
                     :disabled="busy !== ''">添加</button>
           </form>
           <p v-if="modelsError" class="settings-error settings-models-error">⚠️ {{ modelsError }}</p>
+        </section>
+
+        <section class="settings-section settings-danger">
+          <h4 class="settings-heading settings-danger-heading">注销账号</h4>
+          <p class="settings-hint settings-danger-hint">
+            不可恢复：你的文档、对话历史与向量会一起删除，没有任何找回入口。
+            请输入原密码，再手打一遍「{{ DEACTIVATE_CONFIRM }}」。
+          </p>
+          <input class="settings-input settings-danger-password" type="password"
+                 aria-label="注销确认·原密码" autocomplete="current-password" v-model="danger.oldPassword" />
+          <input class="settings-input settings-danger-confirm" type="text"
+                 aria-label="注销确认·确认词" autocomplete="off" :placeholder="DEACTIVATE_CONFIRM"
+                 v-model="danger.confirmWord" />
+          <p v-if="dangerError" class="settings-error settings-danger-error">⚠️ {{ dangerError }}</p>
+          <button class="btn btn-small settings-danger-submit" type="button"
+                  :disabled="busy !== '' || !dangerReady" @click="deactivateNow">注销账号</button>
         </section>
       </div>
     </div>
