@@ -1047,6 +1047,140 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
   与 ② 那轮的"锚点唯一但形状错"同族，这次错在**锚点选了下一函数的头**。
 - **`Glob` 在中文路径下对 `frontend/src/components/*.vue` 返空**：改用 `ls` 直查（只影响取文件名，不影响任何数字）。
 
+## 追加特性：注销账号（硬删，MySQL 与 Chroma 两头一起抹）— 三条闭口 ①②③
+
+清单八条收口之后使用者追加的需求，不在 ①–⑧ 的编号里，所以单开一节。
+语义经使用者拍板为**硬删、两头一起抹、不可恢复**（选项原文「认了，按这个设计开始写代码」），
+执行按「一条一闭一提交」推进，三条各一枚提交：`b12c2c2` → `594458a` → `35e9498`。
+
+### 预检（读的是数据面，不是记忆）
+
+- 真库 FK 现状（① 那轮直查，结论进 `b12c2c2` 提交信息）：**四张表带指向 `users` 的 RESTRICT 外键**
+  （阶段三 ④ 补的那一批），两张块表又挡着 `documents` ⇒ 删用户的顺序只有真库能证，
+  错一步就是 MySQL 1451；**fake 没有第二张表、FK 不生效**，任何顺序在离线门都"过"。
+  这决定了 ① 的判据必须住 live 组，不能拿 TestClient 凑。
+- Chroma 侧：metadata 里的 `user_id` 存的是 **`str(user_id)`**，`delete(where=...)` 的标量相等
+  **不做隐式转换** ⇒ 传裸 int 的表征是"静默扫了个空"而不是报错。这一格由 ② 的离线判据钉住（V1）。
+- 共享库基线（① 那轮跑完复核）：`documents 13 / chat_history 43 / parent_chunks 4 / child_chunks 10 / users 2`，
+  零探针残留；⑥ 那轮记录过的 `auth_tokens` 面未变。
+
+### RED → GREEN（三条闭口的顺序就是依赖顺序）
+
+1. **① `database.delete_user_cascade`**（live 判据先红：方法不存在）：一个事务里按
+   `auth_tokens → user_models → chat_history → documents → flush → users` 删，documents 走
+   **逐行 `session.delete`** 让 ORM `cascade="all, delete-orphan"` 带走两张块表；交出各表行数，
+   删不到行报全 0 安静返回。判据一条里六格断言（先数探针名下 2/2/2/1/2/2 证明 fixture 造齐，
+   再要返回值、六表归零、`users` 行消失、`default@local` 名下前后逐键相等、同刀重放第二次全 0）。
+   测试侧两个助手：`_probe_rows`（块表没有 `user_id` 列，只能经 documents join）、
+   `_wipe_probe_account`（**故意不调生产方法**：判据红在生产方法存在之前，漏下的行就是共享库里的永久残留）。
+2. **② `POST /api/auth/deactivate`**（204，无正文）：三道门按「令牌 → 口令 → 默认账号」排序，
+   `verify_password` 不过回 401「原密码不正确」（`PASSWORD_WRONG` 与改密码共用，同 `LOGIN_FAILED` 的待遇），
+   `user.identifier == DEFAULT_IDENTIFIER` 回 409「默认账号不能注销」。
+   **口令门排在默认账号门之前**：口令错时该说"你证明不了是你"，回"这个账号删不掉"等于替对方确认口令是对的。
+   两头删按「行先提交、向量后清扫」；`VectorStore.delete_by_user_id` 内部 try/except + 记日志、永不外抛
+   ⇒ 清扫失败不把 204 报成 500（行没了就是没了，残留向量不可达，是占盘的垃圾不是泄露）。
+   `schemas/auth.DeactivateIn` 的 `old_password` 界 `1~64` 与 `PasswordIn.old_password` 逐字相同，
+   空串那格必须在算 PBKDF2 之前拦住。默认账号不放行的理由：`ensure_default_user` 下次开机按 identifier
+   重铸一枚**新 id**，演示数据全在它名下，删它的表象是"应用自己重置了"。
+3. **③ 前端危险区**：设置弹窗第五节，`dangerReady = 原密码非空 && 确认词 === DEACTIVATE_CONFIRM`，
+   按钮同一处还吃 `busy !== ''`。成功后 `emit('deactivated')` ⇒ App 把已有的 `handleSessionLost` 当回调使，
+   **不新写第三套清理**。verb 用 POST 不用 DELETE（这一枪要带请求体）。
+
+### 门禁实数（全部在变异还原之后重跑，只抄当轮汇总行）
+
+| 门 | 命令 | 本轮实数 | 上一记档基线 |
+|---|---|---|---|
+| 后端全量 | `python -m pytest -q` | **345 passed / 2 skipped / 2 deselected**（68.21s） | 337/2/2（② 补账） ⇒ **+8**，逐闭可核对：① 给 live +1、② 给离线 +7、③ 后端 0 改动 |
+| 后端离线 | `-m "not live and not migration"` | **320 passed / 29 deselected**（45.36s） | 313/28 ⇒ +7 条、deselect +1 是 ① 那条 live 判据 |
+| 后端 live | `pytest -q tests/test_live_database.py` | **25 passed**（3.55s） | 24 ⇒ +1（① 那条） |
+| 前端 jsdom | `npx vitest run` | **162 passed / 14 files** | 158 ⇒ **+4**（api-auth +1、SettingsModal +2、App 接线 +1） |
+| 前端构建 | `npm run build` | exit 0，产物换 **`index-CrrLaEBX.js`**（102.85 kB）+ **`index-C4mVDwWj.css`**（13.73 kB） | `index-CKhscz7G.js` / `index-CUrklGmJ.css` |
+| 浏览器门 | `npm run test:browser`（两份服务自起自停） | **21 passed / 1 file**，三次实跑：变异前绿 → L1 红 2 → 还原后绿 | 21（⑧ 收口值，**未增减条数**） |
+
+那 2 个 skip 是 `-m live` 的流式判据（本轮全量跑在"没服务"那一档）；服务只在浏览器门那一段起着，
+按 CommandLine 核对后停干净（`netstat` 复核两端口空），**没有为了凑流式数字而重跑 live 组**。
+零写库复核：`/api/health` 跑门前后逐格相同（`document_count 4 / parent 4 / child 10`）。
+
+### 变异自证（19 轮，全部手工 Edit + `cp` 还原 + sha256 与 `git diff` 双向确认）
+
+① 两轮（基线 sha `cc522a78399530cc…`，还原后 diff 回到 +38/−0）：
+M1 documents 那段换成 `query(...).delete(synchronize_session=False)` → **红 1 条**，1451 `child_chunks_ibfk_1`
+（绕开 unit-of-work 就不触发 cascade）；M2 `users` 那一删提到最前 → **红 1 条**，1451 `auth_tokens_ibfk_1`。
+
+② 九轮（末轮复跑焦点 `67 passed / 2 deselected`，与变异前同数）：
+V1 `where` 传裸 int → 1 failed；V2 只扫父集合 → 2 failed；V3 拆掉 try/except → 1 failed（RuntimeError 外抛）；
+E1 两头先后调换 → 1 failed（`['vectors','rows']`）；E2 删口令门 → 2 failed（含门序那条）；
+E3 删默认账号门 → 1 failed（`assert 204 == 409`）；E4 删那一行向量清扫 → 2 failed；
+E5 204 改 200 → 2 failed；S1 `min_length` 改 0 → 1 failed（`assert 401 == 422`）。
+
+③ 前端七轮（焦点集 `21 passed / 2 files`；末轮还原后全量 `162 passed`）：
+F1 `dangerReady` 去掉确认词那半 → 1 failed | 21 passed；F2 精确相等改前缀宽松比 → 1 failed | 21 passed；
+F3 删 `emit('deactivated')` → **2 failed** | 20 passed（组件与 App 接线同时红）；
+F4 只删 App 侧监听 → 1 failed | 21 passed（只红接线那条，证明 F3 的两条红各有归属）；
+F5 成功后不清明文 → 1 failed | 21 passed（`expected 'hunter2-pass' to be ''`）；
+F6 `setKindError` 删 danger 分支 → 1 failed | 9 passed（SettingsModal 单文件）；
+F7 封装字段名翻错成 camelCase → **2 failed** | 17 passed（封装与 App 真实链路两层都红）。
+
+③ 补一轮浏览器侧（既有容器不变式对新节有没有牙）：
+**L1** `.settings-danger` 加 `min-width: 420px` → **2 failed | 19 passed**，目标那条红在
+`expected 422 to be 311`（`.settings-body` 的 `scrollWidth` vs `clientWidth`）。第二失败是**级联**，
+不是独立事实：断言抛出后那句 `await closeModal(page)` 没执行，弹窗一直开着，下一档候选池那条量错了东西。
+还原后 sha `0d665109498f…` 与基线逐字一致、`git diff --quiet` == HEAD、重跑 `21 passed`。
+
+### 用户可见面
+
+设置弹窗底部多一节「注销账号」：一条上边框把它从纵向流里切出来（上面四节是"改了还能用"，这一节是
+"删了就回不去"），红色标题走 `--fail-fg`，提示要求手打「确认注销」四个字，两格都过才亮按钮。
+点成功后整屏落回登录页，界面不闪不刷，屏上不留上一个账号的任何一行；**没有** 原生 `confirm`
+（headless 里它会被自动 accept，那条判据就没牙了——口径同阶段二的清空对话）。
+
+### Ruling（这一轮定下的口径，附代价）
+
+1. **确认词不进 `frontend/src/constants.js`，留在组件内当单一常量**：那文件的章程是"后端契约在前端的镜像"，
+   由 `backend/tests/test_frontend_constants.py` 两头钉；把一枚纯交互的常量塞进去，会让"这里多写一份副本会红"
+   那条门禁变成假命题。代价是镜像集与交互常量分在两处，读代码的人得知道哪个是哪个。
+2. **三条清理路径复用同一段 `resetWorkspace`（经 `handleSessionLost`）**：登出、运行中 401、注销成功后
+   清理动作必须一字不差，否则"退出清得干净、注销清不干净"是最难查的那种不对称。代价是注销的回调名
+   （`handleSessionLost`）读起来不像它的语义——注释里写明了这层复用是故意的。
+3. **注销成功后不补发 `/logout`**：`auth_tokens` 那片行已经随账号没了，那一枪只会撞一次 401 ⇒ 回调 ⇒ 环。
+   与 advisory ②（票过期那条）同一条理由，两处判据各钉一半（`calls.filter(...logout)` 为空）。
+4. **向量清扫是 best-effort，失败不改状态码**：使用者拿到的 204 说的是"账号没了"，不是"两个库都验证干净了"。
+   代价是残留向量在界面上一律不可达（读侧按 `user_id` 收窄）却仍占盘，本轮**没有**清扫失败的补偿重扫入口。
+5. **浏览器门不加"真按注销键"的判据**：它会在共享真库里删掉一个账号，代价与收益不成比例。
+   端到端的替代证据是 jsdom 那条走真实链路的判据（真发 POST、真清 localStorage）+ ①② 两闭的端点判据。
+   代价：真浏览器里这一节的**渲染**只被既有的容器不变式覆盖（L1 证明那条覆盖得到），没有独立几何断言。
+
+### 挂账（knowingly 没堵的四面）
+
+1. **两个标签页并发注销**：一处注销、另一处仍活着，那一侧的下一次请求会撞 401 落回登录页——今天靠
+   `handleSessionLost` 顺带成立，**没有判据、也没有变异轮**。与 ② 提交信息里那句是同一笔账。
+2. **"越界删到别人名下"只有判据、没有变异证据**：跑那一轮的变异等于在共享真库里删掉 `default@local`
+   的 43 条历史与 13 篇文档，代价不可接受（① 那轮就写进提交信息）。
+3. **注销后重新注册同一个 identifier**：会拿到**新的 `users.id`**，旧数据（若清扫失败）与新账号无关联。
+   这一格今天没有判据，界面上也不可见；要堵得先决定"同名重注册"算不算预期行为。
+4. **清扫失败的补偿入口**（重扫某个 `user_id` 的向量）不存在：Ruling 4 的代价面，挂在这里而不是藏着。
+
+### 过程偏离与自纠，如实记
+
+- **控制者独自执行三条闭口**（无实施代理、无评审代理），**终审是自评** ⇒ 交付时明示。
+- **一次备份撞名把 `backend/api/auth.py` 覆盖成了 `schemas/auth.py` 的内容**：变异备份按
+  `mut-<basename>.py` 命名，而这两个文件 basename 相同。恢复路径：`git show HEAD:` 取回字节，
+  再从会话转录里逐字重放本轮四处编辑（**排除那次变异本身**），sha 与基线 `64775ec0…` 逐字吻合、
+  diff 回到 32/−4 才算数。此后所有备份一律按**完整路径**命名（`mut-frontend_src_api_auth.js` 这种），
+  并把这条写进 [[project-crlf-mutation-hazards]]。
+- **我自己新写的那条判据有个排序 bug**（不是实现的）：先断"填对确认词后按钮可用"、后断"密码被清掉"，
+  而实现按设计把两格一起清 ⇒ 该条首跑红在 `expected '' to be undefined`。修法是把序列改成
+  "词对 + 密码空 ⇒ 仍禁用 ⇒ 再填密码 ⇒ 可用"，两句判据都留住且都成立。教训与 ⑧ 那条同源：
+  **先想清楚这一句在测门禁还是测清理，再决定它在序列里的位置**。
+- **② 那轮里，`.queue-item` 长度 0 那条 DOM 断言是永久绿**（那个场景从头到尾没有队列项），
+  已收掉、改由 `app.vm.documents/queue/messages` 三句 vm 层断言钉——理由写在测里：登出时 `.app-shell`
+  整棵卸载，屏上没有残留可断。
+- **预检复量脚本这次没跑成**（想当场重验 FK 图，`from config import get_config` ImportError、
+  以及一句 `SELECT ... email` 撞 Unknown column）：台账里的 FK 与行数**抄自 ①② 那两轮的提交信息**，
+  不是本轮新量；本轮新量的只有六张门的条数与 `/api/health` 的三格。
+- **`Glob`/`grep` 在中文路径与 cp936 控制台上仍有假空**（`grep -n` 对明明存在的符号返回空）：
+  关键计数一律换 `Read`/`ls`/字节计数复核，不以一次 grep 为空为证据。
+
 ## 清单进度
 
 | 条 | 事项 | 状态 |
@@ -1059,3 +1193,4 @@ id 从 1 漂到 30**，而那 43 行当年写入时就带着值 ⇒ `backfill_ch
 | ⑥ | 迁移的"缺 key 半态"分支从未在真 `.env` 上跑过 | **已闭合**（`6a327ca`，按使用者裁定**不动 `.env`、改判据**：`seed_default_llm` 的三条出口各带一枚常量 `reason`（`env_incomplete` / `already_configured` / `seeded`），`run_migrations` 的 summary 新增 `seed_reason` 把它带进开机日志——原先两条早退回同一个字典，`llm_seeded: False` 分不清是"`.env` 缺键"还是"默认账号已有 key"；「缺 key 半态」由注入的 `IncompleteEnvConfig` 在**离线门**上证两件事（那遍一行没写 + 报得出走了哪条）。判据 +3（`test_migrations.py` 30→33，含 caplog 钉"两遍 no-seed 布尔逐格相同、只有 reason 分开"与"日志里不许出现 key"），另**有意改写**四处整字典相等断言。七轮变异 M1–M6 各红 3–4 条、M7 是对照组（只换字典键序 ⇒ 33 全绿，判据钉值不钉形状）；真开机一遍拿到 `'seed_reason': 'already_configured'`（⑤ 那轮只能推断的这一格现在是日志里读出的事实）。**边界如实记**：真 `.env` 上"缺键"那半本机仍未跑过，证据换成离线判据；"写了 key 但没加模型"的两支因没有各自报名 |
 | ⑦ | 422 的 `detail[*].input` 回显，只靠 `client.js:32` 那条 fallback 挡着 | **已闭合**（`74d11b8`，按使用者裁定的这条路「前端 fallback 剥掉 input」：新增模块级 `validationItemText`，数组 detail 的每一项只准 **msg（且只认非空字符串）、type、loc** 上屏，兜底改成**白名单挑键**而不是整枚 stringify ⇒ `input`（FastAPI 原样回显的请求值，`PUT /api/auth/me/llm` 那一枚里就是明文 api_key）与 `ctx`（pydantic 允许塞任意值）都到不了界面。键序按 FastAPI 自己的 `type`、`loc` ⇒ 阶段二那条"缺 msg 降级为 JSON 文本"判据**期望值一字未改仍绿**；三条网络出口共用 `httpError` 这一构造点，故 fetch / SSE / 上传 XHR 一起受保护。判据 +4（`client.test.js` 26→30，含 `httpError` 直接构造那条、`null` 项那条、ctx 载荷故意与 secret 不同那条），九轮变异 M1–M8 逐轮只红目标面（M3 只红 1 条证明 input/ctx 两面分开计量）、M9 对照组全绿。前端全量 **158 passed/14 files**、build 产物换 `index-CWg0-YgN.js`；后端一行未动（全量 336/2/2/1 逐字不变，跨端那 5 条单跑绿）。**边界如实记**：只管"上界面"，422 响应体里 `input` 依然在（devtools / 代理日志 / 直连 API 仍可见），要连那一面一起堵得在后端挂 `RequestValidationError` 处理器，不在本条范围；"值写进 msg"的绕路今天不成立（两处 validator 实测只写长度），挂账 |
 | ⑧ | 视口/交互探针是一次性脚本，没有常驻回归测试 | **已闭合**（`e4f572f`，按使用者裁定的这条路「装成 devDependency + 常驻判据」：`puppeteer-core@^25.12.0` 进 `package.json`/lockfile，判据放**独立目录 + 独立 config**（`frontend/tests-browser/` + `vitest.browser.config.js`，`fileParallelism:false`）⇒ `npm test` 那套单位门仍然任何机器都能跑，浏览器门走 `npm run test:browser`；前置条件失败**响亮报错不 skip**（`requireStack` 分得清"dev 连不上"与"dev 在、后端不在=代理 502"）。判据口径钉**数据无关的几何不变式**：三档视口（1280×900 / 375×800 / 500×900）共判整页不滚、消息区是有界滚动容器、高内容（DOM 合成 3000px，必须 `flex:0 0 auto`）撑开的是消息区不是页面，宽屏发送键在视口内且不溢出、两层浮层不重叠且整块在视口内，≤768 控件行与候选池、全程新增 console/page error 为 0；登录/登出全走 API（点 `.rail-signout` 在窄屏会被遮罩吃掉），跑前跑后库内行数逐格相同（`auth_tokens 1 / users 2 / documents 13 / parent_chunks 4 / chat_history 43`，登出实测 204）⇒ **不烧配额、不写业务数据**。首跑 12 条有 1 条红且红在**判据自己**（`.picker-results` 是 `v-else-if`，busy/空态不渲染）⇒ 改成"真实列表优先、否则挂同类名临时节点"两口径并报，并把类名另钉进 `chunk-selection.test.js`；判据分两轮加宽到 21，已跑过的变异轮在新集上全部重跑。十四格变异（基准 `layout.css` sha `03705068a7e9`，每轮 sha 回基准）：M1a/M2a 各全绿**逼出计算样式判据**、M1b/M2b 各 `1 failed`、M3a 宽度上界全绿（挂账①）、M3b 高度脱约束 `4 failed`、M4 `1 failed`、M5/M5b 两行互为兜底各全绿、M5c 一起删 `1 failed「页面被顶开 2629px」`、M6 `2 failed`、M7 `100dvh` 与继承 100% 分不出（挂账②）、M8 对照组全绿。门禁：浏览器门 **21 passed/1 file**、`npm test` **158/14** 逐字不变、build 产物 hash **两枚都未变**（生产码 0 改动）、后端三门未重跑（diff 只在 `frontend/`，口径同 ①③⑦）。**挂账三面**：弹窗宽度上界 560 无判据、`100dvh` 桌面 headless 不可分辨、`.settings-model-row{flex-wrap:wrap}` 的牙齿是数据相关 |
+| 追加 | 注销账号（硬删，MySQL + Chroma 两头一起抹，不可恢复） | **已闭合**（三闭一提交：`b12c2c2` 级联删行 → `594458a` `deactivate` 端点 + 按主人戳清扫向量 → `35e9498` 前端危险区两道确认 + App 接线；三道门按「令牌 → 口令 → 默认账号」排序、两头删按「行先、向量后」，确认词留组件内不进镜像集，清理复用 `handleSessionLost` 不补发 logout。19 轮变异自证 + 浏览器侧 L1 一轮。六张门实数：后端 **345/2/2**、离线 **320/29**、live **25**、jsdom **162/14**、build 换 `index-CrrLaEBX.js` + `index-C4mVDwWj.css`、浏览器门 **21/1**。挂账四面见上节 |
