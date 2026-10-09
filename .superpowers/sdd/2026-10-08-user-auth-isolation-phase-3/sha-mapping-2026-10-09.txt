@@ -1,0 +1,115 @@
+# 2026-10-09 清理 git 历史里旧默认口令后的新旧提交映射（只列换了 SHA 的 113 枚，旧端 123 枚未动）
+# 列：旧SHA <TAB> 新SHA <TAB> 日期 <TAB> 标题
+12bf74b05dcbbca65e9ab24df2454596ac3aba77	a6d75fb52f3ad4d786a1a24c60166fdb278ba606	2026-10-09	docs(ledger): 轮换账号口令收口——两头一起改的机制、一条假警报、探针两处自错
+fae2acc1afb74c4c4ef076f11af3270b5ad40d65	cf4647f761723e31ccc584a86666d6e1c8f44d17	2026-10-09	docs(ledger): 注销账号三条闭口收口——19 轮变异逐轮条数、五条 Ruling、四面挂账
+35e949894483ea51d109723a2f847ca556996db2	0ba49fe73ccb7b8a7080f11a89fdffd234da0309	2026-10-09	feat(frontend): 注销账号③：危险区两道确认 + 成功后走同一条清理组
+594458ada20c5d28e4324ff06c4bd0cc20322d8f	77d7ce9fd865e0c73c359dc333edd911f0e65423	2026-10-08	feat(backend): 注销账号②：deactivate 端点 + 按主人戳清扫向量
+b12c2c2c30798cc9e608744c6f65e8b500833d67	f6702b1963c81d638aad98510cdd22482f5d01ec	2026-10-08	feat(backend): 注销账号①：delete_user_cascade 按外键顺序删净一个人名下的行
+90389b8d700a7bcd5e4a388d9bae00dc6438b18a	ea254e61016b1aeecf4e153e21f3ed4da2e2c520	2026-10-08	docs(ledger): 阶段三 ② 的补账收口——八轮变异逐轮条数、五条 Ruling、三面挂账
+e1f4d4550e251d6fe45a8b820370d96c20dd5fd4	4910b8f506dfe920befe5e05e2289e6f68a31415	2026-10-08	test(backend): 阶段三②补账——问答契约的三格界进镜像集，前端两枚本地常量收进单一出口
+1180f8146cd0eb688247fdad29d7e59d0f78e19c	2b76069efeae29be71f7e533ce118df774cbac70	2026-10-08	docs(ledger): 阶段三第⑧条收口——十四格变异逐轮条数、六道 Ruling、三处挂账
+e4f572fb79d608b7ee8f5478bb80103294414de0	8c1a2cb03f86a2c7260d02f8727ed4f903c142f0	2026-10-08	test(frontend): 阶段三⑧ 常驻浏览器判据——21 条视口几何，puppeteer-core 进 devDependency
+aa654c3d6b01c640701054cfc7c7dafefe864d37	4ec2eeabe5d57acc9aca330f42878641b30918d5	2026-10-08	docs(ledger): 阶段三第⑦条收口——九轮变异逐轮条数、五条 Ruling、两处边界
+74d11b8d948745d583364dee6f45b3b9bd3cf793	02d7b7ecb20fbbfe86e7fee64bb8b10ad7f0f233	2026-10-08	fix(frontend): 阶段三⑦ 422 的兜底剥掉 input——明文 api_key 上界面的唯一通道改成白名单
+bd0df08e98a1226ecb27b1b36c14a7ea77c35bd4	60468cd7b561123a9df501362d903eeeb8522da1	2026-10-08	docs(ledger): 阶段三第⑥条收口——七轮变异逐轮结果、四条 Ruling、两处自纠
+6a327ca5d2e389265217245abf0bd6e883430a47	79a671358a1c52d58c399d9279161ed9841496c3	2026-10-08	test(backend): 阶段三⑥ seed 三条出口各报一名——「缺 key 半态」第一次有了离线判据
+936398658d3f4f42eef22c328048c6ad2e7edde8	982131e730439584994af936c36dcc956aa05c35	2026-10-08	docs(ledger): 阶段三第⑤条收口——八轮变异逐轮结果、五条 Ruling、六处过程偏离
+e0ecfe1bda77fb675862ff95167891e31277861a	d1622c5a4aaefe873c9c67d5a6bab71d22854b5b	2026-10-08	test(backend): 阶段三⑤ 「至多一枚默认」交给引擎——生成列 + 唯一索引，去重先于建索引
+3af77da88b11059435c97c12bdbdf5162aa47b86	b17093fd2777f8a1c2b6ed52c3577ae7b324682c	2026-10-08	docs(ledger): 阶段三第④条收口——十二轮变异逐轮结果、四条 Ruling、七处过程偏离
+423a26a073969cd41928c759d0eaf0ecae6fd06d	874949ed275f655e2891bb8e404a782b1b422cd7	2026-10-08	test(backend): 阶段三④ 补外键——先清孤儿再 ALTER，RESTRICT 不级联
+8b176989809b800dc83dc3d66f8663bf9dec5ea4	39848d9e789a3868c70ab53d55b741ad67a6af8c	2026-10-08	docs(ledger): 阶段三第③条收口——六轮变异逐轮结果、四条 Ruling、三处过程偏离
+d89bb29075814b8d413c8a4b50dbb9880b5619f2	4203bfd0d34d1bf3e3fbe30a9218fb3131310747	2026-10-08	test(backend): 阶段三③ 补正——同名判据的口径钉进实现（只扫模块顶层），注释里的「35」换成实测
+bcc0296ad7ce5155d7d2a3dd82e61abcfe3ecf2e	0515532158e68f7426198ab1b66dcc80b12cfd92	2026-10-08	test(backend): 阶段三③ 同名替身拆开——迁移那份改名 MigrationConfig，唯一性钉成判据
+ffc62e06b719c7313ba9de4b80ccd8265d545a7e	9fa39c2769601c6bc276924d8fb349f5cffd22f3	2026-10-08	docs(ledger): 记录更正——bd75263 标题写「两处过程偏离」，第②条那一节实际三条
+bd7526339851d822db0c9d0b0262b3d3a20534e6	9a1d6a9c423ce50e32e2f918e564e99a85ec1335	2026-10-08	docs(ledger): 阶段三第②条收口——七轮变异逐轮条数、四条 Ruling、两处过程偏离
+ee117fd9b75c429b46bdffb808299b328d442e23	bd2bd1f51b3a821e7b8c28d0c939e2581cf2406c	2026-10-08	fix(frontend): 阶段三② 前后端镜像常量收到单一出口，判据放 pytest 两头钉
+da4b942633315014bf5191ff50fc4d2bed03817e	73e8e67cdf46f5e941e9e39f5f628a34c7690640	2026-10-08	docs(delivery): 阶段三第①条就地销账，第⑧条的 puppeteer 残留描述纠到当前事实
+31e07088b3144b660ebb5cd9bfd0c400c8bbd21a	24ed9932a46e9dc247452912272f83c85e76d870	2026-10-08	docs(ledger): 阶段三开账——第①条 LlmIn 长度界闭合（de8499d）
+de8499d4cd8982685af66521faf73c07d65d1578	6e67d1f4e0681655829f8f5a50ac593ab26bba7c	2026-10-08	fix(auth): LlmIn 两格的长度界改量 strip 之后——靠空白凑够 8 格的 key 原本会被存进库
+ddc9144e261d7a80012b7ccf696f126f6c8fab3f	9ad79d3b301b88ae07d612e99587526063974bea	2026-10-08	docs(delivery): 阶段二交付文档落盘——七条需求对账、十条预期表征、终审必修与阶段三八条
+25bf2e20786e8ebafdb632a25ad39d9a83ff0dd7	47621cd1394294c7ec42f4b14de342f579f02809	2026-10-08	docs(ledger): 阶段二全分支终审收口——BASE cd7316d、七条承重断言直查、Minor 逐条裁决、八条阶段三顺延
+e60dcf41eb1db7533d913cf5278d842b498dabfe	0534e65884f40fbec1d78b3787dbde43835ecb1d	2026-10-08	refactor(ui): 删掉 railAvatar 里永不执行的 ?? '我'（阶段二终审，收 Task 9 的 M-A）
+a145f65705631f0da663b10015ff12b08853ed47	ab92e38d3641d6708c3fd8b6dd94fbf72ebaa15a	2026-10-08	docs(auth): 把指向未入库台账的注释改成仓库内锚点，并把条数纠到 47（阶段二终审，收 Task 12 挂账④）
+4c45e96d9659daba712d9b0a93c2f8098ea22092	8a414bee74399c4e9551755c2047972f13d7bb42	2026-10-08	fix(auth): 删除模型的路由改成 {name:path}——带斜杠的模型名原本加得进去删不掉（阶段二终审必修）
+b3cae98bcef332b9bac4599cf64680bde770ed46	51b31fe643bd88e481a7db860c9c6b054f4bc162	2026-10-08	docs(ledger): 阶段二收口——三门实数、12 条浏览器判据、五条 advisory 销账
+6ffff74a1ac1cc40ddd5bd61d36922a29e080d16	5672e7ffa4e1c9b8376730893ec956fb02289217	2026-10-08	test(observability): print 扫描面改成自动发现 + 覆盖率判据（阶段二 Task 12，advisory ⑤）
+599d5f97977f133b0d32d5cd7b67264d84d3b62c	7a34eae8b24563342cd15e44b0ae6987f45014b5	2026-10-08	docs(plan): Task 11 实跑回写（起点 148 不是 147、变异 ② 的"两半同红"观测不到）
+7a1aa8edf22addf54bab8ce4d0fadcb0d1e6432d	bd88e999cd492bc686a4570c39020506b6cb5c59	2026-10-08	feat(frontend): 未配置横幅 + 发送禁用 + 409 归宿与两条钉档（阶段二 Task 11，含 advisory ③）
+666f6f7f74f823d3367639f7262ef0918dcebb0e	c87389893854fa8f8994b69dfe04bedea2fa6d1a	2026-10-08	docs(plan): Task 10 实跑纠偏回写（四处修订块 + 变异自证① 的假预期指认）
+74eaf62af29b494269a9958de7c802f0d2b5662b	e689aec8cecad948d313f8781aca6b805917ef3d	2026-10-08	feat(frontend): 输入区两段式 + 模型下拉，model_name 接到发送链路（阶段二 Task 10）
+1945656972e4b95a685a7dce2d78724783bd1ea3	6a0e69d4ff9880515accbdac4b56dcbad287a112	2026-10-08	docs(plan): Task 9 实跑纠偏回写（三处）+ 更正我误指控计划的一处
+6f920c30a2af6e09a8bb28e86ff2b0133d7fa9ac	4b716f0c58f375f337a0ed8a42cac958e090b3af	2026-10-08	feat(frontend): SettingsModal 四段设置弹窗 + ⚙ 解禁 + 头像预设（阶段二 Task 9）
+e0a525b804ec135c6d3f410741fc375de8f44fec	125874b9874f17261f4a2729757acd6cb70dfdab	2026-10-08	docs(plan): Task 8 实跑纠偏回写（四处）+ 一处凭记忆的错数字更正
+da641faf5c1010116f987fa1e5720d9f7b5e1247	f20e6ef369d9260b26c246186d8e2df22eb41039	2026-10-08	feat(frontend): ApiError 带状态码 + 六个设置封装 + 运行中 401 自动登出（阶段二 Task 8，含 advisory ②）
+6df163fad017cc7daf653a268a5c9cb8271bb2ab	28056de1fcc851e8f1e6c3d10fd8ef17f3be7267	2026-10-08	docs(plan): Task 7 实跑纠偏回写 ⑨——SpyStreamRAG 并入 SpyRAG、断言拆分、RED 实为 40/7、三轮变异的红数
+869360bc40e0791526df0e6d35a28c0571b4507e	8c755f9c0c8c3c5fcea6315c5489332eaf86c70d	2026-10-08	feat(chat): 问答吃用户自己的 key 与模型 + 三条 409 门禁（阶段二 Task 7，含 advisory ④ live 登出）
+51ff1204e784ab5a1751d74543efa739aa429f9b	27155affba9692f26968533c2883ae49fd8bc941	2026-10-08	docs(plan): Task 7 预检回写——行号四处过期 + SpyRAG 没有 stream_calls + 默认模型口径收成一处
+c4bf4756f3df4d27fc0b445c8a618667845242d9	d5a40b749e48e825390cf09522f2eb216a28c4e3	2026-10-08	docs(plan): Task 6 实跑纠偏回写——全量实为 295 不是 294，另记 5 处与正文不符
+177077c73f4b0e95fc6b94ecf1681c45cca4edc0	22de9ca16168a0c41b208f1e4c0ac726693308ec	2026-10-08	docs(chat): 补回"白名单返回值为何不传进链子"（阶段二 Task 6 评审 M1）
+41b45d222720341ed678f6919d0f72e0e94b9d2c	a6678578a88ac6cb51514e8eec69649066f8af14	2026-10-07	feat(history): chat_history 加 user_id 并按主人读写（阶段二 Task 6，历史归户 + 跨用户不可见）
+7c7a40eff9a971d052247482c2e157d97b7d7e8a	6cee75e786d9cf0b7587f266364256d079ed379e	2026-10-07	docs(plan): Task 6 预检回写（第二轮）——Task 3/5 之后行号整体再漂，逐格重测
+7640a59aac9a2126906ea620bfc93f0174c0537e	8103e68f33773e974f3ce4a5252ec0d68637e9e7	2026-10-07	test(chat): 端点层装上 user.id→ctx.user_id 的牙 + 清掉读侧过滤的过期注释（阶段二 Task 5 修正轮 1，F1/F2）
+753b792684bfb01a24aa53db01a7ef006f2766a1	3c8efc426a16c345766197664e346ecaf63ae68f	2026-10-07	docs(plan): Task 5 实跑纠偏回写——dedup 桩 KeyError 修正、终态 291 的算术更正
+28928d763b6b338c6bfe2305e76fb7027786c52a	347f69f485b6fc37bc63e4c99963010785cecff4	2026-10-07	refactor(rag): 链方法吃 RunContext + 读侧按 user_id 收窄（阶段二 Task 5，坑 9 收成单一构造点）
+eb7763a6faf331e96457e7b1dd3231abf87d60fa	64f3e44fc00fce4053e7c445fe0ce0ef928f90ad	2026-10-07	docs(plan): Task 5/6 预检回写——main.py 行号漂移、Task 6 全部行号按内容定位、FakeConfig 重复挂终审
+6175267e7a07a26540c9b93161d0a86be471f631	e44b3b307a533dc98ebed45b8c9699eb8ca21c93	2026-10-07	feat(llm): 每用户一套客户端的工厂 + NotConfiguredError（阶段二 Task 4，只建模块不接线）
+ccb67d01b96d5d238c8ce9585b08383bd6c4adac	a39fe916f4270a8509d2f0a42ad5b2ce80797f5b	2026-10-07	docs(plan): Task 3 评审修正轮 1 回写——seed 只在名单为空时立默认（I-1）、补戳主人列装牙（M-1）
+fd6a4c64f50420bcdb5e7da2746888b54ade12b2	2cb95c11c9744f8b0845c78a5bd1b5f6b046b8a2	2026-10-07	fix(migration): seed 只在名单为空时立默认 + 补戳主人列补牙（阶段二 Task 3 修正轮 1，I-1/M-1/M-4/M-5）
+ecdf923473f96fa1b8d8455661b6401755ed2bbd	e61ac5968f0c9a47c15ede22a98368779b160d8c	2026-10-07	docs(plan): Task 3 实跑纠偏四处回写——基线 4/10、自指注释、自愈判据以断言为准、FakeConn 前缀恒假的机制
+a1720ce40c34f778745000539951fd2d8dcd8e53	8e5a3bec1f07966c5458954fc121d98cf8ffd02a	2026-10-07	feat(migration): 步骤 4 抄三键给默认用户 + 补戳窗口自愈（阶段二 Task 3，收阶段一 advisory ①）
+4434626bce7a1bd0f3310ccb386f91ef689be594	3aaa6b971fcc5f18bc49ee1772430d222d731b6a	2026-10-07	fix(backend): api_key 空白守卫 + 三条补网判据（阶段二 Task 2 修正轮 1，F1-F5）
+6f7bf7351c41bc93a496097c82b3456394e68e8b	6d13085fceef261359f3f642faec2814fe51efce	2026-10-07	docs(plan): Task 2/3 预检与实跑回写——自动置默认打断的 live 断言、-m migration 组必须真跑
+50d8587d8ad997549d1042d2802a38cf3d0d248a	6b2e2211c830eadc7dad8faa4823c0dc89747724	2026-10-07	feat(backend): 六个设置类端点 + UserOut 十键（阶段二 Task 2）
+fb9ebaa7606a46aa9cdfa5b570ec401e5a6e7294	4f6599a64f1f7765d90449c9b1bad4d5daa34336	2026-10-07	test(backend): 阶段二 Task 1 评审修正——六条判据与契约补牙（F1-F6）
+161d97ac01d2f553112a722e4675e7f2d7a21d90	b0485d6986b765a33aace5d022a659ac37fbd259	2026-10-07	feat(backend): users 两列 + user_models 表与七个设置类 DB 方法（阶段二 Task 1）
+45c2caf4a6aece6c5a105d511a818036a42c4636	2e791fe561f46bda745822bc8877b40810b25fb4	2026-10-07	docs(plan): Task 1 预检回写两处——live 两条判据互相污染改成 before 对照、_drop_probe_account 的"两张表"口径
+cd7316d4e20822f3465dab823c30a04f6d8e0eda	1d25d882113aae9f6eb6a3fbee0df9dc5de85e07	2026-10-07	docs(plan): 阶段二实施计划落盘——12 个 Task 全文 + 自审三查回改九处
+ccf97dc56b35510df1a80d644001b9ee03a3a7d4	c067422afad3bc78c7cb161f00741c44c2e42c09	2026-10-07	docs(ledger): 阶段一收口——终态 HEAD 三门重跑全绿、环境探测普通仓库无远端、用户选保持现状、阶段二开工单两条清单
+4738fd36c6c0fd807fcc5fb5abe2b1aafa601471	08b1dedc25e5f6e316f9e824a1880923f953b2fc	2026-10-07	docs(ledger): 全分支终审收口——BASE 重钉 e19505a、裁决 Approved 0 必修、四条承重断言直查复核、挂账八条逐条裁定
+33447677a2b3a9efa64e6fdf782b8cf2df26da04	29f8fe39fc213118e3a2d5826916a46d434e8422	2026-10-07	docs(ledger): Task 8 收口——五道门双跑、迁移日志不可观测改判、Step 4 改道 Edge 探针、三条假红与清场五值
+f8d44a1d85cfe84c2b6c361e52f1a1265ee17de5	137be7ce086462fde2363f801aa042e97bd49277	2026-10-07	docs(plan): Task 8 实跑回写六处——删除动词纠偏、pytest 三行重钉、0 skipped 归位、迁移日志不可观测、Step 4 三条假红、3719 选项一划掉
+560d53d0dd8bbe871042282ccb2d0d1281ceb81f	b9dd834b3d2a337753beae7abf4d1c025d4e5b2d	2026-10-07	test(frontend): 登出清空补 vm 层判据（DOM 观测不到）+ 撤销 X-4 的死兜底（阶段一 Task 8 前置补网）
+0b22116d0af134ff7f2ebefaed9704a55552da56	8d351b0d875aa39997913271800c79e8158a6812	2026-10-07	docs(plan): 默认口令明文从计划文抹掉——全仓扫描查出，真值只留 backend/.env
+f3fd3134dbc54e317fc3c86f73ed6d0f87fc8a3f	bc89f1cc5b23c4c929c05037a74647baf3b641c6	2026-10-07	docs(ledger): Task 7 收口——复评 Approved、X-4 判为死代码撤销、复评两句假引证被我直查推翻、Task 8 预飞
+44f4f72b26e5c3207aff72a0fd94da3d7d698bd1	f39cc1301f5f517838c890736cbfe5391ad5c0a9	2026-10-07	docs(plan): 三拍失败形状按实改写（hydrate 隐式回 undefined、persist 只在成功路径）+ 行号更正
+f57cd55fc1762accfd61deb5af8113abcb75e4a1	faa3925a27b06ff74cb857c05f68c6f1f108a77b	2026-10-07	docs(plan): Task 8 前置补网三条 + 撤销 X-4（三拍全吞错、enterWorkspace 打不出 reject）+ 复评对本工单三处纠偏留痕
+567e8e5c0c9ec9fed911d0d2645b654e04325883	b7a208011ce9ddfea64d9e2031678a8b909b4b83	2026-10-07	docs(ledger): Task 7 修正轮 1 收口——117/13 实测、六段变异兑现、实施者三条无判据自报的处置与复评重派
+79902a2c904332d48ec53bb0b14ea227894112cc	a218537bc9ee6eaec2a3f78ffd472ec4e5e547ee	2026-10-07	test(frontend): App 登录门禁/请求顺序/登出清键补第一道自动化 + authError 清理 + 三拍兜错（阶段一 Task 7 修正轮 1）
+c8d8140b14de63915a7b7482a43ae3764b1cb93c	fb1255d2b09ac299c18838f41a337db4ac8d9825	2026-10-07	fix(frontend): 登录 tab 撤掉本地形状校验（default@local 被挡死）+ 提交手势回到 form（阶段一 Task 7 修正轮 1）
+35a6d9d858669142c564527e19eebbd0ef9374bd	63a822317267d470b5017a9a8f73fb24a42d6c00	2026-10-07	docs(ledger): Task 7 评审处置——default@local 那条 Minor 升级为必修、四处裁定与修正轮 1 派发
+388f1c5e0ff07aa3f36cd8b3171919754ab097ec	9f027ef3266a6910db6c2254a19bbcbb53b78c4e	2026-10-07	docs(plan): Task 7 执行期回写四处——default@local 撞本地形状校验的裁定、@click.prevent 撤掉、Step 7 三条补法与 117/13 门禁
+af0878c3efb638d4376b0f3dd0ff062deea99e46	f25717f2701b0b6efca6e6a6694cc89db38d4643	2026-10-07	feat(frontend): 登录页整屏门禁 + 左下角用户栏，session_id 从界面消失（阶段一 Task 7 Step 7-9）
+3d9788d997db146360207f7b5294873abec53ad7	5562c08e498d6d9f9dab02b8ba372754287469f0	2026-10-07	feat(frontend): AuthPanel 登录/注册面板 + StatusBar 删掉 session chip（阶段一 Task 7 Step 4-6）
+0d7674b82704b749fa7f825a847fefafccf3eddd	dca0ebb344037a5a1a06f03cbc02adb29be3eaa5	2026-10-07	feat(frontend): useSession 的 sessionId 上移模块作用域，补 setSession/clearSession（阶段一 Task 7 Step 1-3）
+f074e53e98137cdd5b801590c9ba60aad0cbf1a2	590091bdcf2e00bc12b75911bdfa37eb8dd4b7a5	2026-10-07	docs(ledger): Task 7 开工与首轮实施代理死亡——落盘态实测、0 提交、重派接续代理
+1be14bd25218e8f7d553ebdf7a3c62fbdae87ac7	b63c2df45dfdee31d3450689411bcdee5f6d40eb	2026-10-07	docs(ledger): Task 6 收口——signOut 吃掉后端失败的裁定、98/9 实测门禁、两条流程偏差
+0278350181fa8f7e74d8a4969a4bae1a53ca39ae	f1c8e9e7165dfc8f3a473aa17cb1d8b402f0a0be	2026-10-07	fix(frontend): signOut 吃掉后端失败、补齐 headers 判据、api/auth 上直接覆盖（阶段一 Task 6 修正轮 1）
+6323d276f497e1a44d97d69c40917d0f76f915f1	103c461ccaa611e444746f419098021d26872685	2026-10-07	docs(plan): Task 6 执行期回写四处——signOut 不抛的裁定与三条证据、api/auth 补直接覆盖、headers 只钉了一半、Task 7 的 handleSignOut 注释改口
+9ef19a336df29ecbebdf904e0d2490fe45cadbed	3686e4fcb34d3807dcccb697733d1bf5282e0175	2026-10-07	feat(frontend): 令牌注入三条网络出口 + useAuth 与 api/auth（阶段一 Task 6）
+fac5414065509955274cf64bf6da5e6ab09adf7f	73d97ef488f4ec53d79e17a22272cad77ce39d7a	2026-10-07	docs(ledger): 阶段一 Task 5 收口——修正轮 1 实数 257/2/2、G1 两段变异相反结果、复评三条独立核对
+ea01bd0a404414bbcb0dc5261eb4fd03f3501bff	fbabd3dde6003bbdb77b1edfc9805871adefb550	2026-10-07	test(backend): 问答白名单补三条牙——重复 parent_id 不误 404、越权钉转发、转发钉 200（阶段一 Task 5 修正轮 1）
+6876803603c370cd97550959e4551a984e0673d9	4209ae9c157e5029c2f1a93b7c62c6a1e8c917b0	2026-10-07	docs(plan): Task 5 执行期更正——httpx 的 GET 与 DELETE 都没有 json= 形参，八条臂五条红因是 TypeError
+053d093c40b691edc52e285107c64abf1d9bbef1	88d465524fc95adb8367f3922c4bb4be29755357	2026-10-07	docs(ledger): 阶段一 Task 5 落地——256/2/2、四条变异自证、六条关切逐条处置
+bed282760cb03ff29594dd6905c6ad2bc5eaea7e	6d472eeca534e92e986b80bece5ba2c07d4d8f3f	2026-10-07	docs(plan): Task 5 执行期回写——deps.py 补进 Files、八条 401 的 GET 不能用 json=、skip 口径改按函数名认
+582f1b759f75da1598e78e95fd4a0d64542fb43a	1f30640f033feb2e834468946b605191376bf79b	2026-10-07	feat(backend): chat/history 上登录门，问答允许池过归属白名单（阶段一 Task 5）
+6e94c00784b3f35dd4132a917c19ce42148a2a6b	9a8edac2f90e7b7e4e2e8a1c3924b91213ca3c50	2026-10-07	docs(ledger): Task 4 复评收口记录与 Task 5 开工（预飞三处计划改判、BASE 639cd0c）
+639cd0c1a0c41c941b37467a4caeb8226816559d	1f84c5eed8d14684e8ae30ade2ae6b24ddab54b5	2026-10-07	docs(plan): Task 5 开工前三处预飞改判——绿灯口径 2 skip、health 读 count_documents 要补假库方法、Step 5 的两条 Task 4 交接
+5823134a072aed9b761f73669582ff8e5efbe7b5	d44ec1119bf34410fc5b2fdb67cae6008b4822e1	2026-10-07	docs(ledger): 阶段一 Task 4 收口——248/2/2 实数、F11 变异三段、复评 8/8 ADDRESSED、Task 5 四条交接
+34fa76df9d3303b782b6ee8a19e3e6dc83727d70	468050f3fa72c2d4314da63e68a3a05ce16479a4	2026-10-07	docs(plan): Task 4 落地回写四处实数与两处交接——probe 形参、live 基数 18、调用点 60、Task 5 禁默认 user_id=1 并拆 deps 时序
+9a107d11613f9bbdd79fabccb92f5422d6d3ee04	7a8baf64e249fe2414839c0c3c2ca6df5b9fa6be	2026-10-07	test(backend): 成功删除路径补归属判据 + 六条评审修正（阶段一 Task 4 修正轮 1）
+168643e82d5d4a7999860bc7d73e001cec703d4b	ed0de7e99d7c4e59b6107eb73a3905219027d083	2026-10-07	feat(backend): documents 侧按用户归属——六方法带 user_id、向量补主人戳、四端点上登录门（阶段一 Task 4）
+649f6e0fcbab7b9025ac28e350dcda10cea3eb3f	01339c3463703dab7d32fed404ceaa764d087f20	2026-10-07	docs(ledger): 阶段一 Task 3 收口——236/2/2 实数、真迁移 13/14、十条 Minor 待终审
+1b2cfc3e70c0430bd8daf629fa5d85aa7424e3c8	fa03aa01480032fd39e7ec96c766567d9bdc33f4	2026-10-07	docs(plan): 迁移首轮已被 Task 3 消费——Task 8 的重启只能拿到 0/0，首轮证据引台账
+0cb199281b9b37b13bc5a203f464763ed9729561	a6cc80a10d0b3ddb763492d86e9e7c4caa89cd9d	2026-10-07	feat(backend): 启动期幂等迁移——补列补索引、塞默认用户、旧数据归户、旧向量补戳（阶段一 Task 3）
+33f1d3421ca9b969544308cc2117ad16ff852a85	85c25a33256d5dbec95f9ecb3c5d108bed8347d9	2026-10-07	docs(ledger): Task 2 收口 + 2026-10-07 基线重钉与两处计划缺陷裁定
+8f0f215351c6eaacb66142d423ea9807aab20866	0d607f23be9c3de16760a74d61371fd031cb5250	2026-10-07	docs(plan): 基线重钉 4/4/10 与物理行 13 落进每一格消费点，另裁两处计划缺陷
+d13a0f96514aedcdcdd3da69f7ed0152bdc45427	3d7eebba05032f81c2ebd0da5eb716f0c4b2156a	2026-10-07	test(backend): 向量基线按 2026-10-07 实测重钉——4 父 / 10 子，并给出逐篇 vector_id 归属
+bcf6e6f650938ec0b5a2467948abc7a9d5dc98ea	9e74efb24ad71df0760221ba6d908f565862d53a	2026-10-07	docs(plan): Task 2 落地回写两处修订——时序垫片改数不改注释、邮箱 TLD 用例改判
+51229d73c23bdf03f75142d09c55bef6875b8266	0795324e8b41de1de4522e12c1dea605922ac59c	2026-10-07	test(backend): 204 的形状断言改成实测值——头在场、体为空
+dcad77c31b3261ed33e4f3cf77ffc5e890d28889	818d2dc0129262ad760f6215f1b4ae6ac4caaf3e	2026-10-07	fix(backend): 登录时序垫片的迭代数与真行同价，补一条多令牌登出判据（阶段一 Task 2 修正）
+440be261d76f39c65f2890839239904ffd4896fc	61f02abb0cc7b7704b6ee5b848622117cb38b4d1	2026-10-06	feat(backend): 注册登录登出与 /me 四端点，401 进中央映射（阶段一 Task 2）
+6110f5e1a865779952af4feff96c36dfb8ca2a24	e35bed2f3d0c0e2983b1205454b88c52df3097c1	2026-10-06	docs(plan): Task 1 落地回写八处修订——补索引进 Task 3、空口令改不可用哨兵、门禁口径
+8828f6a4acb64cee23b88cf5c0aac5bf827dcf11	08a93aa4688db32afa98cdc1feed5374ed740663	2026-10-06	fix(backend): 补上 documents.user_id 的索引，删掉两条无人调用的迁移方法（阶段一 Task 1 修正二）
+76546c2a571da525c876d44b040f724f955bac0d	8c4c2a8d3bfcc6ce0c939a18fea088547004889a	2026-10-06	fix(backend): create_user/create_token 返回可读行 + documents.user_id 落到真库（阶段一 Task 1 修正）
+feca6147041760567a73aa112398249f68adf014	af037022e69060aeae9a38d9fb3ae7b9472c8e48	2026-10-06	feat(backend): 账号表、会话表与 pbkdf2/令牌原语（阶段一 Task 1）
+218f89b8ece48c222cc6788e1733dc731ad15906	fb3ecfbc39c635f41c834ee9ae8e3a1ee08ca612	2026-10-06	docs(plan): 用户认证与数据隔离阶段一实施计划（Task 1-8）
